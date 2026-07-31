@@ -16,6 +16,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Shelf filter instability (FreeEQ8) — audio correctness.** Low Shelf and High
+  Shelf bands could produce NaN in the output. The RBJ shelving formula's slope
+  parameter `S` is defined only for `0 < S <= 1`, but `Source/DSP/Biquad.h` clamped
+  it to `[0.1, 4.0]`. Above `S = 1` the square-root argument can go negative,
+  returning NaN, which then propagated into the filter coefficients and state and
+  reached the output permanently.
+
+  First failure occurs at **Q = 3.80**; any shelf with `Q >= 8` and `|gain| >
+  13.78 dB` fails. An exhaustive sweep of the exposed parameter space measured
+  **3,914,000 of 34,774,500 combinations (11.3%) producing non-finite
+  coefficients**. This affected real-time playback, not only offline export, and
+  was reachable through ordinary UI interaction.
+
+  Present in **every release from v0.3.0 through v2.3.0**.
+
+  `S` is now clamped to its defined domain, which makes NaN unreachable by
+  construction rather than guarded against. Shelf response is now monotonic at
+  every Q — previously it overshot the set gain by 1.4–7.0 dB between Q = 4 and
+  Q = 8 before failing outright. **Shelf behaviour at `Q <= 2` is bit-identical to
+  previous releases**, so presets in that range are unchanged. Above `Q = 2` the
+  slope now saturates rather than resonating.
+
+  ProEQ8 is unaffected — it uses `SvfBiquad.h`, which does not use this formula.
+
+  Full measurements, per-release status and candidate slope mappings:
+  [`docs/SHELF_RESPONSE.md`](docs/SHELF_RESPONSE.md).
+
+### Changed
+- **README — Smart EQ section corrected.** The layer was described as shipped in
+  v2.2.3–2.2.4 with delivered UI features. The `ResonanceDetector`, `IntentMode`
+  and `FrequencyExplainer` components are implemented and evaluated
+  (`Tests/DetectorEvalTest.cpp`, F1 0.947, PR-AUC 0.985, zero false positives),
+  but they are not referenced by `PluginProcessor` or `PluginEditor`, so the
+  layer does not execute in the plugin. The `intent_mode` parameter is registered
+  and host-automatable but never read. Host integration is pending.
+
+### Tests
+- **`Tests/ShelfNaNSweepTest.cpp`** — sweeps all 6 filter types across the full
+  frequency, Q and gain ranges at 5 sample rates (34,774,500 combinations) and
+  fails if any produces non-finite coefficients or output. Catches the shelf
+  domain error if it ever returns.
+- **`Tests/ShelfResponseTest.cpp`** — asserts shelf responses stay bounded by the
+  set gain (limit 0.10 dB, measured 0.0000 dB) and reach correct asymptotes
+  (limit 0.50 dB, measured 0.0612 dB).
+- Both are standalone, require no JUCE, and now run in the Linux CI job.
+
+### Build
+- **Linux release job — ProEQ8 link failure.** `ProEQ8` sets `JUCE_USE_CURL=1`,
+  so `juce_core` resolves networking through libcurl on Linux, but curl was never
+  linked, producing undefined `curl_*` references. Now linked via
+  `find_package(CURL)` under `if(UNIX AND NOT APPLE)`. `libcurl4-openssl-dev` was
+  already installed in CI; the link line was the defect.
+- **Windows release job — six-hour hang.** The job timed out immediately after
+  `FreeEQ8_VST3` linked, at `removing moduleinfo.json`, leaving orphan `cmd` and
+  `conhost` processes — the signature of `juce_vst3_helper.exe` not returning.
+  `VST3_AUTO_MANIFEST` is now disabled on both targets; the manifest is optional
+  metadata.
+
 ## [2.3.0] — 2026-05-29
 
 ### Added

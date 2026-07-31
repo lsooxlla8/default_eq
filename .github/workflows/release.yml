@@ -117,6 +117,8 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFREEEQ8_BUILD_TESTS=ON
           cmake --build build --config Release -j$(nproc)
           ./build/FreeEQ8_Tests
+          ./build/FreeEQ8_ShelfNaNSweep
+          ./build/FreeEQ8_ShelfResponse
 
       - name: Build ProEQ8
         run: cmake --build build --config Release --target ProEQ8_All -j$(nproc)

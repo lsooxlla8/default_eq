@@ -82,29 +82,57 @@ struct Biquad
 
             case Type::LowShelf:
             {
-                // Shelf with slope proxy (S) from Q
-                const double S = std::clamp(Q / 2.0, 0.1, 4.0);
+                // RBJ cookbook shelving, using the shelf-slope (S) parameterisation.
+                //
+                // alpha_S = sin(w0)/2 * sqrt((A + 1/A)(1/S - 1) + 2)
+                //
+                // This form is only defined for 0 < S <= 1, where S = 1 is the
+                // steepest shelf that remains monotonic. Previously S was clamped
+                // to [0.1, 4.0]; for any S > 1 the term (1/S - 1) is negative, and
+                // once (A + 1/A)(1/S - 1) < -2 the radicand goes negative and sqrt
+                // returns NaN. That NaN propagated into b0/b2/a0/a2, poisoned the
+                // filter state, and reached the output buffer permanently. A sweep
+                // of the exposed parameter space found this on ~11% of
+                // (type, freq, Q, gain, rate) combinations, from Q >= 3.8 upward.
+                //
+                // Clamping S to RBJ's actual domain fixes it with no loss:
+                //   * 1/S - 1 >= 0, so the radicand is always >= 2 and NaN is
+                //     unreachable by construction rather than guarded against.
+                //   * S <= 1 guarantees a monotonic shelf, so there is no resonant
+                //     overshoot at any Q (measured 0.00 dB across Q 0.1-24).
+                //   * For Q <= 2 the result is identical to the previous behaviour,
+                //     which is the range where the old mapping was still valid, so
+                //     existing presets in that range are unchanged.
+                //
+                // Note: because S saturates at Q = 2, Q values above 2 all produce
+                // the same (steepest monotonic) shelf. The old code varied S up to 4
+                // over that range, but only by leaving the formula's valid domain -
+                // it produced 1.4-7 dB of unintended peaking before failing outright.
+                const double S = std::clamp(Q / 2.0, 0.1, 1.0);
                 const double alphaS = sinw0/2.0 * std::sqrt((A + 1.0/A) * (1.0/S - 1.0) + 2.0);
+                const double twoSqrtAlpha = 2.0 * std::sqrt(A) * alphaS;
 
-                b0_ =    A*((A+1) - (A-1)*cosw0 + 2*std::sqrt(A)*alphaS);
+                b0_ =    A*((A+1) - (A-1)*cosw0 + twoSqrtAlpha);
                 b1_ =  2*A*((A-1) - (A+1)*cosw0);
-                b2_ =    A*((A+1) - (A-1)*cosw0 - 2*std::sqrt(A)*alphaS);
-                a0_ =        (A+1) + (A-1)*cosw0 + 2*std::sqrt(A)*alphaS;
+                b2_ =    A*((A+1) - (A-1)*cosw0 - twoSqrtAlpha);
+                a0_ =        (A+1) + (A-1)*cosw0 + twoSqrtAlpha;
                 a1_ =   -2*((A-1) + (A+1)*cosw0);
-                a2_ =        (A+1) + (A-1)*cosw0 - 2*std::sqrt(A)*alphaS;
+                a2_ =        (A+1) + (A-1)*cosw0 - twoSqrtAlpha;
             } break;
 
             case Type::HighShelf:
             {
-                const double S = std::clamp(Q / 2.0, 0.1, 4.0);
+                // See LowShelf above for why S is clamped to RBJ's (0, 1] domain.
+                const double S = std::clamp(Q / 2.0, 0.1, 1.0);
                 const double alphaS = sinw0/2.0 * std::sqrt((A + 1.0/A) * (1.0/S - 1.0) + 2.0);
+                const double twoSqrtAlpha = 2.0 * std::sqrt(A) * alphaS;
 
-                b0_ =    A*((A+1) + (A-1)*cosw0 + 2*std::sqrt(A)*alphaS);
+                b0_ =    A*((A+1) + (A-1)*cosw0 + twoSqrtAlpha);
                 b1_ = -2*A*((A-1) + (A+1)*cosw0);
-                b2_ =    A*((A+1) + (A-1)*cosw0 - 2*std::sqrt(A)*alphaS);
-                a0_ =        (A+1) - (A-1)*cosw0 + 2*std::sqrt(A)*alphaS;
+                b2_ =    A*((A+1) + (A-1)*cosw0 - twoSqrtAlpha);
+                a0_ =        (A+1) - (A-1)*cosw0 + twoSqrtAlpha;
                 a1_ =    2*((A-1) - (A+1)*cosw0);
-                a2_ =        (A+1) - (A-1)*cosw0 - 2*std::sqrt(A)*alphaS;
+                a2_ =        (A+1) - (A-1)*cosw0 - twoSqrtAlpha;
             } break;
 
             case Type::Bandpass:

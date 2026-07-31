@@ -33,6 +33,10 @@ juce_add_plugin(FreeEQ8
     PLUGIN_MANUFACTURER_CODE TzWd
     PLUGIN_CODE FEQ8
     FORMATS VST3 AU Standalone
+    # juce_vst3_helper.exe loads the built plugin to emit moduleinfo.json and
+    # has been observed hanging indefinitely on Windows CI. The manifest is
+    # optional metadata, so skip generating it during the build.
+    VST3_AUTO_MANIFEST FALSE
     PRODUCT_NAME "FreeEQ8"
     BUNDLE_ID "com.tizwildinentertainment.freeeq8"
     COMPANY_URL "https://github.com/GareBear99/FreeEQ8"
@@ -89,6 +93,7 @@ juce_add_plugin(ProEQ8
     PLUGIN_MANUFACTURER_CODE TzWd
     PLUGIN_CODE PEQ8
     FORMATS VST3 AU
+    VST3_AUTO_MANIFEST FALSE
     PRODUCT_NAME "ProEQ8"
     BUNDLE_ID "com.tizwildinentertainment.proeq8"
     COMPANY_URL "https://github.com/GareBear99/FreeEQ8"
@@ -135,12 +140,30 @@ target_link_libraries(ProEQ8 PRIVATE
     juce::juce_cryptography
 )
 
+# ProEQ8 enables JUCE_USE_CURL=1 for license activation. On Linux, juce_core
+# resolves its networking through libcurl, so the library must be linked
+# explicitly or the VST3 target fails with undefined `curl_*` references.
+# macOS and Windows use native networking APIs, where JUCE_USE_CURL is a no-op.
+if(UNIX AND NOT APPLE)
+    find_package(CURL REQUIRED)
+    target_link_libraries(ProEQ8 PRIVATE CURL::libcurl)
+endif()
+
 # ── Optional test target (standalone, no JUCE dependency) ────────────
 option(FREEEQ8_BUILD_TESTS "Build unit tests" OFF)
 
 if (FREEEQ8_BUILD_TESTS)
     add_executable(FreeEQ8_Tests Tests/BiquadTest.cpp)
     target_compile_features(FreeEQ8_Tests PRIVATE cxx_std_17)
+
+    # Shelf regression guards. Both are standalone (Biquad.h pulls only
+    # <cmath>/<algorithm>) and return non-zero on failure, so CI fails loudly if
+    # the shelf coefficient domain error ever reappears.
+    add_executable(FreeEQ8_ShelfNaNSweep Tests/ShelfNaNSweepTest.cpp)
+    target_compile_features(FreeEQ8_ShelfNaNSweep PRIVATE cxx_std_17)
+
+    add_executable(FreeEQ8_ShelfResponse Tests/ShelfResponseTest.cpp)
+    target_compile_features(FreeEQ8_ShelfResponse PRIVATE cxx_std_17)
 
     add_executable(FreeEQ8_AuditTests Tests/AuditRegressionTest.cpp)
     target_compile_features(FreeEQ8_AuditTests PRIVATE cxx_std_17)

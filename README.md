@@ -287,25 +287,27 @@ ProEQ8 is the commercial big brother of FreeEQ8 — same rock-solid DSP engine, 
 
 **ProEQ8 is included in the macOS DMG download.** A license key is required to unlock it — purchase through the link above to receive your key via email. Without a license, ProEQ8 runs in demo mode: 2 minutes of clean playback, then a 30-second mute window (repeats).
 
-## 🧠 Smart EQ Layer (shipped v2.2.3–2.2.4)
+## 🧠 Smart EQ Layer (in development — not yet active)
 
-FreeEQ8 includes a real-time decision layer on top of the existing 8-band engine — not to replace surgical control, but to make getting to a clean mix faster than most paid EQs.
+The goal is a real-time decision layer on top of the existing 8-band engine — not to replace surgical control, but to reach a clean mix faster. **This layer is not active in any current build.** The pieces below exist as standalone, unit-testable components, but they are not yet connected to the audio path or the UI, so they have no effect on how the plugin sounds or behaves today.
 
-**Shipped:**
-- `Source/DSP/ResonanceDetector.h` — log-frequency peak finder that produces up to 4 ranked suggestion bands with recommended frequency, cut-gain, Q, confidence score, and a semantic label ("mud", "boxiness", "harshness", "sibilance" …).
-- `Source/DSP/IntentMode.h` — behavioural biasing: `None` / `Vocal Clean` / `Drum Punch` / `Guitar Space` / `Master Polish`. Each mode shifts the detector’s scoring curve toward the frequency zones that matter for that source, without forcing preset bands.
-- `Source/DSP/FrequencyExplainer.h` — static frequency → semantic description map powering the Explain-on-hover UX (“Cutting mud (320 Hz)” / “Adding air (12 kHz)”).
-- `intent_mode` APVTS parameter — host-automatable, wired to editor dropdown.
-- Glowing suggestion-node overlay on the response curve (amber rings, confidence-scaled opacity).
-- One-click “apply suggestion” — drops a detected peak into the next unused band via APVTS (undo-able).
-- Explain-on-hover popup when mousing over any band or suggestion node.
-- Pre-ring warning overlay when DrumPunch + Linear Phase are active simultaneously.
-- Deterministic, allocation-free, UI-thread safe — piggybacks on the existing triple-buffered `SpectrumFIFO`.
+**Implemented as standalone components (not yet wired in):**
+- `Source/DSP/ResonanceDetector.h` — log-frequency peak finder producing up to 4 ranked suggestion bands with recommended frequency, cut-gain, Q, confidence score, and a semantic label ("mud", "boxiness", "harshness", "sibilance" …).
+- `Source/DSP/IntentMode.h` — behavioural biasing curves: `None` / `Vocal Clean` / `Drum Punch` / `Guitar Space` / `Master Polish`, shifting detector scoring toward the frequency zones that matter for a given source.
+- `Source/DSP/FrequencyExplainer.h` — static frequency → semantic description map intended to power an explain-on-hover UX.
 
-**Coming next:**
-- Zero-Lag auto-switch between linear-phase (precision) and minimum-phase (real-time)
+**Partially present:**
+- `intent_mode` APVTS parameter is registered and host-automatable, but nothing currently reads it. Automating it has no audible effect.
 
-No other free open-source 8-band EQ currently combines intent-aware resonance detection + explain-on-hover + one-click apply. See [`docs/SMART_EQ_LAYER.md`](docs/SMART_EQ_LAYER.md) for the full algorithm and status matrix.
+**Still to build before this layer does anything:**
+- Instantiate the detector in `PluginProcessor` and feed it the existing `SpectrumFIFO` data
+- Thread-safe suggestion hand-off from the analysis path to the editor
+- Suggestion-node overlay on the response curve
+- One-click apply into the next unused band via APVTS (undo-able)
+- Explain-on-hover popup
+- Read `intent_mode` and route it into the detector
+
+See [`docs/SMART_EQ_LAYER.md`](docs/SMART_EQ_LAYER.md) for the algorithm design.
 
 
 ## 🔍 Code Audit
