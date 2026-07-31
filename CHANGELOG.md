@@ -73,7 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FreeEQ8_VST3` linked, at `removing moduleinfo.json`, leaving orphan `cmd` and
   `conhost` processes — the signature of `juce_vst3_helper.exe` not returning.
   `VST3_AUTO_MANIFEST` is now disabled on both targets; the manifest is optional
-  metadata.
+  metadata. **Verified: the Windows job now completes in 4m38s and produces a
+  `windows-zip` artifact — the first Windows build the project has produced.**
+- **Linux pluginval — headless segfault.** Once the link failure above was fixed,
+  pluginval reached its `Editor` tests and segfaulted (exit 139), because
+  instantiating a JUCE editor requires an X display and the runner is headless.
+  `xvfb` is now installed and pluginval runs under `xvfb-run -a`. This was a
+  pre-existing condition, previously unreachable because the job died at the
+  linker first.
+- **macOS AU validation — timeout.** The AU step additionally runs Apple's
+  `auval`, which must register the component with the system AU host. On a fresh
+  runner that exceeded the 2-minute budget while every other test passed,
+  including the full VST3 suite. The AU step's `--timeout-ms` is raised to 420000;
+  VST3 steps are unchanged.
 
 ## [2.3.0] — 2026-05-29
 

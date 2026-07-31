@@ -67,12 +67,16 @@ jobs:
             --strictness-level 10 \
             --timeout-ms 120000
 
+      # AU validation additionally runs Apple's auval, which has to register the
+      # component with the system AU host. On a fresh CI runner that is slow and
+      # overran the 2-minute budget while every other test passed, so the AU step
+      # gets a longer timeout than the VST3 steps.
       - name: Validate FreeEQ8 AU
         run: |
           pluginval.app/Contents/MacOS/pluginval \
             --validate "build/FreeEQ8_artefacts/Release/AU/FreeEQ8.component" \
             --strictness-level 10 \
-            --timeout-ms 120000
+            --timeout-ms 420000
 
       - name: Validate ProEQ8 VST3
         run: |
@@ -108,7 +112,8 @@ jobs:
             libfreetype6-dev libx11-dev libxcomposite-dev \
             libxcursor-dev libxext-dev libxfixes-dev \
             libxinerama-dev libxrandr-dev libxrender-dev \
-            libcurl4-openssl-dev ladspa-sdk
+            libcurl4-openssl-dev ladspa-sdk \
+            xvfb
           sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
 
       - name: Build & run tests
@@ -129,16 +134,20 @@ jobs:
           unzip pluginval_Linux.zip
           chmod +x pluginval
 
+      # pluginval's Editor tests instantiate the plugin UI, which needs an X
+      # display. The runner is headless, so a bare invocation segfaults (exit 139)
+      # as soon as it reaches "Starting tests in: pluginval / Editor". xvfb-run
+      # provides a virtual framebuffer for the duration of the run.
       - name: Validate FreeEQ8 VST3
         run: |
-          ./pluginval \
+          xvfb-run -a ./pluginval \
             --validate "build/FreeEQ8_artefacts/Release/VST3/FreeEQ8.vst3" \
             --strictness-level 10 \
             --timeout-ms 120000
 
       - name: Validate ProEQ8 VST3
         run: |
-          ./pluginval \
+          xvfb-run -a ./pluginval \
             --validate "build/ProEQ8_artefacts/Release/VST3/ProEQ8.vst3" \
             --strictness-level 10 \
             --timeout-ms 120000
