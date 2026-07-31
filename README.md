@@ -260,13 +260,34 @@ Tracking our first **1,200 users** — at 1,000 we'll run giveaways (ProEQ8 keys
 
 > **FreeEQ8 is the only free EQ that combines linear phase + dynamic EQ + match EQ + per-band saturation + band linking in one plugin.**
 
-## ⚡ ProEQ8 — Available Now ($20)
+## ⚡ ProEQ8 — demo only in v2.3.1, not currently purchasable
 
-> **Love FreeEQ8? ProEQ8 takes everything further.**
+> **Read this before trying ProEQ8 from the v2.3.1 download.**
+>
+> The ProEQ8 bundled in the v2.3.1 macOS DMG is **a demo that cannot currently be
+> unlocked**, and it should not be used for real work. Specifically:
+>
+> - **There is no working purchase path.** The configured checkout host does not
+>   resolve, so no license key can be obtained. Demo mode cannot be exited.
+> - **Demo mode interrupts audio** — 2 minutes of clean playback, then a 30-second
+>   mute window, repeating. Offline export is disabled entirely.
+> - **Known shelf defect.** ProEQ8's SVF shelves overshoot the set gain by up to
+>   24 dB at high Q. A +12 dB shelf at Q 24 peaks near +36 dB. FreeEQ8's shelves
+>   were corrected in v2.3.1 and are bounded; ProEQ8's have not been yet.
+> - **macOS only.** ProEQ8 is built and validated on Windows and Linux but is not
+>   packaged there.
+>
+> **Use FreeEQ8 instead.** It is unrestricted in real time, has no nag screens, and
+> its shelf response is measured monotonic at every Q.
+>
+> All four points are targeted for **v2.3.2**. Until then treat ProEQ8 in this
+> release as a preview of the feature set, not a usable plugin.
 
-[![Buy ProEQ8](https://img.shields.io/badge/Buy%20ProEQ8-%2420-brightgreen?style=for-the-badge&logo=stripe&logoColor=white)](https://github.com/GareBear99/FreeEQ8/releases/latest)
+[![ProEQ8 unavailable](https://img.shields.io/badge/ProEQ8-purchase%20unavailable-lightgrey?style=for-the-badge&logo=stripe&logoColor=white)](#-proeq8--demo-only-in-v231-not-currently-purchasable)
 
-ProEQ8 is the commercial big brother of FreeEQ8 — same rock-solid DSP engine, massively expanded. Included in the [latest release download](https://github.com/GareBear99/FreeEQ8/releases/latest).
+ProEQ8 is the commercial counterpart to FreeEQ8 — same DSP engine, expanded feature
+set. The comparison below describes the intended product. It is **not currently
+purchasable**, and the demo bundled in v2.3.1 has the limitations listed above.
 
 | | **FreeEQ8** (Free) | **ProEQ8** ($20) |
 |---|:---:|:---:|
@@ -285,7 +306,10 @@ ProEQ8 is the commercial big brother of FreeEQ8 — same rock-solid DSP engine, 
 | Band Linking | ✓ | ✓ |
 | Formats | VST3, AU | VST3, AU |
 
-**ProEQ8 is included in the macOS DMG download.** A license key is required to unlock it — purchase through the link above to receive your key via email. Without a license, ProEQ8 runs in demo mode: 2 minutes of clean playback, then a 30-second mute window (repeats).
+**ProEQ8 is included in the macOS DMG download only.** A license key is required to
+unlock it. **As of v2.3.1 no key can be issued** — see the notice at the top of this
+section. Without a license ProEQ8 runs in demo mode: 2 minutes of clean playback,
+then a 30-second mute window (repeats), with offline export disabled.
 
 ## 🧠 Smart EQ Layer (in development — not yet active)
 
@@ -745,13 +769,22 @@ exist as standalone, unit-tested components, but nothing in `PluginProcessor` or
 - [x] Five previously-unbuilt test sources wired into CMake and CI
 - [x] **First release with macOS, Windows and Linux artifacts from one tag**
 
-### v2.4.0 (Planned) — ProEQ8 Launch
-- [ ] Working checkout — the configured host does not currently resolve
-- [ ] ProEQ8 packaged for Windows and Linux (built and validated there already,
-      but only bundled in the macOS DMG)
-- [ ] Bounded SVF shelf response — ProEQ8 shelves currently overshoot the set
-      gain by up to 24 dB at high Q
-- [ ] Rotate the license signing secret and move to asymmetric signing
+### v2.3.2 (Next) — make ProEQ8 usable
+The ProEQ8 shipped in v2.3.1 is a demo that cannot be unlocked and has a known
+shelf defect. These four items are what make it a real product rather than a
+preview:
+- [ ] Working checkout — the configured host (`proeq8-checkout.tizwildin.workers.dev`)
+      does not resolve, and the Stripe products appear not to exist
+- [ ] Bounded SVF shelf response — ProEQ8 shelves overshoot the set gain by up to
+      24 dB at high Q (measured). Two bounded variants have been measured; neither
+      applied. See [`docs/SHELF_RESPONSE.md`](docs/SHELF_RESPONSE.md)
+- [ ] ProEQ8 packaged for Windows and Linux — already built and validated on both,
+      but discarded rather than bundled
+- [ ] Rotate the license signing secret and move to asymmetric signing. The current
+      HMAC secret is embedded in this public repository under XOR-0x5A obfuscation,
+      so it must be treated as published and every key issued under it as forgeable
+
+### v2.4.0 (Planned)
 - [ ] Smart EQ host integration (see corrected v2.2.3–2.2.4 list above)
 - [ ] Zero-Lag auto-switch between linear-phase and minimum-phase modes
 - [ ] Cross-instance ARC-Core spine

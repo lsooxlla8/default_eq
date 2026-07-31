@@ -27,6 +27,27 @@ shipped at all. Prior release workflow runs failed from v0.5.0 onward.
 Seven distinct defects were fixed to reach that point: two audio/stability bugs in
 the plugin itself and five in the build and validation pipeline. Details below.
 
+### ⚠ ProEQ8 in this release is a demo that cannot be unlocked
+
+ProEQ8 is bundled in the macOS DMG. **It should not be used for real work in
+v2.3.1**, for four reasons:
+
+- **No working purchase path.** The configured checkout host does not resolve and
+  the Stripe products appear not to exist, so no license key can be issued. Demo
+  mode cannot be exited by any means.
+- **Demo mode interrupts audio** — 2 minutes clean, then a 30-second mute window,
+  repeating. Offline export is disabled entirely.
+- **Known shelf defect.** ProEQ8's SVF shelves overshoot the set gain by up to
+  24 dB at high Q; a +12 dB shelf at Q 24 peaks near +36 dB. FreeEQ8's shelves were
+  corrected in this release and are bounded at every Q; ProEQ8's were not.
+- **macOS only.** ProEQ8 builds and validates on Windows and Linux but is not
+  packaged for them.
+
+Use FreeEQ8 instead — it is unrestricted during real-time playback, has no nag
+screens, and its shelf response is measured monotonic at every Q.
+
+All four are targeted for **v2.3.2**.
+
 ### Fixed
 - **Shelf filter instability (FreeEQ8) — audio correctness.** Low Shelf and High
   Shelf bands could produce NaN in the output. The RBJ shelving formula's slope
