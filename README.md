@@ -196,7 +196,7 @@ Instead of wasting time rebuilding the wheel and re-dressing old concepts, devel
 </details>
 
 ## 📰 Press & Coverage
-
+<details>
 Ten verified third-party pickups. **Every link below returned HTTP 200 on
 2026-07-31.** Self-maintained pages are labelled as such and are not counted as
 third-party validation.
@@ -231,6 +231,8 @@ Install via StudioRack:
 ```bash
 studiorack plugin install garebear99/freeeq8
 ```
+
+</details>
 
 ### Worth being straight about
 
