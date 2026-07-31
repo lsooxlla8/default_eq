@@ -1,10 +1,10 @@
 # FreeEQ8 submission tracker — 2026 index campaign
 
-_Last cross-checked: 2026-05-21_
+_Last cross-checked: 2026-07-31_
 
 This file tracks public submission routes for FreeEQ8 so PRs, directory listings, editorial pitches, product launches, forum posts, and SEO backlinks do not duplicate work.
 
-This tracker is now based on the cross-check file at [`docs/outreach/CROSSCHECKED_SUBMISSION_STATUS_2026-05-21.md`](outreach/CROSSCHECKED_SUBMISSION_STATUS_2026-05-21.md). Use that file as the source of truth when deciding whether something is actually listed, merely submitted, pending, or off-target.
+**This file is the source of truth as of 2026-07-31.** The earlier cross-check at [`docs/outreach/CROSSCHECKED_SUBMISSION_STATUS_2026-05-21.md`](outreach/CROSSCHECKED_SUBMISSION_STATUS_2026-05-21.md) is superseded and retained for history only — several of its conclusions have since been contradicted by direct API checks.
 
 ## Audit-backed positioning snapshot
 
@@ -47,13 +47,16 @@ Use these phrases across titles, tags, release copy, directory descriptions, and
 
 | Status | Count | Meaning |
 |---|---:|---|
-| Verified third-party public wins | 5 | Rekkerd coverage, AudioApp.cn screenshot-verified coverage, OpenAudio listing, awesome-music-production listing, Awesome Audio Dev List. |
+| Verified third-party public wins | 9 | Rekkerd, AudioApp.cn, Midifan.com, AudiArtist.com, OpenAudio, awesome-music-production, Open Audio Stack/StudioRack registry, Audinux Fedora packaging, geekaifree/BookShelf. |
 | Self-maintained listing | 1 | Useful SEO, not third-party validation. |
-| Completed/closed evidence needing public-page recheck | 4 | Some GitHub/email threads closed as completed or relevant, but current public page did not prove live listing. |
-| Active/open PRs and issues | 8+ | Waiting for maintainer review or response. |
-| Direct email submissions sent | 8+ | Outreach sent; no confirmed coverage reply found except Rekkerd and KVR routing. |
+| Declined or dead | 3 | awesome-audio-engineering (declined with reasons), awesome-webaudio (closed), awesome-audio-dsp (claim does not resolve). |
+| Active/open PRs | 5 | 3 corrected or answered on 2026-07-31; 2 sitting in dormant repos. |
+| Withdrawn 2026-07-31 | 3 | awesome-musicdsp, awesome-linuxaudio, awesome-open-synth — structurally unwinnable. |
+| Direct email submissions sent | 8+ | Outreach sent; no confirmed coverage reply found except Rekkerd and KVR routing. Follow-up windows lapsed in late May. |
 | Manual/account targets | 6+ | Highest-value places needing direct account/form action. |
 | Off-target technical outreach | 2 | iPlug2 and DISTRHO/DPF are not current fits for a JUCE plugin. |
+
+**Campaign result 2026-04-23 → 2026-07-31: zero merges from submissions.** Every new win in this period came from third parties adopting FreeEQ8 independently (Audinux packaging, Open Audio Stack registry, AudiArtist review). No follow-up action was taken on any submission between 2026-05-30 and 2026-07-31.
 
 ## Verified public wins — safe to cite
 
@@ -61,31 +64,41 @@ Use these phrases across titles, tags, release copy, directory descriptions, and
 |---|---:|---|
 | Rekkerd.org | ✅ Featured | Live article: `FREE: FreeEQ8 parametric EQ effect plugin by Gary Doman`, published 2026-05-19. |
 | AudioApp.cn | ✅ Screenshot-verified coverage | Chinese/English audio-community article/thread: `Bonus: Gary Doman launches FreeEQ8 free and open source parametric equalizer effects plugin` / `福利：Gary Doman 推出 FreeEQ8 免费开源的参量均衡器效果插件`; links to official GitHub repo. |
+| Midifan.com | ✅ Verified coverage | Major Chinese audio technology outlet; evidence in `docs/press/MIDIFAN_COVERAGE.md`. |
+| AudiArtist.com | ✅ Long-form review | `FreeEQ8: Free Dynamic EQ VST3 for Mixing` — most detailed third-party write-up to date; discusses linear-phase limitations and Match EQ caveats accurately. |
 | webprofusion / OpenAudio | ✅ Listed | Current public OpenAudio page shows `FreeEQ8` in Audio Plugins; Issue #207 is closed. |
 | ad-si / awesome-music-production | ✅ Listed | PR #197 merged 2026-03-16; current public README shows `FreeEQ8` under Apps. |
+| Open Audio Stack / StudioRack | ✅ Live plugin page | https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/ — confirmed live, shows v2.3.0 / Neo-VECTR / GPL-3.0 / Mac .dmg. Backed by `src/plugins/garebear99/freeeq8/2.3.0/index.yaml`; also in `studiorack/studiorack-cli` test snapshots. Install: `studiorack plugin install garebear99/freeeq8`. |
+| Audinux (Fedora COPR) | ✅ Third-party packaging | Packaged as `freeeq8` — versions 2.1.0-1, 2.2.0-1, 2.3.0-1 recorded in `pages/news.md`. Independent packaging; makes the Linux story materially more honest than "build from source". |
+| geekaifree / BookShelf | ✅ Listed (Chinese) | `music-production.md`: `免费开源 8 段参量均衡插件 (VST3/AU)`. |
 | GareBear99 / awesome-audio-plugins-dev | ✅ Self-maintained listing | Useful index route; not third-party validation. |
 
 ## Completed/closed evidence — do not overclaim as live listing yet
 
 | Target | Conservative status | Evidence / reason |
 |---|---:|---|
-| BillyDM / awesome-audio-dsp | ⚠️ Completed issue evidence only | Gmail says Issue #14 closed as completed, but public README check did not show `FreeEQ8`. |
-| sudara / awesome-juce | ⚠️ Mixed history / not verified live | Earlier issues closed as completed, later PR #61 required shorter resubmission, and public README check did not show `FreeEQ8`. |
-| notthetup / awesome-webaudio | ⚠️ Conflicting evidence / weak fit | Gmail said Issue #83 closed completed, but public issue page checked open and README did not show `FreeEQ8`. |
-| brandonhimpfen / awesome-audio-engineering | ⚠️ Closed PR, not verified live | Gmail says PR #5 closed; closure alone is not proof of listing. |
+| BillyDM / awesome-audio-dsp | ❌ Claim does not resolve | Issue #14 returns `Could not resolve to an Issue with the number of 14` from the GitHub API. Remove this from any credibility copy. |
+| sudara / awesome-juce | 🟡 Conditional yes on record | PR #61 closed 2026-05-12 with an explicit offer to add it if resubmitted short and per instructions. Resubmission is #64 — see active table. |
+| notthetup / awesome-webaudio | ❌ Dead | Issue #83 CLOSED. Maintainer invited a PR on 2026-03-27; none was ever raised. Do not revive — wrong technology domain. |
+| brandonhimpfen / awesome-audio-engineering | ❌ Declined, with reasons | PR #5 closed 2026-05-14 citing *"heavily self-promotional in presentation... cross-promotional 'awesome list' networks"*. Same maintainer's `resourcerank` tool ships FreeEQ8 as its worked example at 61/100, *"highly promotional"*. |
 
 ## Active PRs / issues
 
-| Target | Type | Status | Link | Follow-up rule |
-|---|---|---:|---|---|
-| sudara / awesome-juce | PR/resubmission route | ⏳ Pending | https://github.com/sudara/awesome-juce/pull/64 | Wait; do not claim listed until README shows FreeEQ8. |
-| dreikanter / awesome-vst | PR | ⏳ Open | https://github.com/dreikanter/awesome-vst/pull/18 | Wait. |
-| olilarkin / awesome-musicdsp | PR | ⏳ Open | https://github.com/olilarkin/awesome-musicdsp/pull/11 | Wait. |
-| noteflakes / awesome-music | PR + issue | ⏳ Open | https://github.com/noteflakes/awesome-music/pull/109 | Wait. |
-| twinysam / FreeAudioPluginList | PR | ⏳ Open | https://github.com/twinysam/FreeAudioPluginList/pull/11 | Wait. |
-| nodiscc / awesome-linuxaudio | PR | ⏳ Open | https://github.com/nodiscc/awesome-linuxaudio/pull/71 | Wait; keep Linux build status honest. |
-| landscape82 / awesome-sound-design-resources | PR | ⏳ Open | https://github.com/landscape82/awesome-sound-design-resources/pull/3 | Wait. |
-| detroitsynth / awesome-open-synth | PR | ⏳ Open / weak fit | https://github.com/detroitsynth/awesome-open-synth/pull/3 | Wait; do not push. |
+| Target | Status | Link | Follow-up rule |
+|---|---:|---|---|
+| sudara / awesome-juce #64 | ⏳ Open — corrected 2026-07-31 | https://github.com/sudara/awesome-juce/pull/64 | Highest-probability item. Was editing the nightly-generated `README.md`; now a single `sites.txt` line under `## Effects`. Maintainer already agreed in principle. Wait 3–4 weeks, then one polite nudge maximum. |
+| landscape82 / awesome-sound-design-resources #3 | ⏳ Open — corrected 2026-07-31 | https://github.com/landscape82/awesome-sound-design-resources/pull/3 | Repo actively maintained (pushed 2026-07-30). Description trimmed from ~175 to ~110 chars to match neighbours. Wait. |
+| noteflakes / awesome-music #109 | ⏳ Open — ball in maintainer's court | https://github.com/noteflakes/awesome-music/pull/109 | Scope question answered 2026-07-31 with an offer to withdraw. Do not push further; accept whichever way they call it. |
+| dreikanter / awesome-vst #18 | 💤 Dormant repo | https://github.com/dreikanter/awesome-vst/pull/18 | Upstream last pushed 2024-09-15. Leave open, invest nothing. |
+| twinysam / FreeAudioPluginList #11 | 💤 Dormant repo | https://github.com/twinysam/FreeAudioPluginList/pull/11 | Upstream last pushed 2024-11-28. Leave open, invest nothing. |
+
+## Withdrawn 2026-07-31
+
+| Target | Reason | Resubmit? |
+|---|---|---|
+| olilarkin / awesome-musicdsp #11 | `CONTRIBUTING.md`: *"a personal curated awesome list... I am not looking for collaborators."* | Never. |
+| nodiscc / awesome-linuxaudio #71 | GitHub repo is a `[mirror]`; contributions require a **GitLab merge request** at `gitlab.com/nodiscc/awesome-linuxaudio`. | Yes, via GitLab, using their documented entry syntax. Now genuinely justified since Audinux packages it for Fedora. |
+| detroitsynth / awesome-open-synth #3 | Weak fit (EQ, not synth); repo dormant since 2023-06-09. | No. |
 
 ## Direct email submissions sent
 
@@ -130,12 +143,17 @@ These were sent as direct outreach. Do not resend unless there is a real update,
 
 ## Best current truth statement for future submissions
 
-> FreeEQ8 is a free, open-source JUCE/C++ 8-band parametric EQ plugin with VST3/AU/Standalone packaging, advanced EQ features, public source code, confirmed third-party coverage from Rekkerd.org and AudioApp.cn, and verified public listings on OpenAudio, awesome-music-production, and the Awesome Audio Dev List. KVR product-database indexing is the next major step.
+> FreeEQ8 is a free, open-source JUCE/C++ 8-band parametric EQ plugin with VST3/AU/Standalone packaging and public source code. Third-party coverage: Rekkerd.org, AudiArtist.com, AudioApp.cn and Midifan.com. Listed on OpenAudio and awesome-music-production, registered in the Open Audio Stack / StudioRack plugin registry, and independently packaged for Fedora by Audinux.
 
 ## Next actions
 
-1. Create / complete KVR Developer Account product listing.
-2. Add Rekkerd/AudioApp.cn/OpenAudio/awesome-music-production proof to follow-up pitches.
-3. Follow up with Bedroom Producers Blog using Rekkerd + AudioApp.cn coverage as credibility proof.
-4. Submit to Audio Plugins for Free, Plugins4Free, AlternativeTo, and Product Hunt only after release/demo assets are clean.
-5. Keep framework-specific outreach targeted only to frameworks FreeEQ8 actually uses.
+Ordered by expected return, highest first.
+
+1. **Reduce promotional surface in the README.** This is the single recurring objection from every maintainer who gave a reason, and it gates everything below. Move the ecosystem banner, social links, giveaway counter and ProEQ8 purchase badges below the technical content.
+2. **Cite Audinux packaging.** Independent Fedora packaging is stronger third-party evidence than any list entry, and it replaces the weaker "Linux: build from source" positioning.
+3. Wait on `awesome-juce#64` and `awesome-sound-design-resources#3` — both corrected 2026-07-31. One nudge each after 3–4 weeks, then stop.
+4. Resubmit awesome-linuxaudio via **GitLab merge request** (not GitHub), now that Fedora packaging exists to support the entry.
+5. Create / complete KVR Developer Account product listing.
+6. Follow up with Bedroom Producers Blog — the 10–14 day window lapsed in late May, so this is now a fresh pitch, not a follow-up. Lead with Rekkerd + AudiArtist + Audinux.
+7. Submit to Audio Plugins for Free, Plugins4Free, AlternativeTo, and Product Hunt only after release/demo assets are clean.
+8. **Before any future submission, read the target's CONTRIBUTING file first.** Three of the eight 2026 submissions failed on mechanics rather than merit: one edited an auto-generated file, one went to a read-only mirror, one went to a list that states it accepts no contributions.
