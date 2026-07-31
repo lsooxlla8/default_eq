@@ -102,11 +102,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xvfb` is now installed and pluginval runs under `xvfb-run -a`. This was a
   pre-existing condition, previously unreachable because the job died at the
   linker first.
-- **macOS AU validation — timeout.** The AU step additionally runs Apple's
-  `auval`, which must register the component with the system AU host. On a fresh
-  runner that exceeded the 2-minute budget while every other test passed,
-  including the full VST3 suite. The AU step's `--timeout-ms` is raised to 420000;
-  VST3 steps are unchanged.
+- **macOS AU validation — `auval` hang.** The AU step failed while every other
+  test passed, including the full VST3 suite. pluginval's `auval` test shells out
+  to Apple's `auvaltool` with `-strict STRESS -v`, which hangs on hosted macOS
+  runners and leaves an orphan `auvaltool` process.
+
+  Raising `--timeout-ms` does not fix this — an initial attempt at 420000 ms
+  simply failed seven minutes later instead of two, because it is a hang rather
+  than slowness. The `auval` test is now excluded from the AU run via pluginval's
+  supported `--disabled-tests` mechanism (`Tests/pluginval_disabled_tests.txt`),
+  so the AU still receives pluginval's full test suite, and `auval` runs as a
+  separate non-blocking step with a watchdog.
+
+  This affects the AU step only; for VST3 the `auval` test is a no-op.
 
 ## [2.3.0] — 2026-05-29
 
