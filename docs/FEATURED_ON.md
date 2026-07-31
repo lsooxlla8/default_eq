@@ -103,7 +103,8 @@ What the 2026-07-31 sweep actually covered, so future readers know what is and i
 
 - **Covered:** exhaustive GitHub code search for `FreeEQ8` (all 108 matches across both result pages), direct GitHub API state checks on every tracked PR and issue, and English + Chinese + Japanese + Korean web searches.
 - **Confirmed absent:** no listing on KVR Audio, AlternativeTo, VST4Free, Plugins4Free or Audio Plugins For Free. Nobody has added FreeEQ8 to these unsolicited — they remain genuine opportunities, not existing wins.
-- **Asian coverage is exactly three, all Chinese:** AudioApp.cn, Midifan.com, geekaifree/BookShelf. No Japanese or Korean coverage found.
+- **Asian coverage is exactly four, all Chinese:** Midifan.com, AudioApp.cn, 孤狼音频/guaud.com, geekaifree/BookShelf. No Japanese or Korean coverage found. (Corrected — this line previously read "exactly three" and omitted guaud.com, contradicting the verified-wins table above it.)
+- **All ten verified-win URLs re-checked 2026-07-31 and returning HTTP 200.** Note that `rekkerd.org` returns **403 to a plain-UA request** and only serves the article with full browser headers; it is live (173 KB, article body intact), so do not mistake a 403 from a scripted check for a dead link.
 - **Not covered — treat as unknown:** non-GitHub forges (GitLab, Codeberg), forums (KVR, REAPER, LinuxMusicians, Gearspace), Reddit, YouTube, Discord, and any Chinese forum content behind a login.
 - **Not verifiable without inbox access:** every claim in this file sourced from Gmail — notably the Rekkerd acceptance note and the KVR routing reply, plus all ten email pitches in the outreach table. These rest on the original author's reading of their inbox and were **not** re-confirmed in this sweep.
 

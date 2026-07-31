@@ -155,7 +155,7 @@ At $20, it offers a feature set that rivals plugins costing $199, making it the 
 
 **Featured by:** [Rekkerd.org](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) · [AudiArtist.com](https://www.audiartist.com/freeeq8-free-dynamic-eq-vst3-plugin/) · [AudioApp.cn](https://www.audioapp.cn/thread-237167-1-1.html) · [Midifan.com](https://www.midifan.com/modulenews-detailview-59241.htm)
 
-**Listed on:** [StudioRack](https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/) · [OpenAudio](https://github.com/webprofusion/OpenAudio) · [awesome-music-production](https://github.com/ad-si/awesome-music-production#apps) · [孤狼音频 / guaud.com](https://guaud.com/119.html) · [Awesome Audio Dev List](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers)
+**Listed on:** [StudioRack](https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/) · [OpenAudio](https://github.com/webprofusion/OpenAudio) · [awesome-music-production](https://github.com/ad-si/awesome-music-production#apps) · [孤狼音频 / guaud.com](https://guaud.com/119.html) · [geekaifree / BookShelf](https://github.com/geekaifree/BookShelf) — plus a [self-maintained index](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers)
 
 **Packaged for Linux by:** [Audinux](https://audinux.github.io/) — independently packaged for Fedora as `freeeq8` (2.1.0-1, 2.2.0-1, 2.3.0-1)
 
@@ -197,12 +197,60 @@ Instead of wasting time rebuilding the wheel and re-dressing old concepts, devel
 
 ## 📰 Press & Coverage
 
-| Outlet | Article |
-|--------|--------|
-| **Rekkerd.org** | [FREE: FreeEQ8 parametric EQ effect plugin by Gary Doman](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) |
-| **AudiArtist.com** | [FreeEQ8: Free Dynamic EQ VST3 for Mixing](https://www.audiartist.com/freeeq8-free-dynamic-eq-vst3-plugin/) |
-| **AudioApp.cn** | [福利：Gary Doman 推出 FreeEQ8 免费开源参量均衡器](https://www.audioapp.cn/thread-237167-1-1.html) |
-| **Midifan.com** | [FreeEQ8 免费开源参量均衡器](https://www.midifan.com/modulenews-detailview-59241.htm) |
+Ten verified third-party pickups. **Every link below returned HTTP 200 on
+2026-07-31.** Self-maintained pages are labelled as such and are not counted as
+third-party validation.
+
+### Editorial coverage & reviews
+
+| Outlet | Article | Lang |
+|--------|---------|:----:|
+| **Rekkerd.org** | [FREE: FreeEQ8 parametric EQ effect plugin by Gary Doman](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) | EN |
+| **AudiArtist.com** | [FreeEQ8: Free Dynamic EQ VST3 for Mixing](https://www.audiartist.com/freeeq8-free-dynamic-eq-vst3-plugin/) — most detailed write-up to date; covers dynamic EQ, linear-phase limits, Match EQ caveats, M/S and oversampling | EN |
+| **Midifan.com** | [FreeEQ8 免费开源参量均衡器](https://www.midifan.com/modulenews-detailview-59241.htm) — major Chinese audio-technology outlet | 中文 |
+| **AudioApp.cn** | [福利：Gary Doman 推出 FreeEQ8 免费开源的参量均衡器效果插件](https://www.audioapp.cn/thread-237167-1-1.html) | 中文 |
+
+### Directory & registry listings
+
+| Registry | Entry | Lang |
+|----------|-------|:----:|
+| **StudioRack / Open Audio Stack** | [Plugin registry page](https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/) — `FreeEQ8 v2.3.0`, GPL-3.0, Equalizer tag, with demo audio and image assets | EN |
+| **webprofusion / OpenAudio** | [Audio Plugins](https://github.com/webprofusion/OpenAudio) | EN |
+| **ad-si / awesome-music-production** | [Apps](https://github.com/ad-si/awesome-music-production#apps) — PR #197 merged 2026-03-16 | EN |
+| **孤狼音频 / guaud.com** | [Curated free 64-bit VST3 effects](https://guaud.com/119.html) — `FreeEQ8 (8 段参量动态均衡器)`, listed alongside ZL Equalizer 2 and Pultec / API 550A / LA-2A / Fairchild 660 emulations | 中文 |
+| **geekaifree / BookShelf** | [`music-production.md`](https://github.com/geekaifree/BookShelf) — `免费开源 8 段参量均衡插件 (VST3/AU)` | 中文 |
+
+### Independent packaging
+
+| Distributor | Detail |
+|-------------|--------|
+| **Audinux (Fedora COPR)** | [audinux.github.io](https://audinux.github.io/) — packaged independently as `freeeq8`; `pages/news.md` records **2.1.0-1, 2.2.0-1 and 2.3.0-1**. Packaged by the Audinux maintainers, **not submitted by us** |
+
+Install via StudioRack:
+
+```bash
+studiorack plugin install garebear99/freeeq8
+```
+
+### Worth being straight about
+
+The two strongest signals here — the Audinux Fedora packaging and the Open Audio
+Stack registry entry — both came from **third parties adopting the plugin on their
+own**. Neither came from the submission campaign, which produced zero merges
+between 2026-04-23 and 2026-07-31.
+
+Chinese-language coverage is the largest non-English share at four pickups
+(Midifan.com, AudioApp.cn, guaud.com, geekaifree/BookShelf). **No Japanese or
+Korean coverage exists.** FreeEQ8 is also **not** listed on KVR Audio,
+AlternativeTo, VST4Free, Plugins4Free or Audio Plugins For Free — those remain
+open opportunities rather than existing wins.
+
+One further index exists at
+[GareBear99 / awesome-audio-plugins-dev](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers),
+but it is **self-maintained** and is deliberately excluded from the counts above.
+
+Full evidence, per-item verification notes and the pending-submission tracker:
+[`docs/FEATURED_ON.md`](docs/FEATURED_ON.md).
 
 ## 📄 Publications
 
