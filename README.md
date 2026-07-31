@@ -148,14 +148,14 @@ At $20, it offers a feature set that rivals plugins costing $199, making it the 
 | **Product** | FreeEQ8 — free/open-source 8-band parametric EQ |
 | **Formats** | VST3 · AU · Standalone |
 | **Platforms** | macOS (universal) · Windows · Linux |
-| **Version** | v2.3.0 (stable) |
+| **Version** | v2.3.1 (stable) |
 | **License** | GPL-3.0 |
 
 **Tested in:** Ableton Live 10+, REAPER, Logic Pro, FL Studio, Bitwig
 
 **Featured by:** [Rekkerd.org](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) · [AudiArtist.com](https://www.audiartist.com/freeeq8-free-dynamic-eq-vst3-plugin/) · [AudioApp.cn](https://www.audioapp.cn/thread-237167-1-1.html) · [Midifan.com](https://www.midifan.com/modulenews-detailview-59241.htm)
 
-**Listed on:** [StudioRack](https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/) · [OpenAudio](https://github.com/webprofusion/OpenAudio) · [awesome-music-production](https://github.com/ad-si/awesome-music-production#apps) · [Awesome Audio Dev List](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers)
+**Listed on:** [StudioRack](https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/) · [OpenAudio](https://github.com/webprofusion/OpenAudio) · [awesome-music-production](https://github.com/ad-si/awesome-music-production#apps) · [孤狼音频 / guaud.com](https://guaud.com/119.html) · [Awesome Audio Dev List](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers)
 
 **Packaged for Linux by:** [Audinux](https://audinux.github.io/) — independently packaged for Fedora as `freeeq8` (2.1.0-1, 2.2.0-1, 2.3.0-1)
 

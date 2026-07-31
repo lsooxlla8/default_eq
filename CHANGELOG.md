@@ -14,7 +14,15 @@ All notable changes to FreeEQ8 will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.1] — 2026-07-31
+
+**First release built and validated on all three platforms.** Every prior release
+workflow run — v0.5.0 through v2.3.0 — failed, and only a macOS DMG had ever
+shipped. This release produces macOS DMG, Windows ZIP and Linux tar.gz from a
+single tag, with pluginval passing at strictness level 10 on each.
+
+Seven distinct defects were fixed to reach that point: two audio/stability bugs in
+the plugin itself and five in the build and validation pipeline. Details below.
 
 ### Fixed
 - **Shelf filter instability (FreeEQ8) — audio correctness.** Low Shelf and High
@@ -115,6 +123,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separate non-blocking step with a watchdog.
 
   This affects the AU step only; for VST3 the `auval` test is a no-op.
+- **macOS DMG packaging — `hdiutil: create failed - Resource busy`.** With
+  validation finally passing, `Package DMG` ran for the first time and failed.
+  `package_macos.sh` now detaches any stale volume of the same name, calls `sync`
+  so the freshly written staging tree has settled, and retries up to five times
+  with backoff. The non-blocking `auval` step was also moved to after packaging,
+  since `auvaltool` loads the AU component and holding it open while `hdiutil`
+  reads the staging tree is a plausible contributor.
+
+### Verified
+All three platform jobs green, artifacts produced:
+- `macos-dmg` — 33,983,300 bytes
+- `linux-tar` — 8,169,505 bytes
+- `windows-zip` — 2,669,015 bytes
+
+pluginval strictness 10 passes for FreeEQ8 VST3, FreeEQ8 AU and ProEQ8 VST3.
+`NaNs found in buffer` occurrences went from 5 to 0. Both shelf regression tests
+pass in CI (34,774,500 combinations, zero non-finite values).
 
 ## [2.3.0] — 2026-05-29
 

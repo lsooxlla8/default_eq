@@ -71,6 +71,7 @@ Use these phrases across titles, tags, release copy, directory descriptions, and
 | Open Audio Stack / StudioRack | ✅ Live plugin page | https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/ — confirmed live, shows v2.3.0 / Neo-VECTR / GPL-3.0 / Mac .dmg. Backed by `src/plugins/garebear99/freeeq8/2.3.0/index.yaml`; also in `studiorack/studiorack-cli` test snapshots. Install: `studiorack plugin install garebear99/freeeq8`. |
 | Audinux (Fedora COPR) | ✅ Third-party packaging | Packaged as `freeeq8` — versions 2.1.0-1, 2.2.0-1, 2.3.0-1 recorded in `pages/news.md`. Independent packaging; makes the Linux story materially more honest than "build from source". |
 | geekaifree / BookShelf | ✅ Listed (Chinese) | `music-production.md`: `免费开源 8 段参量均衡插件 (VST3/AU)`. |
+| 孤狼音频 / guaud.com | ✅ Listed (Chinese) | https://guaud.com/119.html — curated free VST3 effects list for streaming/mixing; entry `FreeEQ8 (8 段参量动态均衡器)`. Sits alongside ZL Equalizer 2 and Pultec/API/LA-2A/Fairchild emulations. |
 | GareBear99 / awesome-audio-plugins-dev | ✅ Self-maintained listing | Useful index route; not third-party validation. |
 
 ## Completed/closed evidence — do not overclaim as live listing yet
