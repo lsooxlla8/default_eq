@@ -132,12 +132,21 @@ private:
     juce::dsp::Oversampling<float>* currentOversamplerPtr() const noexcept;
     void buildLinearPhaseMagnitude();        // runs on background thread only
 
-    // Band linking
+    // Band linking.
+    //
+    // parameterChanged can be entered concurrently from more than one thread:
+    // hosts may drive automation from their own thread, and pluginval's
+    // "Parameter thread safety" test does so deliberately. The propagation guard
+    // must therefore be atomic. A plain bool let two threads past the check, and
+    // let one thread clear the flag while another was still propagating; the
+    // resulting setValueNotifyingHost call re-entered the APVTS/UndoManager
+    // write path and glibc aborted with EDEADLK (recursive lock, exit 134).
+    // macOS did not diagnose it, so the defect only surfaced on Linux.
     void parameterChanged(const juce::String& parameterID, float newValue) override;
-    bool propagatingLink = false;
-    float lastLinkedFreq[kNumBands] {};
-    float lastLinkedGain[kNumBands] {};
-    float lastLinkedQ[kNumBands] {};
+    std::atomic<bool> propagatingLink { false };
+    std::atomic<float> lastLinkedFreq[kNumBands] {};
+    std::atomic<float> lastLinkedGain[kNumBands] {};
+    std::atomic<float> lastLinkedQ[kNumBands] {};
     void initLinkTracking();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FreeEQ8AudioProcessor)

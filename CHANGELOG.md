@@ -44,6 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Full measurements, per-release status and candidate slope mappings:
   [`docs/SHELF_RESPONSE.md`](docs/SHELF_RESPONSE.md).
 
+- **Band-link propagation race (FreeEQ8) — crash.** `parameterChanged` guarded its
+  band-link propagation with a plain `bool`. That is sufficient only if the
+  callback is single-threaded, which the code assumed (`"safe: parameterChanged is
+  called on message thread"`), but hosts may drive automation from their own
+  thread and pluginval's `Parameter thread safety` test does so deliberately.
+
+  Two threads could pass the `if (propagatingLink) return;` check before either
+  set it, and one thread could clear the flag while another was still
+  propagating. The resulting `setValueNotifyingHost` call re-entered the
+  APVTS/UndoManager write path and glibc aborted with `EDEADLK` — a recursive
+  lock, exit code 134.
+
+  macOS does not diagnose recursive locks the way glibc does, so this only
+  surfaced on Linux, and only after the Linux build was fixed enough to reach
+  that test.
+
+  The guard is now `std::atomic<bool>` claimed via `compare_exchange_strong`, so
+  only the thread that wins the claim propagates and only that thread releases
+  it. The link-tracking arrays are `std::atomic<float>`. Verified under 8-thread
+  contention: mutual exclusion holds and nested claims are refused.
+
 ### Changed
 - **README — Smart EQ section corrected.** The layer was described as shipped in
   v2.2.3–2.2.4 with delivered UI features. The `ResonanceDetector`, `IntentMode`

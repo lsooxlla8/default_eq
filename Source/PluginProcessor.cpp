@@ -108,6 +108,36 @@ void FreeEQ8AudioProcessor::initLinkTracking()
     }
 }
 
+namespace
+{
+    // Claims an atomic flag for the lifetime of the object.
+    //
+    // claimed() reports whether this instance won the race. Only the winner
+    // releases the flag, so a losing thread can never clear a claim it does not
+    // own - which is precisely the hole a plain bool left open.
+    struct ScopedFlag
+    {
+        explicit ScopedFlag(std::atomic<bool>& f) : flag(f)
+        {
+            bool expected = false;
+            won = flag.compare_exchange_strong(expected, true,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire);
+        }
+
+        ~ScopedFlag() { if (won) flag.store(false, std::memory_order_release); }
+
+        bool claimed() const noexcept { return won; }
+
+        ScopedFlag(const ScopedFlag&) = delete;
+        ScopedFlag& operator=(const ScopedFlag&) = delete;
+
+    private:
+        std::atomic<bool>& flag;
+        bool won = false;
+    };
+}
+
 void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
     // Any EQ-relevant parameter change invalidates the linear phase FIR.
@@ -125,7 +155,9 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
     if (parameterID == "scale" || parameterID == "adaptive_q")
         return;
 
-    if (propagatingLink) return;
+    // Cheap early bail so unrelated parameter traffic does not contend on the
+    // guard at all. The authoritative claim happens per branch below.
+    if (propagatingLink.load(std::memory_order_acquire)) return;
     if (!parameterID.startsWith("b")) return;
 
     const int underscoreIdx = parameterID.indexOf("_");
@@ -148,7 +180,9 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
         if (oldVal < 1.0f) return;
         const float ratio = newValue / oldVal;
 
-        propagatingLink = true;
+        ScopedFlag guard(propagatingLink);
+        if (!guard.claimed()) return;
+
         for (int i = 1; i <= kNumBands; ++i)
         {
             if (i == bandIdx) continue;
@@ -160,14 +194,15 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
             if (auto* p = apvts.getParameter(bandId(i, "freq")))
                 p->setValueNotifyingHost(p->convertTo0to1(updated));
         }
-        propagatingLink = false;
     }
     else if (suffix == "gain")
     {
         const float delta = newValue - lastLinkedGain[ai];
         lastLinkedGain[ai] = newValue;
 
-        propagatingLink = true;
+        ScopedFlag guard(propagatingLink);
+        if (!guard.claimed()) return;
+
         for (int i = 1; i <= kNumBands; ++i)
         {
             if (i == bandIdx) continue;
@@ -179,14 +214,15 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
             if (auto* p = apvts.getParameter(bandId(i, "gain")))
                 p->setValueNotifyingHost(p->convertTo0to1(updated));
         }
-        propagatingLink = false;
     }
     else if (suffix == "q")
     {
         const float delta = newValue - lastLinkedQ[ai];
         lastLinkedQ[ai] = newValue;
 
-        propagatingLink = true;
+        ScopedFlag guard(propagatingLink);
+        if (!guard.claimed()) return;
+
         for (int i = 1; i <= kNumBands; ++i)
         {
             if (i == bandIdx) continue;
@@ -198,7 +234,6 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
             if (auto* p = apvts.getParameter(bandId(i, "q")))
                 p->setValueNotifyingHost(p->convertTo0to1(updated));
         }
-        propagatingLink = false;
     }
 }
 
