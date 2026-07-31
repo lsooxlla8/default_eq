@@ -788,7 +788,10 @@ The ProEQ8 shipped in v2.3.1 is a demo that cannot be unlocked and has a known
 shelf defect. These four items are what make it a real product rather than a
 preview:
 - [ ] Working checkout — the configured host (`proeq8-checkout.tizwildin.workers.dev`)
-      does not resolve, and the Stripe products appear not to exist
+      does not resolve, and the Stripe products do not exist. Full verified
+      assessment of the backend, auth and checkout state, including a live
+      unauthenticated account-read issue that should be fixed first, is in
+      [`docs/BACKEND_STATE.md`](docs/BACKEND_STATE.md)
 - [ ] Bounded SVF shelf response — ProEQ8 shelves overshoot the set gain by up to
       24 dB at high Q (measured). Two bounded variants have been measured; neither
       applied. See [`docs/SHELF_RESPONSE.md`](docs/SHELF_RESPONSE.md)
@@ -799,14 +802,22 @@ preview:
       so it must be treated as published and every key issued under it as forgeable
 
 ### v2.4.0 (Planned)
-- [ ] Linear phase low-frequency accuracy — measured error up to +8.73 dB for a
-      narrow band at 100 Hz. Options: longer FIR (16384 taps gives ~2.7 Hz
-      resolution at ~186 ms latency instead of 46 ms), a gentler taper than the
-      current full-length Hann (measured to recover 2–3 dB on its own), or a
-      selectable quality/latency tier. See Known Issues for the measurements
 - [ ] Smart EQ host integration (see corrected v2.2.3–2.2.4 list above)
 - [ ] Zero-Lag auto-switch between linear-phase and minimum-phase modes
 - [ ] Cross-instance ARC-Core spine
+
+### v2.4+ — linear phase accuracy (deliberately deferred)
+The engine is **frozen at 4096 taps** for v2.3.2 and v2.4.0. The defect is
+disclosed rather than partly patched, because every candidate fix either changes
+latency for existing users or changes the linear-phase character while still
+leaving a multi-dB error. See Known Issues for the measurements.
+- [ ] Selectable FIR quality tier — 16384 taps gives ~2.7 Hz resolution at
+      ~186 ms latency instead of 46 ms, opt-in so the default never moves
+- [ ] Per-band realisability check — flag bands narrower than the active kernel
+      can represent, with the predicted error, instead of failing silently
+- [ ] Ruled out: a gentler taper than the full-length Hann. Removing the window
+      entirely recovers only 2.25 dB of an 8.73 dB error while doubling
+      out-of-centre impulse energy, so kernel length is the real constraint
 
 ## 🤝 Contributing
 
@@ -882,13 +893,36 @@ g++ -std=c++17 -O3 -DNDEBUG -pthread Tests/FeatureBench.cpp -o FeatureBench -I.
 ## 🐛 Known Issues
 
 - Changing oversampling mid-playback may cause a brief click (IIR half-band filter state differs between orders; reset on switch)
-- Linear phase mode adds 2048 samples of latency (reported to the DAW via `setLatencySamples`)
+- **Linear phase mode adds 2048 samples of latency** — 46.44 ms at 44.1 kHz,
+  42.67 ms at 48 kHz. This is reported to the DAW via `setLatencySamples` on
+  toggle, on state restore, and in `prepareToPlay`, and `getTailLengthSeconds()`
+  declares the FIR tail, so the host delay-compensates correctly and mixes and
+  bounces stay aligned. It is nonetheless far past the ~10 ms where latency stops
+  being noticeable, so linear phase is unsuitable for live monitoring or tracking.
+  Use minimum phase while playing
 - Match EQ capture is mono-summed; correction is applied per-channel
 - Linear phase mode does not apply M/S, per-band drive, or dynamic EQ — those features require per-sample biquad state and are on the minimum-phase path only. The oversampling selector and the affected controls are greyed out in the UI when linear phase is active
 - **Linear phase cannot render narrow low-frequency bands accurately.** The FIR is
   4096 taps, which at 44.1 kHz gives roughly 10.8 Hz of frequency resolution. A
   bell at 100 Hz with Q = 16 is only about 6 Hz wide — below what the kernel can
   represent — so the achieved cut falls well short of the displayed curve.
+- **Raising the sample rate makes linear-phase accuracy worse, not better.**
+  `firLength` is a compile-time constant, so latency in *samples* is fixed while
+  resolution is roughly `fs / firLength`. The two move in opposite directions,
+  which is the opposite of what most users would assume. Measured for a −12.00 dB
+  bell at 100 Hz, Q = 16:
+
+  | Sample rate | Latency | Resolution | Achieved | Error |
+  |---|---|---|---|---|
+  | 44.1 kHz | 46.44 ms | 10.77 Hz | −3.27 dB | +8.73 dB |
+  | 48 kHz | 42.67 ms | 11.72 Hz | −2.39 dB | +9.61 dB |
+  | 88.2 kHz | 23.22 ms | 21.53 Hz | −1.09 dB | +10.91 dB |
+  | 96 kHz | 21.33 ms | 23.44 Hz | −1.36 dB | +10.64 dB |
+  | 192 kHz | 10.67 ms | 46.88 Hz | −1.18 dB | +10.82 dB |
+
+  Moving a session from 44.1 kHz to 96 kHz roughly halves the latency and roughly
+  doubles the error. For surgical low-frequency work use minimum phase at any
+  sample rate.
 
   Measured, target vs achieved at the band centre (Bell, −12 dB, 44.1 kHz):
 

@@ -14,6 +14,53 @@ All notable changes to FreeEQ8 will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documented
+- **Backend, auth and checkout state assessed and written up** —
+  [`docs/BACKEND_STATE.md`](docs/BACKEND_STATE.md). Every claim verified against
+  the live service or current `main` on 2026-07-31. Headline findings:
+
+  - The licensing Worker is deployed and working: `/activate`, `/verify` and
+    `/deactivate` all respond, and the plugin-side `LicenseValidator` is complete.
+  - `GET /hub/account?email=<anything>` returns `HTTP 200` with **no credential**.
+    Identity is a client-supplied query parameter, and the response is shaped to
+    return `licenses` and `masterKey`. This is live and should be fixed before any
+    traffic is driven at the hub. Not probed with a real address.
+  - **There is no Google OAuth in the hub repo.** A full-tree search of all 740
+    paths finds no Google, OAuth, OpenID or JWT implementation. The only auth is a
+    72-line `arc_service/app/services/auth_service.py` offering `mock_login` and
+    local password login, backed entirely by `.mock.json` files with no database
+    and no deployment. Unified account work is new work, not a wiring task.
+  - Stripe products still do not exist; `manifests/stripe.mapping.json` says to
+    "fill real Stripe product and price IDs after dashboard setup".
+  - The checkout host `proeq8-checkout.tizwildin.workers.dev` remains NXDOMAIN.
+
+  A purchasable ProEQ8 does **not** depend on Google auth and should not be
+  sequenced behind it. The document carries a dependency-ordered route to each
+  outcome.
+
+- **Linear-phase latency figures and sample-rate interaction measured.** Latency is
+  2048 samples: 46.44 ms at 44.1 kHz, 42.67 ms at 48 kHz. It is correctly reported
+  via `setLatencySamples` on toggle, on state restore and in `prepareToPlay`, and
+  `getTailLengthSeconds()` declares the FIR tail, so the host delay-compensates
+  correctly. It is nonetheless unsuitable for live monitoring.
+
+  Because `firLength` is a compile-time constant, latency in samples is fixed while
+  resolution is `fs / firLength`, so the two move in opposite directions. For a
+  −12.00 dB bell at 100 Hz Q 16 the error grows with sample rate: +8.73 dB at
+  44.1 kHz, +9.61 at 48 kHz, +10.91 at 88.2 kHz, +10.64 at 96 kHz, +10.82 at
+  192 kHz. Raising a session from 44.1 kHz to 96 kHz roughly halves the latency and
+  roughly doubles the error. The 44.1 kHz figure reproduces the previously
+  published +8.73 dB exactly.
+
+### Changed
+- **Linear phase engine deliberately frozen at 4096 taps** for v2.3.2 and v2.4.0.
+  The selectable FIR quality tier and per-band realisability check move to a v2.4+
+  roadmap section. Rationale: every candidate fix either changes latency for
+  existing users or changes linear-phase character while still leaving a multi-dB
+  error, so the defect is disclosed rather than partly patched.
+
 ## [2.3.1] — 2026-07-31
 
 **First release with macOS, Windows and Linux artifacts from a single tag**, each
