@@ -107,14 +107,42 @@ EOF
 # Remove any existing DMG
 rm -f "$BUILD_DIR/${DMG_NAME}.dmg"
 
-# Create DMG
+# Detach any stale volume of the same name left over from a previous attempt.
+# hdiutil create fails with "Resource busy" if one is still mounted.
+VOLNAME="FreeEQ8 v${VERSION}"
+if [ -d "/Volumes/${VOLNAME}" ]; then
+    echo "Detaching stale volume /Volumes/${VOLNAME}"
+    hdiutil detach "/Volumes/${VOLNAME}" -force || true
+fi
+
+# Flush pending writes so hdiutil sees a settled source tree. On CI the staging
+# folder is created moments earlier and Spotlight may still be indexing it,
+# which is the usual cause of "Resource busy".
+sync
+
+# Create DMG, retrying on transient "Resource busy" failures.
 echo "Creating DMG..."
-hdiutil create \
-    -volname "FreeEQ8 v${VERSION}" \
-    -srcfolder "$STAGING" \
-    -ov \
-    -format UDZO \
-    "$BUILD_DIR/${DMG_NAME}.dmg"
+DMG_OK=0
+for attempt in 1 2 3 4 5; do
+    if hdiutil create \
+        -volname "${VOLNAME}" \
+        -srcfolder "$STAGING" \
+        -ov \
+        -format UDZO \
+        "$BUILD_DIR/${DMG_NAME}.dmg"; then
+        DMG_OK=1
+        break
+    fi
+    echo "hdiutil attempt ${attempt} failed; waiting before retry..."
+    rm -f "$BUILD_DIR/${DMG_NAME}.dmg"
+    sleep $((attempt * 5))
+    sync
+done
+
+if [ "$DMG_OK" -ne 1 ]; then
+    echo "ERROR: hdiutil create failed after 5 attempts"
+    exit 1
+fi
 
 # Clean up staging
 rm -rf "$STAGING"
