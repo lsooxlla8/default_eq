@@ -106,6 +106,28 @@ All four are targeted for **v2.3.2**.
   layer does not execute in the plugin. The `intent_mode` parameter is registered
   and host-automatable but never read. Host integration is pending.
 
+### Documented
+- **Linear phase resolution limit — measured.** Linear phase cannot render narrow
+  low-frequency bands accurately. The 4096-tap FIR gives roughly 10.8 Hz of
+  resolution at 44.1 kHz, and a bell at 100 Hz with Q 16 is only about 6 Hz wide.
+  Measured for a −12 dB bell: at 1 kHz Q 1 the error is 0.00 dB and at 5 kHz Q 16
+  it is +0.06 dB, but at 100 Hz Q 8 it is **+6.22 dB** and at 100 Hz Q 16 it is
+  **+8.73 dB** — a −12 dB cut achieving only −3.3 dB.
+
+  The full-length Hann window on the impulse response compounds this; a 10% Tukey
+  taper recovers roughly 2–3 dB but does not solve it, because the constraint is
+  kernel length. A fix needs a longer FIR at proportionally higher latency.
+
+  Not a regression — this behaviour is unchanged from earlier releases and is a
+  general property of FIR linear-phase EQ. It is now documented with numbers, and
+  the README carries guidance to use minimum phase for surgical low-frequency work.
+- **Automatic compensation layers named correctly.** *Adaptive Q* is
+  **proportional Q** in standard terminology — `Q_eff = Q * (1 + |gain| * 0.12)`,
+  responding to the gain setting rather than the audio. *Auto Gain* is
+  **auto gain compensation** — per-block RMS input/output matching with a ~100 ms
+  one-pole smoother, which is genuinely signal-driven. Neither analyses spectral
+  content; that is the separate, unwired Smart EQ layer.
+
 ### Tests
 - **`Tests/ShelfNaNSweepTest.cpp`** — sweeps all 6 filter types across the full
   frequency, Q and gain ranges at 5 sample rates (34,774,500 combinations) and

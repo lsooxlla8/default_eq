@@ -373,7 +373,21 @@ Full evidence and numbers:
 - **Oversampling** — 1x / 2x / 4x / 8x using JUCE polyphase IIR half-band filters
 - **Band Linking** — link groups A/B propagate frequency (ratio), gain & Q (delta) changes
 - **Match EQ** — capture a reference spectrum, analyze current signal, compute & apply per-bin correction via FFT
-- **Adaptive Q** — automatically widens Q with increasing gain
+### Automatic compensation — two shipped layers
+Both reduce manual correction, and both are active in v2.3.1. Neither analyses
+spectral content or makes recommendations — that is the separate Smart EQ layer,
+which is not yet wired in.
+
+- **Proportional Q** (UI label: *Adaptive Q*) — Q scales with the absolute gain
+  setting, `Q_eff = Q * (1 + |gain_dB| * 0.12)`, clamped to `[0.1, 24]`. A Q of 1.0
+  at +12 dB becomes 2.44, so larger boosts and cuts automatically narrow. This
+  matches the classic console behaviour usually called *proportional Q*. It
+  responds to your gain knob, not to the audio.
+- **Auto Gain Compensation** (UI label: *Auto Gain*) — measures input and output
+  RMS per block, computes `20*log10(inRms/outRms)` clamped to ±24 dB, and applies
+  it through a one-pole smoother with a ~100 ms time constant. This one is
+  signal-driven: it measures the actual audio, so bypassing stays level-neutral
+  and A/B comparisons are not biased by loudness.
 
 ### Visualization & UI
 - **Real-Time Spectrum Analyzer** — 4096-point FFT, Hann window, pre/post EQ toggle
@@ -785,6 +799,11 @@ preview:
       so it must be treated as published and every key issued under it as forgeable
 
 ### v2.4.0 (Planned)
+- [ ] Linear phase low-frequency accuracy — measured error is up to +8.73 dB for a
+      narrow band at 100 Hz. Options: longer FIR (16384 taps gives ~2.7 Hz
+      resolution at ~186 ms latency instead of 46 ms), a gentler taper than the
+      current full-length Hann (measured to recover 2–3 dB on its own), or a
+      selectable quality/latency tier. See Known Issues for the measurements
 - [ ] Smart EQ host integration (see corrected v2.2.3–2.2.4 list above)
 - [ ] Zero-Lag auto-switch between linear-phase and minimum-phase modes
 - [ ] Cross-instance ARC-Core spine
@@ -866,6 +885,32 @@ g++ -std=c++17 -O3 -DNDEBUG -pthread Tests/FeatureBench.cpp -o FeatureBench -I.
 - Linear phase mode adds 2048 samples of latency (reported to the DAW via `setLatencySamples`)
 - Match EQ capture is mono-summed; correction is applied per-channel
 - Linear phase mode does not apply M/S, per-band drive, or dynamic EQ — those features require per-sample biquad state and are on the minimum-phase path only. The oversampling selector and the affected controls are greyed out in the UI when linear phase is active
+- **Linear phase cannot render narrow low-frequency bands accurately.** The FIR is
+  4096 taps, which at 44.1 kHz gives roughly 10.8 Hz of frequency resolution. A
+  bell at 100 Hz with Q = 16 is only about 6 Hz wide — below what the kernel can
+  represent — so the achieved cut falls well short of the displayed curve.
+
+  Measured, target vs achieved at the band centre (Bell, −12 dB, 44.1 kHz):
+
+  | Band | Target | Achieved | Error |
+  |---|---|---|---|
+  | 1 kHz, Q 1 | −12.00 dB | −12.00 dB | 0.00 |
+  | 1 kHz, Q 8 | −12.00 dB | −11.71 dB | +0.29 |
+  | 5 kHz, Q 16 | −12.00 dB | −11.94 dB | +0.06 |
+  | **100 Hz, Q 8** | −12.00 dB | **−5.78 dB** | **+6.22** |
+  | **100 Hz, Q 16** | −12.00 dB | **−3.27 dB** | **+8.73** |
+
+  A full-length Hann window on the impulse response compounds this; a 10% Tukey
+  taper was measured to recover roughly 2–3 dB but does not solve it, because the
+  limit is kernel length rather than windowing. A genuine fix needs a longer FIR,
+  which costs latency — 16384 taps would give about 2.7 Hz resolution at roughly
+  186 ms instead of 46 ms.
+
+  **Practical guidance:** use linear phase for broad tonal shaping and mastering
+  moves, where its phase behaviour is the point. For surgical low-frequency work,
+  leave it off — the default minimum-phase path renders those bands accurately.
+  This is a general property of FIR linear-phase EQ, not specific to FreeEQ8, but
+  the numbers above are this implementation's.
 
 **Fixed in v2.2.1:**
 - ~~Transistor saturation gain error~~ (ProEQ8) — double-multiply bug caused ~d× level at high drive; fixed
