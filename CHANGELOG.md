@@ -114,9 +114,13 @@ All four are targeted for **v2.3.2**.
   it is +0.06 dB, but at 100 Hz Q 8 it is **+6.22 dB** and at 100 Hz Q 16 it is
   **+8.73 dB** — a −12 dB cut achieving only −3.3 dB.
 
-  The full-length Hann window on the impulse response compounds this; a 10% Tukey
-  taper recovers roughly 2–3 dB but does not solve it, because the constraint is
-  kernel length. A fix needs a longer FIR at proportionally higher latency.
+  The full-length Hann window was investigated as a cause and ruled out. Measured
+  error at 100 Hz / Q 16: full Hann +8.73 dB, Tukey 25% +7.40 dB, Tukey 10%
+  +6.85 dB, Tukey 5% +6.71 dB, no window at all +6.48 dB. Removing the window
+  entirely recovers only 2.25 dB, so kernel length is the actual constraint. The
+  window is deliberately unchanged — altering it would change linear-phase
+  character for every user while still leaving a ~6.5 dB error. A fix needs a
+  longer FIR at proportionally higher latency.
 
   Not a regression — this behaviour is unchanged from earlier releases and is a
   general property of FIR linear-phase EQ. It is now documented with numbers, and

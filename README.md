@@ -799,7 +799,7 @@ preview:
       so it must be treated as published and every key issued under it as forgeable
 
 ### v2.4.0 (Planned)
-- [ ] Linear phase low-frequency accuracy — measured error is up to +8.73 dB for a
+- [ ] Linear phase low-frequency accuracy — measured error up to +8.73 dB for a
       narrow band at 100 Hz. Options: longer FIR (16384 taps gives ~2.7 Hz
       resolution at ~186 ms latency instead of 46 ms), a gentler taper than the
       current full-length Hann (measured to recover 2–3 dB on its own), or a
@@ -900,11 +900,26 @@ g++ -std=c++17 -O3 -DNDEBUG -pthread Tests/FeatureBench.cpp -o FeatureBench -I.
   | **100 Hz, Q 8** | −12.00 dB | **−5.78 dB** | **+6.22** |
   | **100 Hz, Q 16** | −12.00 dB | **−3.27 dB** | **+8.73** |
 
-  A full-length Hann window on the impulse response compounds this; a 10% Tukey
-  taper was measured to recover roughly 2–3 dB but does not solve it, because the
-  limit is kernel length rather than windowing. A genuine fix needs a longer FIR,
-  which costs latency — 16384 taps would give about 2.7 Hz resolution at roughly
-  186 ms instead of 46 ms.
+  The full-length Hann window on the impulse response was investigated as a
+  possible cause and ruled out. Measured error at 100 Hz / Q 16 by window choice:
+
+  | Window | Error | Impulse energy beyond ±256 samples |
+  |---|---|---|
+  | Full Hann (shipped) | +8.73 dB | 0.004% |
+  | Tukey 25% | +7.40 dB | 0.007% |
+  | Tukey 10% | +6.85 dB | 0.008% |
+  | Tukey 5% | +6.71 dB | 0.008% |
+  | None at all | +6.48 dB | 0.008% |
+
+  Removing the window entirely recovers only 2.25 dB of the 8.73 dB error, so the
+  window is a minor contributor and **kernel length is the actual constraint**. The
+  window is deliberately left as-is: changing it would alter linear-phase character
+  for every user while still leaving a ~6.5 dB error.
+
+  A genuine fix needs a longer FIR, which costs latency — 16384 taps would give
+  about 2.7 Hz resolution at roughly 186 ms instead of 46 ms. That is a real
+  trade-off rather than a free win, which is why it is a planned item and not a
+  patch.
 
   **Practical guidance:** use linear phase for broad tonal shaping and mastering
   moves, where its phase behaviour is the point. For surgical low-frequency work,
