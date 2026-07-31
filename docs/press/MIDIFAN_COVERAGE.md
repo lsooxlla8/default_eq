@@ -17,8 +17,15 @@ Observed evidence:
 
 Coverage date: May 2026 (based on URL pattern and context).
 
-Recommended wording:
+Recommended wording (updated 2026-07-31 — previously said "three publications" and omitted AudiArtist.com):
 
-> FreeEQ8 has received coverage from three independent audio publications: Rekkerd.org (English), AudioApp.cn (Chinese), and Midifan.com (Chinese).
+> FreeEQ8 has received coverage from four independent audio publications:
+> Rekkerd.org and AudiArtist.com (English), and Midifan.com and AudioApp.cn
+> (Chinese).
 
 This represents genuine third-party editorial coverage, not a self-submitted listing.
+
+**Note on provenance:** neither Chinese outlet was ever pitched. No submission has
+ever been made to any Asian outlet — see the Asian-outreach section of
+[`FEATURED_ON.md`](../FEATURED_ON.md). Midifan's own submission route has **not**
+been verified; do not assume a contact address.

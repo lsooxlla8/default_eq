@@ -49,6 +49,74 @@ Closed voluntarily rather than left rotting in maintainer queues.
 | [nodiscc / awesome-linuxaudio #71](https://github.com/nodiscc/awesome-linuxaudio/pull/71) | The GitHub repo is explicitly marked `[mirror]` and its homepage points to GitLab. Contributions must go through a **GitLab merge request** at `gitlab.com/nodiscc/awesome-linuxaudio`. The PR was filed somewhere that cannot merge it. Entry format is documented in their CONTRIBUTING if resubmitting. |
 | [detroitsynth / awesome-open-synth #3](https://github.com/detroitsynth/awesome-open-synth/pull/3) | Weak fit (EQ effect, not a synth) and the repo has been dormant since **2023-06-09**. |
 
+## Asian outreach: never attempted, highest yield per effort
+
+_Added 2026-07-31._
+
+**Not one submission has ever been made to any Asian outlet, listing or forum.**
+Every entry in the outreach table below is Western. Yet four of the ten verified
+wins are Chinese-language, and all four arrived unsolicited.
+
+The asymmetry is worth stating numerically:
+
+| Channel | Effort spent | Wins |
+|---|---|---|
+| Western editorial email | 10+ pitches | 1 confirmed (Rekkerd.org) |
+| GitHub awesome-list PRs | 8 PRs over 10 weeks | 0 merges |
+| **Chinese-language** | **zero outreach** | **4** |
+
+The channel nobody worked is the one that produced the most coverage.
+
+### AudioApp.cn accepts vendor submissions, free, and we never used it
+
+Every thread footer on `audioapp.cn` carries this standing invitation:
+
+> 欢迎厂家入驻，推文！免费！微信:yinpinyingyong
+> _("Manufacturers welcome to join and post promotions! **Free!** WeChat:
+> yinpinyingyong")_
+
+The board header separately advertises partnership enquiries via site customer
+service (`音频应用官网广告：招募合作，有兴趣联系网站客服`).
+
+So the outlet that covered FreeEQ8 without being asked has an **open, free,
+explicitly advertised submission channel** that has never been used. It runs a
+high volume of free-plugin news under a 福利 ("freebie") prefix — which is exactly
+the prefix FreeEQ8's own post received.
+
+### The unsolicited AudioApp.cn post is one of the board's top threads
+
+FreeEQ8's thread appears in the site's 热帖排行 (hot-posts ranking) across multiple
+sections, with heat observed **rising** between page captures on 2026-07-31:
+**3302 → 3558 → 3717**. In those captures it ranks **first or second overall**,
+trading places with a u-he Uhbik 2 review (3299 / 3879).
+
+That is a commercial synth-maker's review being matched by an unsolicited post
+about a free GPL plugin. It is the single strongest engagement signal in this
+entire document, and it came from a channel that received no effort at all.
+
+### Verified next actions
+
+| Target | Route | Verified? |
+|---|---|---|
+| **AudioApp.cn** | WeChat `yinpinyingyong` — free vendor posting, per site footer | ✅ Route confirmed on-site 2026-07-31 |
+| **AudioApp.cn** partnerships | Site customer service, per board header | ✅ Advertised on-site |
+| **Midifan.com** | Submission route **not yet verified** — do not guess a contact address | ❌ Needs checking |
+| **孤狼音频 / guaud.com** | Route not yet verified | ❌ Needs checking |
+| Japanese outlets (e.g. ICON, Sound & Recording) | Not researched | ❌ No coverage exists; no route verified |
+| Korean outlets | Not researched | ❌ No coverage exists; no route verified |
+
+Do **not** invent contact addresses for the unverified rows. Three of the four
+Chinese wins arrived without any contact being made, so the cost of verifying a
+route properly is low relative to the demonstrated return.
+
+### Why this likely outperforms more Western submissions
+
+The recurring Western rejection is presentation, not engineering — see the
+maintainer-feedback section below. Chinese outlets in this space publish
+free-plugin release news as a matter of routine editorial volume and do not apply
+awesome-list curation gatekeeping. FreeEQ8 already cleared that bar four times
+without trying.
+
 ## Email outreach / editorial submissions
 
 | Target | Status | Notes |
