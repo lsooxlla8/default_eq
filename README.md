@@ -693,17 +693,25 @@ FreeEQ8/
 
 ### v2.2.3–2.2.4
 - [x] Variable-cadence Dynamic EQ (75% CPU savings on sustained signals)
-- [x] `intent_mode` APVTS parameter + editor dropdown
-- [x] ResonanceDetector wired to UI timer at 30 Hz
-- [x] Suggestion overlay (glowing amber nodes on response curve)
-- [x] One-click “apply suggestion” into next unused band
-- [x] Explain-on-hover popup on band + suggestion nodes
+- [x] `intent_mode` APVTS parameter registered (host-automatable)
 - [x] Compact / mini-window mode (identical coordinate mapping)
-- [x] Pre-ring warning overlay (DrumPunch + Linear Phase)
 - [x] Oversampling crossfade buffer (128-sample, eliminates pop)
 - [x] SvfBandArray SIMD scaffold (AVX2/SSE2/Neon)
 - [x] NaturalPhaseEngine (256-tap, 128-sample latency)
 - [x] pluginval CI (strictness-level 10)
+
+**Corrected 2026-07-31.** The following were previously listed here as complete but
+are not implemented. `ResonanceDetector`, `IntentMode` and `FrequencyExplainer`
+exist as standalone, unit-tested components, but nothing in `PluginProcessor` or
+`PluginEditor` references them, so the layer does not execute in the plugin. The
+`intent_mode` parameter is registered and host-automatable but is never read.
+- [ ] `intent_mode` connected to an editor dropdown and routed into the detector
+- [ ] ResonanceDetector instantiated and fed from `SpectrumFIFO`
+- [ ] Thread-safe suggestion hand-off from analysis path to editor
+- [ ] Suggestion overlay on the response curve
+- [ ] One-click “apply suggestion” into next unused band
+- [ ] Explain-on-hover popup on band + suggestion nodes
+- [ ] Pre-ring warning overlay (DrumPunch + Linear Phase)
 
 ### v2.2.5
 - [x] Transistor saturation `invD*d` no-op bug fixed in shipped code
@@ -713,19 +721,39 @@ FreeEQ8/
 - [x] Version consistency across all docs (no fake v2.4/v2.5/v3.0 refs)
 - [x] PAPER.md section numbering fixed (§6 Benchmarks, §8 Compact View, §9 Future Work)
 
-### v2.3.0 (Current Release) — Stable Release
+### v2.3.0 — Stable Release
 - [x] Version alignment (CMakeLists.txt + Config.h both 2.3.0)
 - [x] Get Pro button for FreeEQ8 (opens ProEQ8 checkout)
 - [x] Full codebase audit completed
 - [x] Smart EQ layer documentation expanded in PAPER.md
 - [x] CI/CD fixes (Linux webkit2gtk-4.1, Windows MSVC lambda capture, macOS retry)
-- [x] Build verified (AU, VST3, Standalone) on all platforms
+
+### v2.3.1 (Current Release) — Multi-platform + shelf correctness
+- [x] Shelf filter NaN fixed — RBJ slope parameter `S` constrained to its defined
+      `(0, 1]` domain. Affected 11.3% of the parameter space from Q 3.80 upward in
+      every release from v0.3.0 onward. Shelves now monotonic at every Q; `Q <= 2`
+      bit-identical to prior releases, so no factory preset changes
+- [x] Band-link propagation race fixed — atomic claim replaces a plain `bool`
+      guard that failed under concurrent parameter changes (`EDEADLK` abort)
+- [x] Linux release job builds — ProEQ8 now links libcurl
+- [x] Windows release job builds — `VST3_AUTO_MANIFEST` disabled; was hanging six
+      hours on `juce_vst3_helper.exe`. Restores Windows support last shipped in v1.0.0
+- [x] Linux pluginval runs under `xvfb` (headless editor tests)
+- [x] macOS AU validation — pluginval's `auval` test excluded; `auval` non-blocking
+- [x] macOS DMG packaging hardened against `hdiutil` "Resource busy"
+- [x] Two shelf regression tests in CI (34,774,500 parameter combinations)
+- [x] Five previously-unbuilt test sources wired into CMake and CI
+- [x] **First release with macOS, Windows and Linux artifacts from one tag**
 
 ### v2.4.0 (Planned) — ProEQ8 Launch
-- [ ] SVF wired into EQBand via `#if PROEQ8`
-- [ ] 24-band layout
+- [ ] Working checkout — the configured host does not currently resolve
+- [ ] ProEQ8 packaged for Windows and Linux (built and validated there already,
+      but only bundled in the macOS DMG)
+- [ ] Bounded SVF shelf response — ProEQ8 shelves currently overshoot the set
+      gain by up to 24 dB at high Q
+- [ ] Rotate the license signing secret and move to asymmetric signing
+- [ ] Smart EQ host integration (see corrected v2.2.3–2.2.4 list above)
 - [ ] Zero-Lag auto-switch between linear-phase and minimum-phase modes
-- [ ] Stripe checkout live
 - [ ] Cross-instance ARC-Core spine
 
 ## 🤝 Contributing
