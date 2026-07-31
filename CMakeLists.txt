@@ -165,6 +165,19 @@ if (FREEEQ8_BUILD_TESTS)
     add_executable(FreeEQ8_ShelfResponse Tests/ShelfResponseTest.cpp)
     target_compile_features(FreeEQ8_ShelfResponse PRIVATE cxx_std_17)
 
+    # These three existed as standalone sources but were not built by anything,
+    # so the claims they substantiate were never actually verified on any commit.
+    # BiquadVsSvfComparison in particular is cited in SvfBiquad.h as evidence
+    # that RBJ and SVF are identical, so it needs to run.
+    add_executable(FreeEQ8_BiquadVsSvf Tests/BiquadVsSvfComparison.cpp)
+    target_compile_features(FreeEQ8_BiquadVsSvf PRIVATE cxx_std_17)
+
+    add_executable(FreeEQ8_SvfTest Tests/SvfTest.cpp)
+    target_compile_features(FreeEQ8_SvfTest PRIVATE cxx_std_17)
+
+    add_executable(FreeEQ8_EngineIsolation Tests/EngineIsolationTest.cpp)
+    target_compile_features(FreeEQ8_EngineIsolation PRIVATE cxx_std_17)
+
     add_executable(FreeEQ8_AuditTests Tests/AuditRegressionTest.cpp)
     target_compile_features(FreeEQ8_AuditTests PRIVATE cxx_std_17)
     find_package(Threads REQUIRED)

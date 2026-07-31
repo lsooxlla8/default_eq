@@ -839,27 +839,49 @@ FreeEQ8 explicitly treats these as first-class DSP engineering problems rather t
 
 ---
 
-# Decramped High-Frequency Response
+# High-Frequency Response and BLT Cramping
 
-Conventional bilinear-transform EQ topologies suffer from frequency warping near the Nyquist boundary. As center frequencies approach Nyquist, bell and shelving responses become compressed and distorted ("cramped"), causing:
+Bilinear-transform EQ designs warp the frequency axis near Nyquist. As centre
+frequencies approach Nyquist, bell and shelving responses compress relative to the
+analog prototype ("cramping"), producing narrowed bandwidth and asymmetric curves.
 
-* narrowed bandwidth
-* asymmetric curves
-* exaggerated resonance
-* brittle high-end behavior
-* loss of analog-like openness
+**Neither of this project's filter topologies decramps.** Cramping is a property of
+the bilinear transform, not of the filter structure. RBJ TDF-II (FreeEQ8) and
+Simper SVF (ProEQ8) both prewarp with `g = tan(pi*fc/fs)` and therefore produce
+the same steady-state magnitude response.
 
-FreeEQ8 uses the Simper SVF topology for its Dynamic EQ path due to superior modulation stability and lower coefficient-change noise. Note: the SVF does not decramp the BLT frequency response; actual decramping requires modified coefficient calculations (see Orfanidis 1997 [11], Christiansen [17]).
+This is measured, not assumed. `Tests/BiquadVsSvfComparison.cpp` sweeps both
+topologies (Bell, +6 dB, Q = 1, fc = 16 kHz, 44.1 kHz) and reports:
 
-This improves:
+```
+Freq(Hz)    RBJ(dB)     SVF(dB)     Diff(dB)
+ 8000        0.6003      0.6003      0.0000
+12000        2.1254      2.1254      0.0000
+16000        6.0000      6.0000      0.0000
+20000        0.7050      0.7050      0.0000
+```
 
-* high-shelf smoothness
-* perceptual air retention
-* phase consistency
-* upper-octave proportionality
-* mastering-grade top-end behavior
+Both are identical to 0.0000 dB at every tested frequency, and both deviate from
+the analog prototype identically — **-3.3827 dB at the geometric mean of fc and
+Nyquist (18,783 Hz)**. That figure is the size of the cramping error that remains
+in both engines.
 
-The result is a high-frequency response that remains spatially open and tonally stable rather than collapsing toward the Nyquist boundary.
+Earlier revisions of this paper claimed the SVF eliminated cramping and quoted Q
+distortion figures of up to +214%. Those claims were incorrect and are withdrawn.
+The correction followed review on the JUCE forum and r/DSP; see §2.4 for the
+5-DOF analysis of why cramping is inescapable under standard BLT design, and §9.1
+for the geometric-mean approach that would actually close the -3.383 dB gap.
+
+The SVF is used for ProEQ8's Dynamic EQ path for reasons unrelated to frequency
+response:
+
+* better signal-to-noise ratio when fc sits near DC, which matters for kick and
+  bass work
+* lower coefficient-change noise during parameter automation
+* more stable coefficient interpolation under per-sample Dynamic EQ updates
+
+Actual decramping requires modified coefficient calculation — see Orfanidis 1997
+[11] and Christiansen [17]. It is future work, not a current property.
 
 ---
 
@@ -987,6 +1009,30 @@ FreeEQ8’s evolving architecture targets resilience under:
 This class of engineering is rarely addressed in independent DSP projects despite being essential for commercial-grade reliability.
 
 The FreeEQ8 engine is therefore designed not merely as a feature-rich equalizer, but as a realtime-safe DSP platform engineered around deterministic execution, temporal coherence, and mathematically stable signal transformation under hostile runtime conditions.
+
+**Measured limitation (v2.3.1).** These are design goals, and the project has not
+always met them. Two defects found by external validation in July 2026:
+
+1. **Shelf coefficient domain error.** The RBJ shelving slope parameter `S` is
+   defined only for `0 < S <= 1` but was clamped to `[0.1, 4.0]`. Above `S = 1`
+   the square-root argument can go negative, so `std::sqrt` returned NaN, which
+   propagated into the coefficients and filter state and reached the output
+   permanently. Reachable on 11.3% of the exposed parameter space (3,914,000 of
+   34,774,500 combinations) from `Q = 3.80` upward, in every release from v0.3.0
+   through v2.3.0. Found by pluginval's Automation test at strictness 10, which
+   reported `NaNs found in buffer`.
+
+   Note that `ScopedNoDenormals` (§10.1) does not prevent this class of failure.
+   The NaN originated in coefficient computation, not in denormal accumulation.
+
+2. **Band-link propagation race.** Re-entrancy was guarded by a plain `bool`,
+   which is only sufficient if `parameterChanged` is single-threaded. Under
+   concurrent parameter changes the guard failed and `setValueNotifyingHost`
+   re-entered the APVTS write path, aborting with `EDEADLK`.
+
+Both are fixed in v2.3.1 and both now have regression coverage in CI. They are
+recorded here because a claim of stability under hostile runtime conditions should
+be accompanied by the cases where that claim failed and how it was established.
 
 
 ## 10. Real-Time Safety & Security Audit

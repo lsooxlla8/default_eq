@@ -143,6 +143,10 @@ jobs:
           ./build/FreeEQ8_Tests
           ./build/FreeEQ8_ShelfNaNSweep
           ./build/FreeEQ8_ShelfResponse
+          ./build/FreeEQ8_BiquadVsSvf
+          ./build/FreeEQ8_SvfTest
+          ./build/FreeEQ8_EngineIsolation
+          ./build/FreeEQ8_AuditTests
 
       - name: Build ProEQ8
         run: cmake --build build --config Release --target ProEQ8_All -j$(nproc)
