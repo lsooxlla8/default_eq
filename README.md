@@ -153,9 +153,13 @@ At $20, it offers a feature set that rivals plugins costing $199, making it the 
 
 **Tested in:** Ableton Live 10+, REAPER, Logic Pro, FL Studio, Bitwig
 
-**Featured by:** [Rekkerd.org](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) · [AudioApp.cn](https://www.audioapp.cn/thread-237167-1-1.html) · [Midifan.com](https://www.midifan.com/modulenews-detailview-59241.htm)
+**Featured by:** [Rekkerd.org](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) · [AudiArtist.com](https://www.audiartist.com/freeeq8-free-dynamic-eq-vst3-plugin/) · [AudioApp.cn](https://www.audioapp.cn/thread-237167-1-1.html) · [Midifan.com](https://www.midifan.com/modulenews-detailview-59241.htm)
 
-**Listed on:** [OpenAudio](https://github.com/webprofusion/OpenAudio) · [awesome-music-production](https://github.com/ad-si/awesome-music-production#plugins) · [Awesome Audio Dev List](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers)
+**Listed on:** [StudioRack](https://open-audio-stack.github.io/open-audio-stack-registry/plugins/garebear99/freeeq8/) · [OpenAudio](https://github.com/webprofusion/OpenAudio) · [awesome-music-production](https://github.com/ad-si/awesome-music-production#apps) · [Awesome Audio Dev List](https://github.com/GareBear99/awesome-audio-plugins-dev#equalizers)
+
+**Packaged for Linux by:** [Audinux](https://audinux.github.io/) — independently packaged for Fedora as `freeeq8` (2.1.0-1, 2.2.0-1, 2.3.0-1)
+
+**Install via StudioRack:** `studiorack plugin install garebear99/freeeq8`
 
 THE FREEEQ8 MANIFESTO: A NEW STANDARD FOR AUDIO DSP
 =====================================================
@@ -196,6 +200,7 @@ Instead of wasting time rebuilding the wheel and re-dressing old concepts, devel
 | Outlet | Article |
 |--------|--------|
 | **Rekkerd.org** | [FREE: FreeEQ8 parametric EQ effect plugin by Gary Doman](https://rekkerd.org/free-freeeq8-parametric-eq-effect-plugin-by-gary-doman/) |
+| **AudiArtist.com** | [FreeEQ8: Free Dynamic EQ VST3 for Mixing](https://www.audiartist.com/freeeq8-free-dynamic-eq-vst3-plugin/) |
 | **AudioApp.cn** | [福利：Gary Doman 推出 FreeEQ8 免费开源参量均衡器](https://www.audioapp.cn/thread-237167-1-1.html) |
 | **Midifan.com** | [FreeEQ8 免费开源参量均衡器](https://www.midifan.com/modulenews-detailview-59241.htm) |
 
