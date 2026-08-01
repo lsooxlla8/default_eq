@@ -232,6 +232,18 @@ Install via StudioRack:
 studiorack plugin install garebear99/freeeq8
 ```
 
+1. What Makes FreeEQ8/ProEQ8 Unique? No single plugin in this price bracket combines all of these features in one window:  Per-Band Drive / Saturation: Placing discrete saturation modeling (Tube, Tape, Transistor, Tanh) on individual EQ nodes so you can boost 3 kHz on a vocal and saturate only that boosted band.Match EQ & Resonance Suggestions: Scanning incoming signals against references or detecting mix collisions/boxiness dynamically.Linear Phase + Dynamic EQ + M/S simultaneously: Having dynamic threshold controls alongside linear phase processing on a per-band basis.
+
+2. The Direct Competitors (Where do they win or lose?)
+
+   A. FabFilter Pro-Q 3 / Pro-Q 4 ($199)How it compares: Pro-Q is the industry gold standard for visual mixing workflow, collision detection, and multi-channel/Atmos support.Where Pro-Q wins: Cleanest, most fluid GUI in the industry, unlimited bands, and unmatched workflow speed.Where FreeEQ8/ProEQ8 wins: Cost ($0 / $20 vs $199), plus Pro-Q lacks integrated per-band analog saturation modeling (you have to pair Pro-Q with FabFilter Saturn to get a similar effect).
+
+   B. Tokyo Dawn Labs (TDR) Nova (Free / $60 GE)How it compares: The benchmark for free dynamic EQs.Where TDR Nova wins: Exceptionally high DSP accuracy, ultra-clean crossover network, and proven stability across complex mastering tasks.Where FreeEQ8/ProEQ8 wins: TDR Nova Free is limited to 4 bands + HP/LP filters. FreeEQ8 gives you 8 bands, linear phase modes, Match EQ, and saturation directly in the box.
+
+   C. ToneBoosters Equalizer 4 (~$50)How it compares: One of the closest commercial alternatives under $50.Where ToneBoosters wins: Supports up to 16 bands, AI-assisted spectral suggestions, and immersive audio formats.Where FreeEQ8/ProEQ8 wins: Fully open-source codebase (GPL-3.0), zero DRM, and per-band drive circuits.
+
+   D. ZL Equalizer 2 (Free / Open Source)How it compares: The closest open-source rival.Where ZL Equalizer wins: Pure surgical utility—24 bands out-of-the-box for $0, lower CPU footprint, and filter slopes up to 96 dB/octave.  Where FreeEQ8/ProEQ8 wins: Creative features (saturation, piano roll overlay, match EQ, and adaptive sound design features). 
+
 </details>
 
 ### Worth being straight about
