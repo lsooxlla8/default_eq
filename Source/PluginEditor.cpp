@@ -1,5 +1,154 @@
 #include "PluginEditor.h"
-#include <thread>
+
+namespace
+{
+juce::Font mono(float size, bool bold = false)
+{
+    return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(),
+                                        size,
+                                        bold ? juce::Font::bold : juce::Font::plain));
+}
+
+double parseNumber(juce::String text, double multiplierForK = 1.0,
+                   bool secondsToMilliseconds = false)
+{
+    auto lower = text.trim().toLowerCase().replaceCharacter(',', '.');
+    double multiplier = 1.0;
+    if (lower.contains("khz") || lower.endsWithChar('k')) multiplier = multiplierForK;
+    if (secondsToMilliseconds && lower.endsWithChar('s') && !lower.endsWith("ms"))
+        multiplier = 1000.0;
+    lower = lower.retainCharacters("-+0123456789.e");
+    return std::isfinite(lower.getDoubleValue()) ? lower.getDoubleValue() * multiplier : 0.0;
+}
+}
+
+FamilyLookAndFeel::FamilyLookAndFeel()
+{
+    setDark(true);
+}
+
+void FamilyLookAndFeel::setDark(bool shouldBeDark)
+{
+    dark = shouldBeDark;
+    const auto fg = foreground();
+    const auto bg = background();
+    setColour(juce::Label::textColourId, fg);
+    setColour(juce::Label::backgroundColourId, bg);
+    setColour(juce::TextEditor::textColourId, fg);
+    setColour(juce::TextEditor::backgroundColourId, bg);
+    setColour(juce::TextEditor::outlineColourId, fg);
+    setColour(juce::Slider::textBoxTextColourId, fg);
+    setColour(juce::Slider::textBoxBackgroundColourId, bg);
+    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    setColour(juce::ComboBox::backgroundColourId, bg);
+    setColour(juce::ComboBox::textColourId, fg);
+    setColour(juce::ComboBox::outlineColourId, fg);
+    setColour(juce::ComboBox::arrowColourId, fg);
+    setColour(juce::PopupMenu::backgroundColourId, bg);
+    setColour(juce::PopupMenu::textColourId, fg);
+    setColour(juce::PopupMenu::highlightedBackgroundColourId, fg);
+    setColour(juce::PopupMenu::highlightedTextColourId, bg);
+}
+
+juce::Font FamilyLookAndFeel::getTextButtonFont(juce::TextButton&, int h)
+{
+    return mono(juce::jlimit(9.0f, 15.0f, h * 0.44f), true);
+}
+
+juce::Font FamilyLookAndFeel::getComboBoxFont(juce::ComboBox& box)
+{
+    return mono(juce::jlimit(9.0f, 13.0f, box.getHeight() * 0.52f));
+}
+
+juce::Font FamilyLookAndFeel::getLabelFont(juce::Label& label)
+{
+    return mono(juce::jlimit(9.0f, 13.0f, label.getHeight() * 0.55f));
+}
+
+void FamilyLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
+                                              const juce::Colour&, bool highlighted, bool down)
+{
+    const bool active = button.getToggleState() || down;
+    auto r = button.getLocalBounds().toFloat().reduced(1.0f);
+    g.setColour(active ? foreground() : background());
+    g.fillRect(r);
+    g.setColour(active ? background() : foreground());
+    g.drawRect(r, 2.0f);
+    if (highlighted && !active)
+        g.drawRect(r.reduced(4.0f), 1.0f);
+}
+
+void FamilyLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button,
+                                        bool, bool down)
+{
+    const bool active = button.getToggleState() || down;
+    g.setColour((active ? background() : foreground())
+                    .withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.35f));
+    g.setFont(getTextButtonFont(button, button.getHeight()));
+    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(5, 2),
+                     juce::Justification::centred, 1);
+}
+
+void FamilyLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button,
+                                          bool highlighted, bool down)
+{
+    drawButtonBackground(g, button, {}, highlighted, down);
+    const bool active = button.getToggleState() || down;
+    g.setColour((active ? background() : foreground())
+                    .withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.35f));
+    g.setFont(mono(juce::jlimit(8.0f, 12.0f, button.getHeight() * 0.44f), true));
+    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(5, 2),
+                     juce::Justification::centred, 1);
+}
+
+void FamilyLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
+                                          float pos, float, float, juce::Slider& slider)
+{
+    const auto side = (float)juce::jmin(w, h);
+    auto r = juce::Rectangle<float>((float)x + ((float)w - side) * 0.5f,
+                                    (float)y + ((float)h - side) * 0.5f,
+                                    side, side).reduced(2.0f);
+    const auto fg = foreground().withMultipliedAlpha(slider.isEnabled() ? 1.0f : 0.35f);
+    const auto bg = background();
+    g.setColour(bg);
+    g.fillRect(r);
+    g.setColour(fg);
+    g.drawRect(r, 2.0f);
+    auto inner = r.reduced(8.0f);
+    g.setColour(fg.withAlpha(0.12f));
+    g.fillRect(inner);
+    for (int i = 1; i < 4; ++i)
+    {
+        const float p = (float)i / 4.0f;
+        g.setColour(fg.withAlpha(0.16f));
+        g.drawVerticalLine(juce::roundToInt(inner.getX() + inner.getWidth() * p),
+                           inner.getY(), inner.getBottom());
+        g.drawHorizontalLine(juce::roundToInt(inner.getY() + inner.getHeight() * p),
+                             inner.getX(), inner.getRight());
+    }
+    const float fillH = inner.getHeight() * pos;
+    g.setColour(fg.withAlpha(0.88f));
+    g.fillRect(inner.getX(), inner.getBottom() - fillH, inner.getWidth(), fillH);
+    const float marker = juce::jmax(4.0f, side * 0.07f);
+    g.setColour(fg);
+    g.fillRect(inner.getX() + pos * (inner.getWidth() - marker),
+               inner.getY() - marker * 0.5f, marker, marker);
+}
+
+void FamilyLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool,
+                                      int, int, int, int, juce::ComboBox& box)
+{
+    const auto fg = foreground().withMultipliedAlpha(box.isEnabled() ? 1.0f : 0.35f);
+    g.setColour(background());
+    g.fillRect(0, 0, w, h);
+    g.setColour(fg);
+    g.drawRect(0, 0, w, h, 2);
+    juce::Path triangle;
+    triangle.addTriangle((float)w - 13.0f, h * 0.42f,
+                         (float)w - 5.0f, h * 0.42f,
+                         (float)w - 9.0f, h * 0.66f);
+    g.fillPath(triangle);
+}
 
 static juce::String bandId(int idx, const char* suffix)
 {
@@ -7,35 +156,70 @@ static juce::String bandId(int idx, const char* suffix)
 }
 
 // ── Knob initializer ───────────────────────────────────────────────
-void FreeEQ8AudioProcessorEditor::initKnob(juce::Slider& s, juce::Colour c, bool large)
+void DefaultEqualizerAudioProcessorEditor::initKnob(juce::Slider& s, juce::Colour c, bool large)
 {
     s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
     s.setTextBoxStyle(juce::Slider::TextBoxBelow, false, large ? 70 : 52, 14);
     s.setColour(juce::Slider::rotarySliderFillColourId, c);
-    s.setColour(juce::Slider::textBoxTextColourId, juce::Colours::white.withAlpha(0.85f));
-    s.setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     addAndMakeVisible(s);
 }
 
 // ── Dark-style combo box helper ────────────────────────────────────
 static void styleCombo(juce::ComboBox& cb)
 {
-    cb.setColour(juce::ComboBox::backgroundColourId,  juce::Colour(0xFF1C2040));
-    cb.setColour(juce::ComboBox::outlineColourId,     juce::Colours::white.withAlpha(0.15f));
-    cb.setColour(juce::ComboBox::textColourId,        juce::Colours::white.withAlpha(0.9f));
-    cb.setColour(juce::ComboBox::arrowColourId,       juce::Colours::white.withAlpha(0.5f));
+    cb.setJustificationType(juce::Justification::centred);
 }
 
 // ── Constructor ────────────────────────────────────────────────────
-FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& p)
+DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(DefaultEqualizerAudioProcessor& p)
     : juce::AudioProcessorEditor(&p), proc(p), responseCurve(p),
       levelMeter(p.meterPeakL, p.meterPeakR, p.meterRmsL, p.meterRmsR)
 {
-    setSize(900, 620);
+    juce::PropertiesFile::Options options;
+    options.applicationName = "default_equalizer";
+    options.filenameSuffix = "settings";
+    options.folderName = "icanseesounds";
+    options.osxLibrarySubFolder = "Application Support";
+    uiPreferences = std::make_unique<juce::PropertiesFile>(options);
+    darkTheme = uiPreferences->getBoolValue("darkTheme", true);
+    familyLook.setDark(darkTheme);
+    setLookAndFeel(&familyLook);
+    responseCurve.setDarkMode(darkTheme);
+
+    const int savedW = uiPreferences->getIntValue("windowWidth", 860);
+    const int savedH = uiPreferences->getIntValue("windowHeight", 620);
+    setSize(savedW, savedH);
     setResizable(true, true);
-    setResizeLimits(750, 550, 1400, 900);
+    setResizeLimits(720, 519, 1200, 865);
+    getConstrainer()->setFixedAspectRatio(860.0 / 620.0);
 
     addAndMakeVisible(responseCurve);
+
+    themeBtn.setTooltip("Toggle exact paper/ink inversion");
+    themeBtn.onClick = [this]
+    {
+        darkTheme = !darkTheme;
+        familyLook.setDark(darkTheme);
+        responseCurve.setDarkMode(darkTheme);
+        uiPreferences->setValue("darkTheme", darkTheme);
+        sendLookAndFeelChange();
+        repaint();
+    };
+    addAndMakeVisible(themeBtn);
+
+    reducedMotionBtn.setToggleState(
+        uiPreferences->getBoolValue("reducedMotion", false), juce::dontSendNotification);
+    reducedMotionBtn.onClick = [this]
+    {
+        uiPreferences->setValue("reducedMotion", reducedMotionBtn.getToggleState());
+    };
+    addAndMakeVisible(reducedMotionBtn);
+
+    powerBtn.setClickingTogglesState(true);
+    powerBtn.setTooltip("Click-free global bypass");
+    addAndMakeVisible(powerBtn);
+    powerAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+        proc.apvts, "plugin_enabled", powerBtn);
 
     // ── Band selector buttons ──
     for (int i = 0; i < kNumBands; ++i)
@@ -62,7 +246,7 @@ FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& 
     bandSolo.setColour(juce::ToggleButton::tickColourId, juce::Colour(0xFFFFD54F));
     addAndMakeVisible(bandSolo);
 
-    typeBox.addItemList({ "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass" }, 1);
+    typeBox.addItemList({ "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass", "Notch" }, 1);
     styleCombo(typeBox);
     addAndMakeVisible(typeBox);
 
@@ -83,6 +267,24 @@ FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& 
     initKnob(gainKnob,  bandCol, true);
     initKnob(qKnob,     bandCol, true);
     initKnob(driveKnob, bandCol, false);
+
+    freqKnob.textFromValueFunction = [](double v)
+    {
+        return v >= 1000.0 ? juce::String(v / 1000.0, 2) + " kHz"
+                           : juce::String(v, 1) + " Hz";
+    };
+    freqKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s, 1000.0); };
+    const auto dbText = [](double v)
+    {
+        const double clean = std::abs(v) < 0.005 ? 0.0 : v;
+        return juce::String(clean, 2) + " dB";
+    };
+    gainKnob.textFromValueFunction = dbText;
+    gainKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s); };
+    qKnob.textFromValueFunction = [](double v) { return juce::String(v, 3); };
+    qKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s); };
+    driveKnob.textFromValueFunction = [](double v) { return juce::String(v, 1) + "%"; };
+    driveKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s); };
 
 #if PROEQ8
     satModeBox.addItemList({ "Tanh", "Tube", "Tape", "Transistor" }, 1);
@@ -106,6 +308,8 @@ FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& 
     auto globalCol = juce::Colour(0xFF90CAF9);
     initKnob(outputGainSlider, globalCol, true);
     initKnob(scaleSlider,      globalCol, false);
+    outputGainSlider.textFromValueFunction = dbText;
+    outputGainSlider.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s); };
 
     adaptiveQBtn.setButtonText("Adaptive Q");
     addAndMakeVisible(adaptiveQBtn);
@@ -195,7 +399,19 @@ FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& 
     redoBtn.setTooltip("Redo last undone change");
     postEqToggle.setTooltip("Toggle pre/post EQ spectrum display");
 
-#if PROEQ8
+    dynThreshKnob.textFromValueFunction = dbText;
+    dynThreshKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s); };
+    dynRatioKnob.textFromValueFunction = [](double v) { return juce::String(v, 2) + ":1"; };
+    dynRatioKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s); };
+    dynAttackKnob.textFromValueFunction = [](double v) { return juce::String(v, 1) + " ms"; };
+    dynAttackKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s, 1.0, true); };
+    dynReleaseKnob.textFromValueFunction = [](double v)
+    {
+        return v >= 1000.0 ? juce::String(v / 1000.0, 2) + " s"
+                           : juce::String(v, 0) + " ms";
+    };
+    dynReleaseKnob.valueFromTextFunction = [](const juce::String& s) { return parseNumber(s, 1.0, true); };
+
     // ── A/B comparison buttons ──
     abBtn.onClick = [this] { toggleAB(); };
     abBtn.setTooltip("Switch between A/B settings");
@@ -213,33 +429,6 @@ FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& 
     // Store initial state into slot A
     proc.storeSnapshot(true);
 
-    // License activation button
-    licenseBtn.setTooltip("Enter license key to activate ProEQ8");
-    licenseBtn.onClick = [this] { showActivationDialog(); };
-    if (proc.licenseValidator.isActivated())
-        licenseBtn.setButtonText("Licensed");
-    addAndMakeVisible(licenseBtn);
-
-    // ── Background license re-verification (every 7 days, 30-day grace offline) ──
-    // A2: this HTTP call doesn't touch the editor on completion, so only the
-    //     thread itself needs to be detached safely. The call is idempotent
-    //     and on failure keeps the cached license within the grace window.
-    if (proc.licenseValidator.needsPeriodicReverify())
-    {
-        auto& validator = proc.licenseValidator;
-        std::thread([&validator] { validator.reverifyWithServer(); }).detach();
-    }
-#else
-    // FreeEQ8: "Get Pro" button
-    getProBtn.setColour(juce::TextButton::buttonColourId, juce::Colour(0xFF4CAF50));
-    getProBtn.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
-    getProBtn.setTooltip("Upgrade to ProEQ8 — 24 bands, modulation-stable SVF, A/B comparison");
-    getProBtn.onClick = [this] { launchProCheckout(); };
-    addAndMakeVisible(getProBtn);
-#endif
-
-    // ── Update checker ──
-    updateChecker.checkAsync();
 
     // ── Initial band selection ──
     rebindBandControls(0);
@@ -247,8 +436,19 @@ FreeEQ8AudioProcessorEditor::FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor& 
     startTimerHz(30);
 }
 
+DefaultEqualizerAudioProcessorEditor::~DefaultEqualizerAudioProcessorEditor()
+{
+    if (uiPreferences)
+    {
+        uiPreferences->setValue("windowWidth", getWidth());
+        uiPreferences->setValue("windowHeight", getHeight());
+        uiPreferences->saveIfNeeded();
+    }
+    setLookAndFeel(nullptr);
+}
+
 // ── Rebind controls to a specific band ─────────────────────────────
-void FreeEQ8AudioProcessorEditor::rebindBandControls(int band)
+void DefaultEqualizerAudioProcessorEditor::rebindBandControls(int band)
 {
     const int idx = band + 1;
 
@@ -288,7 +488,7 @@ void FreeEQ8AudioProcessorEditor::rebindBandControls(int band)
 }
 
 // ── Select band ────────────────────────────────────────────────────
-void FreeEQ8AudioProcessorEditor::selectBand(int band)
+void DefaultEqualizerAudioProcessorEditor::selectBand(int band)
 {
     selectedBand = band;
     rebindBandControls(band);
@@ -300,11 +500,13 @@ void FreeEQ8AudioProcessorEditor::selectBand(int band)
         bandBtns[(size_t)i].setColour(juce::TextButton::buttonColourId,
             ResponseCurveComponent::getBandColour(i).withAlpha(sel ? 0.85f : 0.2f));
     }
+
+    powerBtn.setButtonText(powerBtn.getToggleState() ? "ON" : "OFF");
     repaint();
 }
 
 // ── Timer ──────────────────────────────────────────────────────────
-void FreeEQ8AudioProcessorEditor::timerCallback()
+void DefaultEqualizerAudioProcessorEditor::timerCallback()
 {
     auto& fifo = showPostSpectrum ? proc.spectrumFifo : proc.preSpectrumFifo;
     if (fifo.processIfReady())
@@ -318,13 +520,6 @@ void FreeEQ8AudioProcessorEditor::timerCallback()
     int curveSel = responseCurve.getSelectedBand();
     if (curveSel >= 0 && curveSel != selectedBand)
         selectBand(curveSel);
-
-    // Check for updates
-    if (!hasUpdate && updateChecker.isUpdateAvailable())
-    {
-        hasUpdate = true;
-        repaint();
-    }
 
     // Update band button on/off appearance
     for (int i = 0; i < kNumBands; ++i)
@@ -363,49 +558,50 @@ void FreeEQ8AudioProcessorEditor::timerCallback()
 }
 
 // ── Paint ──────────────────────────────────────────────────────────
-void FreeEQ8AudioProcessorEditor::paint(juce::Graphics& g)
+void DefaultEqualizerAudioProcessorEditor::paint(juce::Graphics& g)
 {
     const int w = getWidth();
     const int h = getHeight();
-    const int titleH = 32;
+    const int titleH = 64;
     const int curveH = std::max(180, (int)(h * 0.52f));
     const int stripH = 28;
     const int sidebarW = 155;
     const int meterW = 36;
     const int controlsTop = titleH + curveH + stripH;
 
-    g.fillAll(juce::Colour(0xFF0D0D1A));
+    const auto paper = familyLook.paper();
+    const auto ink = familyLook.ink();
+    const auto fg = darkTheme ? paper : ink;
+    const auto bg = darkTheme ? ink : paper;
+    g.fillAll(fg);
 
     // Title bar
-    g.setColour(juce::Colour(0xFF16213E));
+    g.setColour(bg);
     g.fillRect(0, 0, w, titleH);
-    g.setColour(juce::Colours::white.withAlpha(0.9f));
-    g.setFont(15.0f);
-    g.drawText(kProductName, 12, 6, 90, 20, juce::Justification::left);
-    g.setFont(10.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.4f));
-    g.drawText(kProductTag, 82, 6, 160, 20, juce::Justification::left);
+    g.setColour(fg);
+    g.fillRect(220, 0, 24, 24);
+    g.fillRect(220, 40, 24, 24);
 
     // Band strip background
-    g.setColour(juce::Colour(0xFF12172E));
+    g.setColour(bg);
     g.fillRect(0, titleH + curveH, w, stripH);
 
     // Controls panel background
-    g.setColour(juce::Colour(0xFF111528));
+    g.setColour(bg);
     g.fillRect(0, controlsTop, w, h - controlsTop);
 
     // Separator lines
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    g.setColour(fg.withAlpha(0.13f));
     g.drawHorizontalLine(controlsTop, 0.0f, (float)w);
 
     // Vertical separator between band panel and global sidebar
     const int sepX = w - sidebarW - meterW;
-    g.setColour(juce::Colours::white.withAlpha(0.1f));
+    g.setColour(fg.withAlpha(0.20f));
     g.drawVerticalLine(sepX, (float)controlsTop, (float)h);
 
     // ── Row 1 labels — computed from the SAME layout constants as resized() ──
-    g.setFont(10.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.45f));
+    g.setFont(mono(10.0f, true));
+    g.setColour(fg.withAlpha(0.55f));
     const int ly = controlsTop + 4;  // label y (12px above controls at controlsTop+16)
 
     // Mirror the x-offsets from resized() Row 1:
@@ -447,29 +643,17 @@ void FreeEQ8AudioProcessorEditor::paint(juce::Graphics& g)
     g.drawText("Scale",   sx + 65, controlsTop + 4,  50, 12, juce::Justification::centred);
 
     // Band indicator on selected band
-    auto bandCol = ResponseCurveComponent::getBandColour(selectedBand);
-    g.setColour(bandCol);
-    g.fillRoundedRectangle(2.0f, (float)controlsTop + 1, 3.0f, 14.0f, 1.5f);
+    g.setColour(fg);
+    g.fillRect(2, controlsTop + 1, 3, 14);
 
-    // ── Update banner ──
-    if (hasUpdate)
-    {
-        g.setColour(juce::Colour(0xFF2196F3));
-        g.fillRect(0, h - 20, w, 20);
-        g.setColour(juce::Colours::white);
-        g.setFont(11.0f);
-        g.drawText("Update available: v" + updateChecker.getLatestVersion()
-                   + " — visit GitHub to download",
-                   0, h - 20, w, 20, juce::Justification::centred);
-    }
 }
 
 // ── Resized ────────────────────────────────────────────────────────
-void FreeEQ8AudioProcessorEditor::resized()
+void DefaultEqualizerAudioProcessorEditor::resized()
 {
     const int w = getWidth();
     const int h = getHeight();
-    const int titleH = 32;
+    const int titleH = 64;
     const int curveH = std::max(180, (int)(h * 0.52f));
     const int stripH = 28;
     const int sidebarW = 155;
@@ -481,11 +665,13 @@ void FreeEQ8AudioProcessorEditor::resized()
     // Response curve
     responseCurve.setBounds(0, titleH, w, curveH);
 
-    // Title bar controls
-    postEqToggle.setBounds(w - 90, 6, 80, 20);
-    presetBox.setBounds(w - 370, 5, 120, 22);
-    saveBtn.setBounds(w - 242, 5, 42, 22);
-    delBtn.setBounds(w - 196, 5, 32, 22);
+    // Canonical 64 px family header.
+    themeBtn.setBounds(0, 0, juce::jmin(220, w / 4), titleH);
+    presetBox.setBounds(252, 12, juce::jmax(100, w - 650), 40);
+    saveBtn.setBounds(w - 292, 12, 58, 40);
+    delBtn.setBounds(w - 230, 12, 48, 40);
+    postEqToggle.setBounds(w - 178, 12, 78, 40);
+    powerBtn.setBounds(w - 90, 12, 78, 40);
 
     // Band selector strip
     {
@@ -590,23 +776,18 @@ void FreeEQ8AudioProcessorEditor::resized()
     redoBtn.setBounds(sx + halfW + 4, sy, halfW, 18);
     sy += 22;
 
-#if PROEQ8
     // A/B comparison
     abBtn.setBounds(sx, sy, halfW, 18);
     copyABBtn.setBounds(sx + halfW + 4, sy, halfW, 18);
     sy += 22;
-    licenseBtn.setBounds(sx, sy, sw, 18);
-#else
-    // FreeEQ8: Get Pro button
-    getProBtn.setBounds(sx, sy, sw, 18);
-#endif
+    reducedMotionBtn.setBounds(sx, sy, sw, 18);
 
     // Level meter
     levelMeter.setBounds(w - meterW, controlsTop, meterW - 4, controlsH);
 }
 
 // ── Preset management ──────────────────────────────────────────────
-void FreeEQ8AudioProcessorEditor::refreshPresetList()
+void DefaultEqualizerAudioProcessorEditor::refreshPresetList()
 {
     presetBox.clear(juce::dontSendNotification);
     if (proc.presetManager)
@@ -625,14 +806,14 @@ void FreeEQ8AudioProcessorEditor::refreshPresetList()
     }
 }
 
-void FreeEQ8AudioProcessorEditor::onPresetSelected()
+void DefaultEqualizerAudioProcessorEditor::onPresetSelected()
 {
     const auto name = presetBox.getText();
     if (name.isNotEmpty() && proc.presetManager)
         proc.presetManager->loadPreset(name);
 }
 
-void FreeEQ8AudioProcessorEditor::onSaveClicked()
+void DefaultEqualizerAudioProcessorEditor::onSaveClicked()
 {
     // A2: own the AlertWindow via unique_ptr. No more `new ... + delete dlg`
     //     inside a `deleteWhenDismissed=true` callback (previously a latent
@@ -648,7 +829,7 @@ void FreeEQ8AudioProcessorEditor::onSaveClicked()
     activeDialog->enterModalState(
         true,
         juce::ModalCallbackFunction::create(
-            [weak = juce::WeakReference<FreeEQ8AudioProcessorEditor>(this)](int result)
+            [weak = juce::WeakReference<DefaultEqualizerAudioProcessorEditor>(this)](int result)
             {
                 auto* editor = weak.get();
                 if (editor == nullptr) return;
@@ -666,7 +847,7 @@ void FreeEQ8AudioProcessorEditor::onSaveClicked()
         /* deleteWhenDismissed */ false);
 }
 
-void FreeEQ8AudioProcessorEditor::onDeleteClicked()
+void DefaultEqualizerAudioProcessorEditor::onDeleteClicked()
 {
     const auto name = presetBox.getText();
     if (name.isNotEmpty() && proc.presetManager)
@@ -676,122 +857,7 @@ void FreeEQ8AudioProcessorEditor::onDeleteClicked()
     }
 }
 
-#if PROEQ8
-void FreeEQ8AudioProcessorEditor::showActivationDialog()
-{
-    if (activeDialog) return;   // one modal dialog at a time
-
-    if (proc.licenseValidator.isActivated())
-    {
-        // Already activated — show deactivation option
-        activeDialog = std::make_unique<juce::AlertWindow>(
-            "ProEQ8 License",
-            "Licensed to: " + proc.licenseValidator.getEmail(),
-            juce::AlertWindow::InfoIcon);
-        activeDialog->addButton("OK", 0);
-        activeDialog->addButton("Deactivate", 1);
-
-        activeDialog->enterModalState(
-            true,
-            juce::ModalCallbackFunction::create(
-                [weak = juce::WeakReference<FreeEQ8AudioProcessorEditor>(this)](int result)
-                {
-                    auto* editor = weak.get();
-                    if (editor == nullptr) return;
-                    editor->activeDialog.reset();
-
-                    if (result != 1) return;
-
-                    // Run deactivation on a background thread. The callback
-                    // back to the UI is guarded by the same weak reference,
-                    // so closing the editor mid-HTTP cannot dereference
-                    // dangling `this`.
-                    editor->licenseBtn.setButtonText("...");
-                    editor->licenseBtn.setEnabled(false);
-
-                    auto& validator = editor->proc.licenseValidator;
-                    std::thread(
-                        [weakInner = juce::WeakReference<FreeEQ8AudioProcessorEditor>(editor),
-                         &validator]()
-                        {
-                            validator.deactivate();
-                            juce::MessageManager::callAsync(
-                                [weakInner]()
-                                {
-                                    if (auto* e = weakInner.get())
-                                    {
-                                        e->licenseBtn.setButtonText("Activate");
-                                        e->licenseBtn.setEnabled(true);
-                                    }
-                                });
-                        }).detach();
-                }),
-            /* deleteWhenDismissed */ false);
-        return;
-    }
-
-    activeDialog = std::make_unique<juce::AlertWindow>(
-        "Activate ProEQ8",
-        "Enter your license key:\n(Requires internet connection)",
-        juce::AlertWindow::NoIcon);
-    activeDialog->addTextEditor("key", "", "License Key:");
-    activeDialog->addButton("Activate", 1);
-    activeDialog->addButton("Cancel", 0);
-
-    activeDialog->enterModalState(
-        true,
-        juce::ModalCallbackFunction::create(
-            [weak = juce::WeakReference<FreeEQ8AudioProcessorEditor>(this)](int result)
-            {
-                auto* editor = weak.get();
-                if (editor == nullptr) return;
-                juce::String key;
-                if (result == 1 && editor->activeDialog)
-                    key = editor->activeDialog->getTextEditorContents("key");
-                editor->activeDialog.reset();
-
-                if (result != 1 || key.isEmpty()) return;
-
-                editor->licenseBtn.setButtonText("Activating...");
-                editor->licenseBtn.setEnabled(false);
-
-                auto& validator = editor->proc.licenseValidator;
-                std::thread(
-                    [weakInner = juce::WeakReference<FreeEQ8AudioProcessorEditor>(editor),
-                     &validator, key]()
-                    {
-                        auto activationResult = validator.activate(key);
-
-                        juce::MessageManager::callAsync(
-                            [weakInner, activationResult]()
-                            {
-                                auto* e = weakInner.get();
-                                if (e == nullptr) return;
-                                e->licenseBtn.setEnabled(true);
-
-                                if (activationResult == ActivationResult::Success)
-                                {
-                                    e->licenseBtn.setButtonText("Licensed");
-                                    juce::AlertWindow::showMessageBoxAsync(
-                                        juce::AlertWindow::InfoIcon,
-                                        "ProEQ8 Activated",
-                                        "Activation successful! Enjoy ProEQ8.");
-                                }
-                                else
-                                {
-                                    e->licenseBtn.setButtonText("Activate");
-                                    juce::AlertWindow::showMessageBoxAsync(
-                                        juce::AlertWindow::WarningIcon,
-                                        "Activation Failed",
-                                        LicenseValidator::getResultMessage(activationResult));
-                                }
-                            });
-                    }).detach();
-            }),
-        /* deleteWhenDismissed */ false);
-}
-
-void FreeEQ8AudioProcessorEditor::toggleAB()
+void DefaultEqualizerAudioProcessorEditor::toggleAB()
 {
     // Store current into the active slot, then switch
     proc.storeSnapshot(proc.isSlotA);
@@ -803,13 +869,3 @@ void FreeEQ8AudioProcessorEditor::toggleAB()
     rebindBandControls(selectedBand);
     repaint();
 }
-#else
-// FreeEQ8: Launch browser to ProEQ8 checkout
-void FreeEQ8AudioProcessorEditor::launchProCheckout()
-{
-    // Open the ProEQ8 checkout page in the user's default browser.
-    // The server endpoint creates a Stripe checkout session.
-    juce::URL checkoutUrl("https://garebear99.github.io/FreeEQ8/proeq8-checkout.html");
-    checkoutUrl.launchInDefaultBrowser();
-}
-#endif

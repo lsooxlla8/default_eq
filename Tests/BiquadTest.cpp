@@ -127,6 +127,18 @@ static NormCoeffs ref_bandpass(double sr, double freq, double Q, double /*gain*/
     return { alpha/a0_, 0.0, -alpha/a0_, (-2.0*cosw0)/a0_, (1.0 - alpha)/a0_ };
 }
 
+static NormCoeffs ref_notch(double sr, double freq, double Q, double /*gain*/)
+{
+    freq = std::clamp(freq, 10.0, sr * 0.45);
+    Q = std::clamp(Q, 0.1, 24.0);
+    const double w0 = 2.0 * kPi * (freq / sr);
+    const double cosw0 = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * Q);
+    const double a0 = 1.0 + alpha;
+    return { 1.0 / a0, (-2.0 * cosw0) / a0, 1.0 / a0,
+             (-2.0 * cosw0) / a0, (1.0 - alpha) / a0 };
+}
+
 // ── Unified test runner ──
 
 using RefFn = NormCoeffs(*)(double, double, double, double);
@@ -171,6 +183,7 @@ int main()
         testType(Biquad::Type::LowPass,   "LowPass",    ref_lowpass,  sr, 5000.0,  2.0,  0.0);
         testType(Biquad::Type::Bandpass,  "Bandpass",   ref_bandpass,  sr, 1000.0,  2.0,  0.0);
         testType(Biquad::Type::Bandpass,  "Bandpass",   ref_bandpass,  sr,  500.0,  0.5,  0.0);
+        testType(Biquad::Type::Notch,     "Notch",      ref_notch,     sr, 1000.0,  2.0,  0.0);
     }
 
     // ── Sanity: process a sample, verify no NaN ──
@@ -194,7 +207,7 @@ int main()
     }
 
     if (failures == 0)
-        std::printf("ALL TESTS PASSED (6 types x 3 sample rates x 2 configs + sanity)\n");
+        std::printf("ALL TESTS PASSED (7 filter types across 44.1/48/96 kHz + sanity)\n");
     else
         std::printf("%d TEST(S) FAILED\n", failures);
 

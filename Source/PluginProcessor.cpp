@@ -12,11 +12,11 @@ static juce::String bandId(int idx, const char* suffix)
 // setStateInformation), the thread wakes via notify(), clears the flag,
 // and rebuilds the FIR into the engine's inactive kernel slot. The
 // audio thread never calls buildLinearPhaseMagnitude().
-class FreeEQ8AudioProcessor::LinPhaseRebuildThread : public juce::Thread
+class DefaultEqualizerAudioProcessor::LinPhaseRebuildThread : public juce::Thread
 {
 public:
-    explicit LinPhaseRebuildThread(FreeEQ8AudioProcessor& p)
-        : juce::Thread("FreeEQ8_LinPhaseRebuild"), proc(p) {}
+    explicit LinPhaseRebuildThread(DefaultEqualizerAudioProcessor& p)
+        : juce::Thread("default_equalizer_LinPhaseRebuild"), proc(p) {}
 
     void run() override
     {
@@ -37,10 +37,10 @@ public:
     }
 
 private:
-    FreeEQ8AudioProcessor& proc;
+    DefaultEqualizerAudioProcessor& proc;
 };
 
-FreeEQ8AudioProcessor::FreeEQ8AudioProcessor()
+DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
 : AudioProcessor(BusesProperties().withInput ("Input",  juce::AudioChannelSet::stereo(), true)
                                   .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 , apvts(*this, &undoManager, "STATE", createParams())
@@ -56,17 +56,19 @@ FreeEQ8AudioProcessor::FreeEQ8AudioProcessor()
         apvts.addParameterListener(bandId(i, "on"),    this);
         apvts.addParameterListener(bandId(i, "type"),  this);
         apvts.addParameterListener(bandId(i, "slope"), this);
+        apvts.addParameterListener(bandId(i, "drive"), this);
     }
     apvts.addParameterListener("linear_phase", this);
     apvts.addParameterListener("scale", this);
     apvts.addParameterListener("adaptive_q", this);
+    apvts.addParameterListener("oversampling", this);
 
     linPhaseRebuildThread = std::make_unique<LinPhaseRebuildThread>(*this);
 
     initLinkTracking();
 }
 
-FreeEQ8AudioProcessor::~FreeEQ8AudioProcessor()
+DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
 {
     // Tear down the rebuild thread first so it can't touch apvts mid-destruction.
     if (linPhaseRebuildThread)
@@ -78,11 +80,13 @@ FreeEQ8AudioProcessor::~FreeEQ8AudioProcessor()
     }
 
     apvts.removeParameterListener("adaptive_q", this);
+    apvts.removeParameterListener("oversampling", this);
     apvts.removeParameterListener("scale", this);
     apvts.removeParameterListener("linear_phase", this);
     for (int i = 1; i <= kNumBands; ++i)
     {
         apvts.removeParameterListener(bandId(i, "slope"), this);
+        apvts.removeParameterListener(bandId(i, "drive"), this);
         apvts.removeParameterListener(bandId(i, "type"),  this);
         apvts.removeParameterListener(bandId(i, "on"),    this);
         apvts.removeParameterListener(bandId(i, "q"),     this);
@@ -91,14 +95,14 @@ FreeEQ8AudioProcessor::~FreeEQ8AudioProcessor()
     }
 }
 
-void FreeEQ8AudioProcessor::requestLinearPhaseRebuild()
+void DefaultEqualizerAudioProcessor::requestLinearPhaseRebuild()
 {
     linPhaseDirty.store(true, std::memory_order_release);
     if (linPhaseRebuildThread && linPhaseRebuildThread->isThreadRunning())
         linPhaseRebuildThread->notify();
 }
 
-void FreeEQ8AudioProcessor::initLinkTracking()
+void DefaultEqualizerAudioProcessor::initLinkTracking()
 {
     for (int i = 1; i <= kNumBands; ++i)
     {
@@ -138,7 +142,7 @@ namespace
     };
 }
 
-void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
+void DefaultEqualizerAudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
     // Any EQ-relevant parameter change invalidates the linear phase FIR.
     // Publish via release and wake the background rebuild thread (A5).
@@ -147,7 +151,14 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
     // Handle linear phase latency update (safe: parameterChanged is called on message thread)
     if (parameterID == "linear_phase")
     {
-        setLatencySamples(newValue > 0.5f ? LinearPhaseEngine::latency : 0);
+        juce::ignoreUnused(newValue);
+        updateReportedLatency();
+        return;
+    }
+
+    if (parameterID == "oversampling" || parameterID.endsWith("_drive"))
+    {
+        updateReportedLatency();
         return;
     }
 
@@ -237,7 +248,7 @@ void FreeEQ8AudioProcessor::parameterChanged(const juce::String& parameterID, fl
     }
 }
 
-juce::AudioProcessorValueTreeState::ParameterLayout FreeEQ8AudioProcessor::createParams()
+juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcessor::createParams()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
     params.reserve(kNumBands * 15 + 8);  // 15 per band + 8 globals
@@ -246,7 +257,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout FreeEQ8AudioProcessor::creat
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "output_gain", "Output Gain",
         juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f, 1.0f),
-        0.0f));
+        0.0f,
+        juce::AudioParameterFloatAttributes{}.withLabel("dB")
+            .withStringFromValueFunction([](float value, int)
+            {
+                const auto clean = std::abs(value) < 0.005f ? 0.0f : value;
+                return juce::String(clean, 2) + " dB";
+            })));
     
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "scale", "Scale",
@@ -274,12 +291,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout FreeEQ8AudioProcessor::creat
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "auto_gain", "Auto Gain", false));
 
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "plugin_enabled", "Plugin Enabled", true));
+
     // Intent mode for Smart EQ resonance detection
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         "intent_mode", "Intent Mode",
         juce::StringArray { "None", "Vocal Clean", "Drum Punch", "Guitar Space", "Master Polish" }, 0));
 
-    auto typeChoices    = juce::StringArray { "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass" };
+    auto typeChoices    = juce::StringArray { "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass", "Notch" };
     auto slopeChoices   = juce::StringArray { "12 dB", "24 dB", "48 dB" };
     auto channelChoices = juce::StringArray { "Both", "L / Mid", "R / Side" };
     auto linkChoices    = juce::StringArray { "--", "A", "B" };
@@ -311,7 +331,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout FreeEQ8AudioProcessor::creat
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"gain"), "Band " + juce::String(i) + " Gain",
             juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f, 1.0f),
-            0.0f));
+            0.0f,
+            juce::AudioParameterFloatAttributes{}.withLabel("dB")
+                .withStringFromValueFunction([](float value, int)
+                {
+                    const auto clean = std::abs(value) < 0.005f ? 0.0f : value;
+                    return juce::String(clean, 2) + " dB";
+                })));
 
         // Drive / saturation per band
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -348,7 +374,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout FreeEQ8AudioProcessor::creat
     return { params.begin(), params.end() };
 }
 
-bool FreeEQ8AudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
+bool DefaultEqualizerAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
@@ -357,7 +383,7 @@ bool FreeEQ8AudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) c
     return true;
 }
 
-void FreeEQ8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
+void DefaultEqualizerAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
     maxBlockSize = samplesPerBlock;
@@ -385,6 +411,9 @@ void FreeEQ8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
     // Update latency based on current linear-phase setting
     const bool linPhase = apvts.getRawParameterValue("linear_phase")->load() > 0.5f;
     setLatencySamples(linPhase ? LinearPhaseEngine::latency : 0);
+    globalBypass.prepare(sampleRate, samplesPerBlock, 2,
+                         LinearPhaseEngine::latency + 256, true);
+    updateReportedLatency();
 
     // Reset spectrum FIFOs (fixes blank analyzer after DAW offline/online cycle)
     spectrumFifo.reset();
@@ -393,11 +422,9 @@ void FreeEQ8AudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock
     // Prime coefficients from current params
     syncBandsFromParams();
 
-    licenseValidator.resetDemoCounter();
-    licenseValidator.resetExportCounter();
 }
 
-void FreeEQ8AudioProcessor::buildAllOversamplers(double /*sampleRate*/, int samplesPerBlock)
+void DefaultEqualizerAudioProcessor::buildAllOversamplers(double /*sampleRate*/, int samplesPerBlock)
 {
     // oversamplers[i] corresponds to DSP order (i + 1):
     //   i=0 -> 2x, i=1 -> 4x, i=2 -> 8x.
@@ -413,14 +440,14 @@ void FreeEQ8AudioProcessor::buildAllOversamplers(double /*sampleRate*/, int samp
     }
 }
 
-juce::dsp::Oversampling<float>* FreeEQ8AudioProcessor::currentOversamplerPtr() const noexcept
+juce::dsp::Oversampling<float>* DefaultEqualizerAudioProcessor::currentOversamplerPtr() const noexcept
 {
     const int order = currentOversamplingOrder;
     if (order <= 0 || order > kNumOversamplingOrders) return nullptr;
     return oversamplers[(size_t)(order - 1)].get();
 }
 
-void FreeEQ8AudioProcessor::syncBandsFromParams()
+void DefaultEqualizerAudioProcessor::syncBandsFromParams()
 {
     for (int i = 1; i <= kNumBands; ++i)
     {
@@ -438,6 +465,7 @@ void FreeEQ8AudioProcessor::syncBandsFromParams()
             case 3: tp = Biquad::Type::HighPass; break;
             case 4: tp = Biquad::Type::LowPass; break;
             case 5: tp = Biquad::Type::Bandpass; break;
+            case 6: tp = Biquad::Type::Notch; break;
             default: tp = Biquad::Type::Bell; break;
         }
 
@@ -453,12 +481,14 @@ void FreeEQ8AudioProcessor::syncBandsFromParams()
     }
 }
 
-void FreeEQ8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
 
     if (buffer.getNumChannels() < 2)
         return;
+
+    globalBypass.captureInput(buffer);
 
     // Pull params each block
     syncBandsFromParams();
@@ -476,7 +506,12 @@ void FreeEQ8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     //     factor live. A factor change may produce a one-block latency blip
     //     because IIR half-band filter state differs between orders; this
     //     mirrors JUCE's own behavior and is acceptable.
-    const int osOrder = (int) apvts.getRawParameterValue("oversampling")->load();
+    bool hasDrive = false;
+    for (int i = 1; i <= kNumBands; ++i)
+        hasDrive = hasDrive || apvts.getRawParameterValue(bandId(i, "drive"))->load() > 0.001f;
+    const int osOrder = hasDrive
+        ? (int) apvts.getRawParameterValue("oversampling")->load()
+        : 0;
     if (osOrder != currentOversamplingOrder)
     {
         // Reset the new filter chain so we don't carry over stale delay state
@@ -704,14 +739,8 @@ void FreeEQ8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     // Push post-EQ samples to spectrum FIFO
     spectrumFifo.pushBlock(L, R, n);
 
-    // Export limit: FreeEQ8 caps offline render at 4:30.
-    // ProEQ8 demo blocks export entirely. ProEQ8 activated: no limit.
-    if (licenseValidator.shouldLimitExport(sr, n, isNonRealtime()))
-        buffer.clear();
-
-    // Demo mute (ProEQ8 only, unactivated): 2 min clean + 30 s mute cycle
-    if (licenseValidator.shouldMuteDemo(sr, n))
-        buffer.clear();
+    const bool pluginEnabled = apvts.getRawParameterValue("plugin_enabled")->load() > 0.5f;
+    globalBypass.processOutput(buffer, getLatencySamples(), pluginEnabled);
 
     // --- Output metering ---
     {
@@ -733,36 +762,95 @@ void FreeEQ8AudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce:
     }
 }
 
-
-void FreeEQ8AudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+void DefaultEqualizerAudioProcessor::updateReportedLatency() noexcept
 {
-    auto state = apvts.copyState();
-    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    const bool linear = apvts.getRawParameterValue("linear_phase")->load() > 0.5f;
+    if (linear)
+    {
+        setLatencySamples(LinearPhaseEngine::latency);
+        return;
+    }
+
+    bool hasDrive = false;
+    for (int i = 1; i <= kNumBands; ++i)
+        hasDrive = hasDrive || apvts.getRawParameterValue(bandId(i, "drive"))->load() > 0.001f;
+    const int order = (int) apvts.getRawParameterValue("oversampling")->load();
+    const auto* os = hasDrive && order > 0 && order <= kNumOversamplingOrders
+        ? oversamplers[(size_t)(order - 1)].get() : nullptr;
+    setLatencySamples(os != nullptr ? juce::roundToInt(os->getLatencyInSamples()) : 0);
+}
+
+
+void DefaultEqualizerAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    storeSnapshot(isSlotA);
+    if (!snapshotA.isValid()) snapshotA = apvts.copyState();
+    if (!snapshotB.isValid()) snapshotB = apvts.copyState();
+
+    juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
+    root.setProperty("schemaVersion", 1, nullptr);
+    root.setProperty("activeSlot", isSlotA ? "A" : "B", nullptr);
+    auto a = snapshotA.createCopy();
+    auto b = snapshotB.createCopy();
+    a.setProperty("snapshotSlot", "A", nullptr);
+    b.setProperty("snapshotSlot", "B", nullptr);
+    root.appendChild(a, nullptr);
+    root.appendChild(b, nullptr);
+    std::unique_ptr<juce::XmlElement> xml (root.createXml());
     copyXmlToBinary(*xml, destData);
 }
 
-void FreeEQ8AudioProcessor::setStateInformation(const void* data, int sizeInBytes)
+void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary(data, sizeInBytes));
-    if (xmlState && xmlState->hasTagName(apvts.state.getType()))
+    if (!xmlState)
+        return;
+
+    const auto restored = juce::ValueTree::fromXml(*xmlState);
+    if (restored.hasType("DEFAULT_EQUALIZER_STATE"))
     {
-        apvts.replaceState(juce::ValueTree::fromXml(*xmlState));
-
-        // Re-sync link tracking from restored state so the first
-        // linked-parameter change after loading doesn't use stale baselines.
-        initLinkTracking();
-
-        // Ask the background worker to rebuild the FIR from the restored
-        // state; audio thread will keep using the previous kernel until then.
-        requestLinearPhaseRebuild();
-
-        // Update latency to match restored linear-phase setting
-        const bool linPhase = apvts.getRawParameterValue("linear_phase")->load() > 0.5f;
-        setLatencySamples(linPhase ? LinearPhaseEngine::latency : 0);
+        juce::ValueTree a, b;
+        for (auto child : restored)
+        {
+            const auto slot = child.getProperty("snapshotSlot").toString();
+            if (slot == "A") a = child.createCopy();
+            if (slot == "B") b = child.createCopy();
+        }
+        if (!a.isValid() || !b.isValid())
+            return;
+        a.removeProperty("snapshotSlot", nullptr);
+        b.removeProperty("snapshotSlot", nullptr);
+        snapshotA = a;
+        snapshotB = b;
+        isSlotA = restored.getProperty("activeSlot", "A").toString() != "B";
+        apvts.replaceState((isSlotA ? snapshotA : snapshotB).createCopy());
     }
+    else if (restored.hasType(apvts.state.getType()))
+    {
+        // Migration from upstream FreeEQ8/ProEQ8 state: preserve matching IDs,
+        // seed both A/B slots, and write schema v1 on the next save.
+        apvts.replaceState(restored);
+        snapshotA = apvts.copyState();
+        snapshotB = snapshotA.createCopy();
+        isSlotA = true;
+    }
+    else
+    {
+        return;
+    }
+
+    // Re-sync link tracking from restored state so the first
+    // linked-parameter change after loading doesn't use stale baselines.
+    initLinkTracking();
+
+    // Ask the background worker to rebuild the FIR from the restored
+    // state; audio thread will keep using the previous kernel until then.
+    requestLinearPhaseRebuild();
+
+    updateReportedLatency();
 }
 
-double FreeEQ8AudioProcessor::getTailLengthSeconds() const
+double DefaultEqualizerAudioProcessor::getTailLengthSeconds() const
 {
     // Two independent convolutions can produce energy past the input boundary:
     //   1. Linear-phase FIR convolution → tail up to firLength samples.
@@ -780,12 +868,12 @@ double FreeEQ8AudioProcessor::getTailLengthSeconds() const
     return std::max(linTail, matchTail);
 }
 
-juce::AudioProcessorEditor* FreeEQ8AudioProcessor::createEditor()
+juce::AudioProcessorEditor* DefaultEqualizerAudioProcessor::createEditor()
 {
-    return new FreeEQ8AudioProcessorEditor(*this);
+    return new DefaultEqualizerAudioProcessorEditor(*this);
 }
 
-void FreeEQ8AudioProcessor::buildLinearPhaseMagnitude()
+void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
 {
     // Build composite magnitude response for the linear phase FIR.
     // Use the same logic as ResponseCurveComponent but at FFT resolution.
@@ -815,6 +903,7 @@ void FreeEQ8AudioProcessor::buildLinearPhaseMagnitude()
             case 3: tp = Biquad::Type::HighPass; break;
             case 4: tp = Biquad::Type::LowPass; break;
             case 5: tp = Biquad::Type::Bandpass; break;
+            case 6: tp = Biquad::Type::Notch; break;
         }
 
         const float freq = apvts.getRawParameterValue(bandId(idx, "freq"))->load();
@@ -869,5 +958,5 @@ void FreeEQ8AudioProcessor::buildLinearPhaseMagnitude()
 // This creates new instances of the plugin.
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new FreeEQ8AudioProcessor();
+    return new DefaultEqualizerAudioProcessor();
 }

@@ -32,7 +32,7 @@ struct Biquad
         return (float)y;
     }
 
-    enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass };
+    enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch };
 
     // RBJ cookbook coefficients
     void set(Type type, double sampleRate, double freqHz, double Q, double gainDb)
@@ -141,6 +141,16 @@ struct Biquad
                 b0_ = alpha;
                 b1_ = 0.0;
                 b2_ = -alpha;
+                a0_ = 1.0 + alpha;
+                a1_ = -2.0 * cosw0;
+                a2_ = 1.0 - alpha;
+            } break;
+
+            case Type::Notch:
+            {
+                b0_ = 1.0;
+                b1_ = -2.0 * cosw0;
+                b2_ = 1.0;
                 a0_ = 1.0 + alpha;
                 a1_ = -2.0 * cosw0;
                 a2_ = 1.0 - alpha;

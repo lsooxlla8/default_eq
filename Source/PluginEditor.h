@@ -5,22 +5,51 @@
 #include "PluginProcessor.h"
 #include "UI/ResponseCurveComponent.h"
 #include "UI/LevelMeter.h"
-#include "UpdateChecker.h"
 
-class FreeEQ8AudioProcessorEditor : public juce::AudioProcessorEditor,
+class FamilyLookAndFeel final : public juce::LookAndFeel_V4
+{
+public:
+    FamilyLookAndFeel();
+    void setDark(bool shouldBeDark);
+    bool isDark() const noexcept { return dark; }
+    juce::Colour paper() const noexcept { return juce::Colour(0xfff6f6f6); }
+    juce::Colour ink() const noexcept { return juce::Colour(0xff050505); }
+    juce::Colour foreground() const noexcept { return dark ? paper() : ink(); }
+    juce::Colour background() const noexcept { return dark ? ink() : paper(); }
+
+    juce::Font getTextButtonFont(juce::TextButton&, int) override;
+    juce::Font getComboBoxFont(juce::ComboBox&) override;
+    juce::Font getLabelFont(juce::Label&) override;
+    void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&,
+                              bool, bool) override;
+    void drawButtonText(juce::Graphics&, juce::TextButton&, bool, bool) override;
+    void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
+    void drawRotarySlider(juce::Graphics&, int, int, int, int, float, float,
+                          float, juce::Slider&) override;
+    void drawComboBox(juce::Graphics&, int, int, bool, int, int, int, int,
+                      juce::ComboBox&) override;
+
+private:
+    bool dark = true;
+};
+
+class DefaultEqualizerAudioProcessorEditor : public juce::AudioProcessorEditor,
                                     public juce::Timer
 {
 public:
-    explicit FreeEQ8AudioProcessorEditor(FreeEQ8AudioProcessor&);
-    ~FreeEQ8AudioProcessorEditor() override = default;
+    explicit DefaultEqualizerAudioProcessorEditor(DefaultEqualizerAudioProcessor&);
+    ~DefaultEqualizerAudioProcessorEditor() override;
 
     void paint(juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
 
 private:
-    FreeEQ8AudioProcessor& proc;
+    DefaultEqualizerAudioProcessor& proc;
     ResponseCurveComponent responseCurve;
+    FamilyLookAndFeel familyLook;
+    std::unique_ptr<juce::PropertiesFile> uiPreferences;
+    bool darkTheme = true;
 
     // ── Band selection ───────────────────────────────────────────
     int selectedBand = 0;
@@ -55,6 +84,10 @@ private:
     // ── Toolbar ──────────────────────────────────────────────────
     juce::TextButton undoBtn { "Undo" }, redoBtn { "Redo" };
     juce::TextButton matchCapBtn { "Capture" }, matchAppBtn { "Match" }, matchClrBtn { "Clear" };
+    juce::TextButton themeBtn { "default_equalizer" };
+    juce::ToggleButton reducedMotionBtn { "REDUCED MOTION" };
+    juce::ToggleButton powerBtn { "ON" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> powerAtt;
 
     // ── Presets ──────────────────────────────────────────────────
     juce::ComboBox presetBox;
@@ -69,22 +102,9 @@ private:
     bool showPostSpectrum = true;
     LevelMeter levelMeter;
 
-    // ── A/B comparison (Pro only) ────────────────────────────────
-#if PROEQ8
+    // ── A/B comparison ───────────────────────────────────────────
     juce::TextButton abBtn { "A" }, copyABBtn { "A\u2192B" };
     void toggleAB();
-    // License activation
-    juce::TextButton licenseBtn { "Activate" };
-    void showActivationDialog();
-#else
-    // FreeEQ8: "Get Pro" button launches browser to checkout
-    juce::TextButton getProBtn { "Get Pro" };
-    void launchProCheckout();
-#endif
-
-    // ── Update checker ───────────────────────────────────────────
-    UpdateChecker updateChecker;
-    bool hasUpdate = false;
 
     // ── Helpers ──────────────────────────────────────────────────
     void initKnob(juce::Slider& s, juce::Colour c, bool large);
@@ -100,12 +120,7 @@ private:
     // `deleteWhenDismissed = true`).
     std::unique_ptr<juce::AlertWindow> activeDialog;
 
-    // Background jobs (license activate/deactivate/reverify) capture a weak
-    // reference to this editor. If the editor is destroyed before the HTTP
-    // round-trip finishes, the posted MessageManager::callAsync lambda sees
-    // weak.get() == nullptr and does nothing instead of dereferencing a
-    // dangling this pointer.
-    JUCE_DECLARE_WEAK_REFERENCEABLE (FreeEQ8AudioProcessorEditor)
+    JUCE_DECLARE_WEAK_REFERENCEABLE (DefaultEqualizerAudioProcessorEditor)
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FreeEQ8AudioProcessorEditor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DefaultEqualizerAudioProcessorEditor)
 };

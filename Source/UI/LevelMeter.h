@@ -20,7 +20,9 @@ public:
     void paint(juce::Graphics& g) override
     {
         const auto bounds = getLocalBounds().toFloat();
-        g.fillAll(juce::Colour(0xFF0D0D1A));
+        const auto fg = findColour(juce::Label::textColourId);
+        const auto bg = findColour(juce::Label::backgroundColourId);
+        g.fillAll(bg);
 
         const float meterGap = 3.0f;
         const float labelH = 12.0f;
@@ -36,8 +38,9 @@ public:
                          displayRmsR, displayPeakR, peakHoldR);
 
         // Labels
-        g.setColour(juce::Colours::white.withAlpha(0.5f));
-        g.setFont(9.0f);
+        g.setColour(fg.withAlpha(0.55f));
+        g.setFont(juce::Font(juce::FontOptions(
+            juce::Font::getDefaultMonospacedFontName(), 9.0f, juce::Font::bold)));
         g.drawText("L", (int)bounds.getX(), (int)(meterTop + meterH + 1), (int)meterW, (int)labelH,
                    juce::Justification::centred);
         g.drawText("R", (int)(bounds.getX() + meterW + meterGap), (int)(meterTop + meterH + 1),
@@ -96,8 +99,10 @@ private:
                            float rmsAmp, float peakAmp, float holdAmp) const
     {
         // Background
-        g.setColour(juce::Colour(0xFF1A1A2E));
-        g.fillRoundedRectangle(x, y, w, h, 2.0f);
+        const auto fg = findColour(juce::Label::textColourId);
+        const auto bg = findColour(juce::Label::backgroundColourId);
+        g.setColour(bg);
+        g.fillRect(x, y, w, h);
 
         const float rmsDb  = ampToDb(rmsAmp);
         const float peakDb = ampToDb(peakAmp);
@@ -110,36 +115,28 @@ private:
         // RMS bar (filled, dimmer)
         {
             const float barH = h * rmsNorm;
-            auto colour = rmsDb > -6.0f ? juce::Colour(0xFFFF9B42)
-                        : rmsDb > -20.0f ? juce::Colour(0xFF8BC34A)
-                        : juce::Colour(0xFF42A5F5);
-            g.setColour(colour.withAlpha(0.5f));
-            g.fillRoundedRectangle(x + 1, y + h - barH, w - 2, barH, 1.0f);
+            g.setColour(fg.withAlpha(0.55f));
+            g.fillRect(x + 1, y + h - barH, w - 2, barH);
         }
 
         // Peak bar (filled, brighter, thinner overlay)
         {
             const float barH = h * peakNorm;
-            auto colour = peakDb > 0.0f ? juce::Colour(0xFFE84855)
-                        : peakDb > -6.0f ? juce::Colour(0xFFFF9B42)
-                        : peakDb > -20.0f ? juce::Colour(0xFF8BC34A)
-                        : juce::Colour(0xFF42A5F5);
-            g.setColour(colour.withAlpha(0.8f));
-            g.fillRoundedRectangle(x + 1, y + h - barH, w - 2, barH, 1.0f);
+            g.setColour(fg.withAlpha(0.85f));
+            g.fillRect(x + 1, y + h - barH, w - 2, barH);
         }
 
         // Peak hold line
         {
             const float holdY = y + h - h * holdNorm;
-            auto colour = holdDb > 0.0f ? juce::Colour(0xFFE84855)
-                        : juce::Colour(0xFFFFFFFF);
-            g.setColour(colour.withAlpha(0.9f));
+            juce::ignoreUnused(holdDb);
+            g.setColour(fg.withAlpha(0.98f));
             g.fillRect(x + 1, holdY, w - 2, 2.0f);
         }
 
         // Border
-        g.setColour(juce::Colours::white.withAlpha(0.15f));
-        g.drawRoundedRectangle(x, y, w, h, 2.0f, 1.0f);
+        g.setColour(fg.withAlpha(0.24f));
+        g.drawRect(x, y, w, h, 1.0f);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LevelMeter)

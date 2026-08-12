@@ -6,24 +6,15 @@ static juce::String bandId(int idx, const char* suffix)
     return "b" + juce::String(idx) + "_" + suffix;
 }
 
-// ── Band colours (EQ Eight–style palette) ──────────────────────────
+// Family UI is intentionally monochrome. Selection is also encoded by shape.
 juce::Colour ResponseCurveComponent::getBandColour(int i)
 {
-    static const juce::Colour colours[] = {
-        juce::Colour(0xFFE84855),  // red
-        juce::Colour(0xFFFF9B42),  // orange
-        juce::Colour(0xFFFFEB3B),  // yellow
-        juce::Colour(0xFF8BC34A),  // green
-        juce::Colour(0xFF26C6DA),  // cyan
-        juce::Colour(0xFF42A5F5),  // blue
-        juce::Colour(0xFFAB47BC),  // purple
-        juce::Colour(0xFFEC407A),  // pink
-    };
-    return colours[i % 8];  // cycles for >8 bands
+    juce::ignoreUnused(i);
+    return juce::Colour(0xfff6f6f6);
 }
 
 // ── Constructor ────────────────────────────────────────────────────
-ResponseCurveComponent::ResponseCurveComponent(FreeEQ8AudioProcessor& processor)
+ResponseCurveComponent::ResponseCurveComponent(DefaultEqualizerAudioProcessor& processor)
     : proc(processor)
 {
     // Initialize smoothed spectrum to silence (-100 dB) so the max()-based
@@ -124,6 +115,7 @@ void ResponseCurveComponent::updateResponseCurve()
             case 3: tp = Biquad::Type::HighPass; break;
             case 4: tp = Biquad::Type::LowPass; break;
             case 5: tp = Biquad::Type::Bandpass; break;
+            case 6: tp = Biquad::Type::Notch; break;
         }
 
         // Slope: number of cascaded stages
@@ -161,7 +153,9 @@ void ResponseCurveComponent::resized() {}
 // ── Paint ──────────────────────────────────────────────────────────
 void ResponseCurveComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colour(0xFF1A1A2E));
+    const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+    const auto bg = darkMode ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6);
+    g.fillAll(bg);
 
     paintGrid(g);
 #if PROEQ8
@@ -176,15 +170,16 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
 #endif
 
     // Border
-    g.setColour(juce::Colours::white.withAlpha(0.3f));
-    g.drawRect(getLocalBounds(), 1);
+    g.setColour(fg);
+    g.drawRect(getLocalBounds(), 2);
 }
 
 // ── Grid ───────────────────────────────────────────────────────────
 void ResponseCurveComponent::paintGrid(juce::Graphics& g)
 {
     const float h = (float)getHeight();
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
+    const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+    g.setColour(fg.withAlpha(0.13f));
 
     // Frequency grid lines
     const float freqLines[] = { 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
@@ -201,9 +196,9 @@ void ResponseCurveComponent::paintGrid(juce::Graphics& g)
         const float y = dbToY(db);
         if (db == 0.0f)
         {
-            g.setColour(juce::Colours::white.withAlpha(0.2f));
+            g.setColour(fg.withAlpha(0.24f));
             g.drawHorizontalLine((int)y, 0.0f, (float)getWidth());
-            g.setColour(juce::Colours::white.withAlpha(0.08f));
+            g.setColour(fg.withAlpha(0.13f));
         }
         else
         {
@@ -212,8 +207,8 @@ void ResponseCurveComponent::paintGrid(juce::Graphics& g)
     }
 
     // Frequency labels
-    g.setColour(juce::Colours::white.withAlpha(0.35f));
-    g.setFont(10.0f);
+    g.setColour(fg.withAlpha(0.55f));
+    g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::plain)));
 
     const std::pair<float, const char*> freqLabels[] = {
         { 100,  "100" }, { 1000, "1k" }, { 10000, "10k" }
@@ -294,7 +289,8 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
         spectrumPath.lineTo(0.0f, h);
         spectrumPath.closeSubPath();
 
-        g.setColour(juce::Colour(0xFF42A5F5).withAlpha(0.12f));
+        const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+        g.setColour(fg.withAlpha(0.12f));
         g.fillPath(spectrumPath);
 
         // Outline
@@ -312,7 +308,7 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
             if (!outlineStarted) { outlinePath.startNewSubPath(x, y); outlineStarted = true; }
             else outlinePath.lineTo(x, y);
         }
-        g.setColour(juce::Colour(0xFF42A5F5).withAlpha(0.25f));
+        g.setColour(fg.withAlpha(0.72f));
         g.strokePath(outlinePath, juce::PathStrokeType(1.0f));
     }
 }
@@ -345,7 +341,8 @@ void ResponseCurveComponent::paintBandCurves(juce::Graphics& g)
         fillPath.lineTo(w, zeroY);
         fillPath.closeSubPath();
 
-        g.setColour(getBandColour(b).withAlpha(alpha));
+        const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+        g.setColour(fg.withAlpha(alpha));
         g.fillPath(fillPath);
     }
 }
@@ -367,7 +364,8 @@ void ResponseCurveComponent::paintResponseCurve(juce::Graphics& g)
             curvePath.lineTo(x, y);
     }
 
-    g.setColour(juce::Colours::white.withAlpha(0.85f));
+    const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+    g.setColour(fg.withAlpha(0.98f));
     g.strokePath(curvePath, juce::PathStrokeType(2.0f));
 }
 
@@ -391,24 +389,23 @@ void ResponseCurveComponent::paintNodes(juce::Graphics& g)
         const bool isSelected = (b == selectedBand);
         const bool isHovered  = (b == hoveredBand);
 
-        auto colour = getBandColour(b);
+        const auto colour = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
 
         if (isSelected)
         {
-            // Glow
-            g.setColour(colour.withAlpha(0.25f));
-            g.fillEllipse(x - r * 2.0f, y - r * 2.0f, r * 4.0f, r * 4.0f);
+            g.setColour(colour.withAlpha(0.22f));
+            g.fillRect(x - r * 2.0f, y - r * 2.0f, r * 4.0f, r * 4.0f);
         }
 
         g.setColour(colour.withAlpha(isHovered || isSelected ? 1.0f : 0.7f));
-        g.fillEllipse(x - r, y - r, r * 2.0f, r * 2.0f);
+        g.fillRect(x - r, y - r, r * 2.0f, r * 2.0f);
 
-        g.setColour(juce::Colours::white.withAlpha(0.9f));
-        g.drawEllipse(x - r, y - r, r * 2.0f, r * 2.0f, 1.5f);
+        g.setColour(darkMode ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6));
+        g.drawRect(x - r, y - r, r * 2.0f, r * 2.0f, 1.5f);
 
         // Band number label
-        g.setColour(juce::Colours::white);
-        g.setFont(10.0f);
+        g.setColour(darkMode ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6));
+        g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold)));
         g.drawText(juce::String(idx), (int)(x - r), (int)(y - r), (int)(r * 2.0f), (int)(r * 2.0f),
                    juce::Justification::centred);
 
@@ -476,6 +473,9 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
         menu.addItem(13, "High Pass");
         menu.addItem(14, "Low Pass");
         menu.addItem(15, "Bandpass");
+        menu.addItem(16, "Notch");
+        menu.addSeparator();
+        menu.addItem(2, "Delete band");
 
         menu.showMenuAsync(juce::PopupMenu::Options(), [this, idx](int result)
         {
@@ -485,7 +485,12 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
                 auto* param = proc.apvts.getParameter(bandId(idx, "on"));
                 if (param) param->setValueNotifyingHost(p->load() > 0.5f ? 0.0f : 1.0f);
             }
-            else if (result >= 10 && result <= 15)
+            else if (result == 2)
+            {
+                if (auto* param = proc.apvts.getParameter(bandId(idx, "on")))
+                    param->setValueNotifyingHost(0.0f);
+            }
+            else if (result >= 10 && result <= 16)
             {
                 auto* param = proc.apvts.getParameter(bandId(idx, "type"));
                 if (param)
@@ -500,6 +505,11 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
     {
         dragging = true;
         shiftDrag = e.mods.isShiftDown();
+        dragParamA = proc.apvts.getParameter(bandId(hit + 1, shiftDrag ? "q" : "freq"));
+        dragParamB = shiftDrag ? nullptr : proc.apvts.getParameter(bandId(hit + 1, "gain"));
+        proc.undoManager.beginNewTransaction(shiftDrag ? "Adjust band Q" : "Move EQ band");
+        if (dragParamA) dragParamA->beginChangeGesture();
+        if (dragParamB) dragParamB->beginChangeGesture();
         if (shiftDrag)
         {
             dragStartQ = proc.apvts.getRawParameterValue(bandId(hit + 1, "q"))->load();
@@ -542,8 +552,44 @@ void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
 
 void ResponseCurveComponent::mouseUp(const juce::MouseEvent&)
 {
+    if (dragParamA) dragParamA->endChangeGesture();
+    if (dragParamB) dragParamB->endChangeGesture();
+    dragParamA = dragParamB = nullptr;
     dragging = false;
     shiftDrag = false;
+}
+
+void ResponseCurveComponent::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (hitTestNode((float)e.x, (float)e.y) >= 0)
+        return;
+
+    int freeBand = -1;
+    for (int b = 0; b < kNumBands; ++b)
+        if (proc.apvts.getRawParameterValue(bandId(b + 1, "on"))->load() < 0.5f)
+        {
+            freeBand = b;
+            break;
+        }
+    if (freeBand < 0)
+        return;
+
+    proc.undoManager.beginNewTransaction("Create EQ band");
+    const int idx = freeBand + 1;
+    const auto set = [this, idx](const char* suffix, float plainValue)
+    {
+        if (auto* p = proc.apvts.getParameter(bandId(idx, suffix)))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost(p->convertTo0to1(plainValue));
+            p->endChangeGesture();
+        }
+    };
+    set("freq", std::clamp(xToFreq((float)e.x), minFreq, maxFreq));
+    set("gain", std::clamp(yToDb((float)e.y), minDb, maxDb));
+    set("on", 1.0f);
+    selectedBand = freeBand;
+    repaint();
 }
 
 void ResponseCurveComponent::mouseMove(const juce::MouseEvent& e)
@@ -572,9 +618,10 @@ void ResponseCurveComponent::paintPianoRoll(juce::Graphics& g)
     for (int i = 0; i < 8; ++i)
     {
         const float x = freqToX(cNotes[i]);
-        g.setColour(juce::Colours::white.withAlpha(0.12f));
+        const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+        g.setColour(fg.withAlpha(0.12f));
         g.drawVerticalLine((int)x, 0.0f, h);
-        g.setColour(juce::Colours::white.withAlpha(0.25f));
+        g.setColour(fg.withAlpha(0.25f));
         g.drawText(cLabels[i], (int)x + 2, 2, 18, 10, juce::Justification::left);
     }
 }
@@ -618,8 +665,9 @@ void ResponseCurveComponent::paintCollisionWarnings(juce::Graphics& g)
                     const float y = dbToY(gain);
                     const float wr = nodeRadius + 4.0f;
 
-                    g.setColour(juce::Colour(0xFFFFAB00).withAlpha(0.6f));
-                    g.drawEllipse(x - wr, y - wr, wr * 2.0f, wr * 2.0f, 2.0f);
+                    const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+                    g.setColour(fg.withAlpha(0.6f));
+                    g.drawRect(x - wr, y - wr, wr * 2.0f, wr * 2.0f, 2.0f);
                 };
 
                 drawWarning(active[i]);

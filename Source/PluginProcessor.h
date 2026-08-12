@@ -6,18 +6,18 @@
 #include "DSP/SpectrumFIFO.h"
 #include "DSP/LinearPhaseEngine.h"
 #include "DSP/MatchEQ.h"
+#include "DSP/GlobalBypass.h"
 #include "Presets/PresetManager.h"
-#include "LicenseValidator.h"
 #include <array>
 #include <atomic>
 #include <memory>
 
-class FreeEQ8AudioProcessor : public juce::AudioProcessor,
+class DefaultEqualizerAudioProcessor : public juce::AudioProcessor,
                                public juce::AudioProcessorValueTreeState::Listener
 {
 public:
-    FreeEQ8AudioProcessor();
-    ~FreeEQ8AudioProcessor() override;
+    DefaultEqualizerAudioProcessor();
+    ~DefaultEqualizerAudioProcessor() override;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -92,13 +92,11 @@ public:
     // ── Auto-gain bypass ───────────────────────────────────────────
     std::atomic<float> autoGainCompDb { 0.0f }; // smoothed compensation in dB
 
-    // ── License validation (demo mute for ProEQ8) ──────────────────
-    LicenseValidator licenseValidator;
-
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParams();
 
     std::array<EQBand, kNumBands> bands;
+    GlobalBypass globalBypass;
     double sr = 44100.0;
     int maxBlockSize = 512;
 
@@ -131,6 +129,7 @@ private:
     void buildAllOversamplers(double sampleRate, int samplesPerBlock);
     juce::dsp::Oversampling<float>* currentOversamplerPtr() const noexcept;
     void buildLinearPhaseMagnitude();        // runs on background thread only
+    void updateReportedLatency() noexcept;
 
     // Band linking.
     //
@@ -149,5 +148,5 @@ private:
     std::atomic<float> lastLinkedQ[kNumBands] {};
     void initLinkTracking();
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FreeEQ8AudioProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DefaultEqualizerAudioProcessor)
 };

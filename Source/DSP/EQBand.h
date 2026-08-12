@@ -293,6 +293,7 @@ private:
             case Biquad::Type::HighPass:  svfType = SvfBiquad::Type::HighPass;  break;
             case Biquad::Type::LowPass:   svfType = SvfBiquad::Type::LowPass;   break;
             case Biquad::Type::Bandpass:  svfType = SvfBiquad::Type::Bandpass;  break;
+            case Biquad::Type::Notch:     svfType = SvfBiquad::Type::Notch;     break;
         }
         for (int s = 0; s < numStages; ++s)
             svfFilters[(size_t)s].set(svfType, sampleRate, freqHz, Q, effectiveGainDb);

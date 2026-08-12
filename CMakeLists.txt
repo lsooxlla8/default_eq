@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(FreeEQ8 VERSION 2.3.1)
+project(default_equalizer VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -23,35 +23,32 @@ else()
   message(FATAL_ERROR "JUCE not found. Add as submodule in ./JUCE or pass -DJUCE_DIR=/path/to/JUCE")
 endif()
 
-juce_add_plugin(FreeEQ8
-    COMPANY_NAME "TizWildinEntertainment"
+juce_add_plugin(DefaultEqualizer
+    COMPANY_NAME "icanseesounds"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
-    PLUGIN_MANUFACTURER_CODE TzWd
-    PLUGIN_CODE FEQ8
+    PLUGIN_MANUFACTURER_CODE Icss
+    PLUGIN_CODE Deq1
     FORMATS VST3 AU Standalone
     # juce_vst3_helper.exe loads the built plugin to emit moduleinfo.json and
     # has been observed hanging indefinitely on Windows CI. The manifest is
     # optional metadata, so skip generating it during the build.
     VST3_AUTO_MANIFEST FALSE
-    PRODUCT_NAME "FreeEQ8"
-    BUNDLE_ID "com.tizwildinentertainment.freeeq8"
-    COMPANY_URL "https://github.com/GareBear99/FreeEQ8"
-    COMPANY_EMAIL "GareBear99@users.noreply.github.com"
-    DESCRIPTION "Professional 8-Band Parametric EQ"
+    PRODUCT_NAME "default_equalizer"
+    BUNDLE_ID "com.icanseesounds.default-equalizer"
+    COMPANY_URL "https://github.com/lsooxlla8/default_equalizer"
+    DESCRIPTION "24-band parametric dynamic equalizer"
 )
 
-target_sources(FreeEQ8 PRIVATE
+target_sources(DefaultEqualizer PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
     Source/Config.h
-    Source/UpdateChecker.h
-    Source/LicenseValidator.h
     Source/DSP/Biquad.h
     Source/DSP/SvfBiquad.h
     Source/DSP/SvfBandArray.h
@@ -60,6 +57,7 @@ target_sources(FreeEQ8 PRIVATE
     Source/DSP/SpectrumFIFO.h
     Source/DSP/LinearPhaseEngine.h
     Source/DSP/MatchEQ.h
+    Source/DSP/GlobalBypass.h
     Source/DSP/ResonanceDetector.h
     Source/DSP/IntentMode.h
     Source/DSP/FrequencyExplainer.h
@@ -70,116 +68,64 @@ target_sources(FreeEQ8 PRIVATE
     Source/Presets/PresetManager.cpp
 )
 
-target_compile_definitions(FreeEQ8 PRIVATE
+target_compile_definitions(DefaultEqualizer PRIVATE
+    PROEQ8=1
+    DEFAULT_EQUALIZER_OPEN_SOURCE=1
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
 )
 
-target_link_libraries(FreeEQ8 PRIVATE
+target_link_libraries(DefaultEqualizer PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_cryptography
 )
-
-# ── ProEQ8 commercial target
-juce_add_plugin(ProEQ8
-    COMPANY_NAME "TizWildinEntertainment"
-    IS_SYNTH FALSE
-    NEEDS_MIDI_INPUT FALSE
-    NEEDS_MIDI_OUTPUT FALSE
-    IS_MIDI_EFFECT FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
-    PLUGIN_MANUFACTURER_CODE TzWd
-    PLUGIN_CODE PEQ8
-    FORMATS VST3 AU
-    VST3_AUTO_MANIFEST FALSE
-    PRODUCT_NAME "ProEQ8"
-    BUNDLE_ID "com.tizwildinentertainment.proeq8"
-    COMPANY_URL "https://github.com/GareBear99/FreeEQ8"
-    COMPANY_EMAIL "GareBear99@users.noreply.github.com"
-    DESCRIPTION "Professional 24-Band Parametric EQ"
-)
-
-target_sources(ProEQ8 PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginProcessor.h
-    Source/PluginEditor.cpp
-    Source/PluginEditor.h
-    Source/Config.h
-    Source/UpdateChecker.h
-    Source/LicenseValidator.h
-    Source/DSP/Biquad.h
-    Source/DSP/SvfBiquad.h
-    Source/DSP/SvfBandArray.h
-    Source/DSP/NaturalPhaseEngine.h
-    Source/DSP/EQBand.h
-    Source/DSP/SpectrumFIFO.h
-    Source/DSP/LinearPhaseEngine.h
-    Source/DSP/MatchEQ.h
-    Source/DSP/ResonanceDetector.h
-    Source/DSP/IntentMode.h
-    Source/DSP/FrequencyExplainer.h
-    Source/UI/ResponseCurveComponent.h
-    Source/UI/ResponseCurveComponent.cpp
-    Source/UI/LevelMeter.h
-    Source/Presets/PresetManager.h
-    Source/Presets/PresetManager.cpp
-)
-
-target_compile_definitions(ProEQ8 PRIVATE
-    PROEQ8=1
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=1
-    JUCE_VST3_CAN_REPLACE_VST2=0
-)
-
-target_link_libraries(ProEQ8 PRIVATE
-    juce::juce_audio_utils
-    juce::juce_dsp
-    juce::juce_cryptography
-)
-
-# ProEQ8 enables JUCE_USE_CURL=1 for license activation. On Linux, juce_core
-# resolves its networking through libcurl, so the library must be linked
-# explicitly or the VST3 target fails with undefined `curl_*` references.
-# macOS and Windows use native networking APIs, where JUCE_USE_CURL is a no-op.
-if(UNIX AND NOT APPLE)
-    find_package(CURL REQUIRED)
-    target_link_libraries(ProEQ8 PRIVATE CURL::libcurl)
-endif()
 
 # ── Optional test target (standalone, no JUCE dependency) ────────────
-option(FREEEQ8_BUILD_TESTS "Build unit tests" OFF)
+option(DEFAULT_EQUALIZER_BUILD_TESTS "Build unit tests" OFF)
 
-if (FREEEQ8_BUILD_TESTS)
-    add_executable(FreeEQ8_Tests Tests/BiquadTest.cpp)
-    target_compile_features(FreeEQ8_Tests PRIVATE cxx_std_17)
+if (DEFAULT_EQUALIZER_BUILD_TESTS)
+    enable_testing()
+    add_executable(DefaultEqualizer_Tests Tests/BiquadTest.cpp)
+    target_compile_features(DefaultEqualizer_Tests PRIVATE cxx_std_17)
 
     # Shelf regression guards. Both are standalone (Biquad.h pulls only
     # <cmath>/<algorithm>) and return non-zero on failure, so CI fails loudly if
     # the shelf coefficient domain error ever reappears.
-    add_executable(FreeEQ8_ShelfNaNSweep Tests/ShelfNaNSweepTest.cpp)
-    target_compile_features(FreeEQ8_ShelfNaNSweep PRIVATE cxx_std_17)
+    add_executable(DefaultEqualizer_ShelfNaNSweep Tests/ShelfNaNSweepTest.cpp)
+    target_compile_features(DefaultEqualizer_ShelfNaNSweep PRIVATE cxx_std_17)
 
-    add_executable(FreeEQ8_ShelfResponse Tests/ShelfResponseTest.cpp)
-    target_compile_features(FreeEQ8_ShelfResponse PRIVATE cxx_std_17)
+    add_executable(DefaultEqualizer_ShelfResponse Tests/ShelfResponseTest.cpp)
+    target_compile_features(DefaultEqualizer_ShelfResponse PRIVATE cxx_std_17)
 
     # These three existed as standalone sources but were not built by anything,
     # so the claims they substantiate were never actually verified on any commit.
     # BiquadVsSvfComparison in particular is cited in SvfBiquad.h as evidence
     # that RBJ and SVF are identical, so it needs to run.
-    add_executable(FreeEQ8_BiquadVsSvf Tests/BiquadVsSvfComparison.cpp)
-    target_compile_features(FreeEQ8_BiquadVsSvf PRIVATE cxx_std_17)
+    add_executable(DefaultEqualizer_BiquadVsSvf Tests/BiquadVsSvfComparison.cpp)
+    target_compile_features(DefaultEqualizer_BiquadVsSvf PRIVATE cxx_std_17)
 
-    add_executable(FreeEQ8_SvfTest Tests/SvfTest.cpp)
-    target_compile_features(FreeEQ8_SvfTest PRIVATE cxx_std_17)
+    add_executable(DefaultEqualizer_SvfTest Tests/SvfTest.cpp)
+    target_compile_features(DefaultEqualizer_SvfTest PRIVATE cxx_std_17)
 
-    add_executable(FreeEQ8_EngineIsolation Tests/EngineIsolationTest.cpp)
-    target_compile_features(FreeEQ8_EngineIsolation PRIVATE cxx_std_17)
+    add_executable(DefaultEqualizer_EngineIsolation Tests/EngineIsolationTest.cpp)
+    target_compile_features(DefaultEqualizer_EngineIsolation PRIVATE cxx_std_17)
 
-    add_executable(FreeEQ8_AuditTests Tests/AuditRegressionTest.cpp)
-    target_compile_features(FreeEQ8_AuditTests PRIVATE cxx_std_17)
+    add_executable(DefaultEqualizer_AuditTests Tests/AuditRegressionTest.cpp)
+    target_compile_features(DefaultEqualizer_AuditTests PRIVATE cxx_std_17)
     find_package(Threads REQUIRED)
-    target_link_libraries(FreeEQ8_AuditTests PRIVATE Threads::Threads)
+    target_link_libraries(DefaultEqualizer_AuditTests PRIVATE Threads::Threads)
+
+    add_executable(DefaultEqualizer_LatencyProbe Tests/LatencyProbe.cpp)
+    target_link_libraries(DefaultEqualizer_LatencyProbe PRIVATE juce::juce_dsp)
+
+    add_test(NAME biquad COMMAND DefaultEqualizer_Tests)
+    add_test(NAME shelf_nan_sweep COMMAND DefaultEqualizer_ShelfNaNSweep)
+    add_test(NAME shelf_response COMMAND DefaultEqualizer_ShelfResponse)
+    add_test(NAME biquad_vs_svf COMMAND DefaultEqualizer_BiquadVsSvf)
+    add_test(NAME svf COMMAND DefaultEqualizer_SvfTest)
+    add_test(NAME engine_isolation COMMAND DefaultEqualizer_EngineIsolation)
+    add_test(NAME audit_regressions COMMAND DefaultEqualizer_AuditTests)
+    add_test(NAME latency_probe COMMAND DefaultEqualizer_LatencyProbe)
 endif()

@@ -1,27 +1,8 @@
 #pragma once
 
-// ── Product configuration ─────────────────────────────────────────────
-// PROEQ8 is set by CMake for the ProEQ8 target. FreeEQ8 builds without it.
-
-#if PROEQ8
-    static constexpr int    kNumBands     = 24;
-    static constexpr bool   kIsProVersion = true;
-    static constexpr const char* kProductName  = "ProEQ8";
-    static constexpr const char* kProductTag   = "24-Band Parametric EQ";
-#else
-    static constexpr int    kNumBands     = 8;
-    static constexpr bool   kIsProVersion = false;
-    static constexpr const char* kProductName  = "FreeEQ8";
-    static constexpr const char* kProductTag   = "8-Band Parametric EQ";
-#endif
-
-static constexpr const char* kVersion = "2.3.1";
-
-// GitHub repo for update checking
-static constexpr const char* kGitHubOwner = "GareBear99";
-static constexpr const char* kGitHubRepo  = "FreeEQ8";
-
-// License activation server URL (Cloudflare Worker)
-// Production: tizwildin-hub handles all license operations
-static constexpr const char* kActivationServerURL =
-    "https://tizwildin-hub.admension.workers.dev";
+// default_equalizer is the open-source 24-band derivative target.
+static constexpr int kNumBands = 24;
+static constexpr bool kIsProVersion = true;
+static constexpr const char* kProductName = "default_equalizer";
+static constexpr const char* kProductTag = "PARAMETRIC DYNAMIC EQ";
+static constexpr const char* kVersion = "0.1.0";

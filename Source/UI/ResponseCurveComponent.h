@@ -6,13 +6,13 @@
 #include "../Config.h"
 #include "../DSP/EQBand.h"
 
-class FreeEQ8AudioProcessor;
+class DefaultEqualizerAudioProcessor;
 
 class ResponseCurveComponent : public juce::Component,
                                public juce::Timer
 {
 public:
-    explicit ResponseCurveComponent(FreeEQ8AudioProcessor& processor);
+    explicit ResponseCurveComponent(DefaultEqualizerAudioProcessor& processor);
     ~ResponseCurveComponent() override = default;
 
     void paint(juce::Graphics& g) override;
@@ -24,18 +24,20 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
 
     // Spectrum analyzer data - call from the editor to push FFT magnitudes
     void pushSpectrumData(const float* magnitudes, int numBins, double sampleRate);
 
     int getSelectedBand() const { return selectedBand; }
     void setSelectedBand(int band) { selectedBand = band; repaint(); }
+    void setDarkMode(bool shouldBeDark) { darkMode = shouldBeDark; repaint(); }
 
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
 
 private:
-    FreeEQ8AudioProcessor& proc;
+    DefaultEqualizerAudioProcessor& proc;
 
     // Frequency response calculation
     static constexpr int numPoints = 512;
@@ -54,8 +56,11 @@ private:
     int hoveredBand = -1;    // Band under cursor
     bool dragging = false;
     bool shiftDrag = false;  // Shift+drag adjusts Q
+    bool darkMode = true;
     float dragStartQ = 1.0f;
     float dragStartY = 0.0f;
+    juce::RangedAudioParameter* dragParamA = nullptr;
+    juce::RangedAudioParameter* dragParamB = nullptr;
 
     // Coordinate mapping
     float freqToX(float freqHz) const;
