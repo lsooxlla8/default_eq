@@ -2,6 +2,8 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <limits>
+#include <vector>
 
 namespace
 {
@@ -80,7 +82,7 @@ double measureDriveAlias(int oversamplingOrder)
     for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
     setPlain(p, id(1, "on"), 1.0f); setPlain(p, id(1, "gain"), 0.0f);
     setPlain(p, id(1, "drive_on"), 1.0f); setPlain(p, id(1, "drive"), 100.0f);
-    setPlain(p, id(1, "drive_mix"), 100.0f); setPlain(p, id(1, "sat_mode"), 5.0f);
+    setPlain(p, id(1, "drive_mix"), 100.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
     setPlain(p, "oversampling", (float)oversamplingOrder);
     p.prepareToPlay(sampleRate, 256);
     juce::AudioBuffer<float> block(2, 256); juce::MidiBuffer midi;
@@ -140,6 +142,29 @@ double dynamicLevelForBlockSize(int blockSize)
     }
     return sum / (double)counted;
 }
+
+double renderCutLevel(float slope)
+{
+    DefaultEqualizerAudioProcessor p;
+    for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
+    setPlain(p, id(1, "type"), 3.0f); setPlain(p, id(1, "freq"), 1000.0f);
+    setPlain(p, id(1, "slope"), slope); p.prepareToPlay(48000.0, 127);
+    juce::AudioBuffer<float> block(2, 127); juce::MidiBuffer midi;
+    double phase = 0.0, energy = 0.0; int count = 0;
+    for (int bi = 0; bi < 160; ++bi)
+    {
+        for (int n = 0; n < 127; ++n)
+        {
+            const float x = 0.2f * std::sin((float)phase);
+            phase += juce::MathConstants<double>::twoPi * 100.0 / 48000.0;
+            block.setSample(0, n, x); block.setSample(1, n, x);
+        }
+        p.processBlock(block, midi);
+        if (bi > 120)
+            for (int n = 0; n < 127; ++n) { const double x = block.getSample(0, n); energy += x * x; ++count; }
+    }
+    return std::sqrt(energy / std::max(1, count));
+}
 }
 
 int main()
@@ -184,6 +209,46 @@ int main()
     std::printf("drive alias energy: off %.6g, 8x %.6g (%.2f%%)\n",
                 aliasOff, alias8x, 100.0 * alias8x / aliasOff);
 
+    // Solo is a frequency-window audition, and per-band drive only returns
+    // nonlinear energy from that same window instead of saturating broadband.
+    const auto renderBandTone = [](double frequency, bool drive, bool solo)
+    {
+        DefaultEqualizerAudioProcessor p;
+        for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
+        setPlain(p, id(1, "freq"), 8000.0f); setPlain(p, id(1, "q"), 4.0f);
+        setPlain(p, id(1, "drive_on"), drive ? 1.0f : 0.0f);
+        setPlain(p, id(1, "drive"), drive ? 100.0f : 0.0f);
+        setPlain(p, id(1, "sat_mode"), 1.0f);
+        if (solo) p.soloBand.store(0);
+        p.prepareToPlay(48000.0, 128);
+        juce::AudioBuffer<float> block(2, 128); juce::MidiBuffer midi;
+        double phase = 0.0, energy = 0.0; int count = 0;
+        for (int bi = 0; bi < 160; ++bi)
+        {
+            for (int n = 0; n < 128; ++n)
+            {
+                const float x = 0.7f * std::sin((float)phase);
+                phase += juce::MathConstants<double>::twoPi * frequency / 48000.0;
+                block.setSample(0, n, x); block.setSample(1, n, x);
+            }
+            p.processBlock(block, midi);
+            if (bi > 120)
+                for (int n = 0; n < 128; ++n) { const double x = block.getSample(0, n); energy += x * x; ++count; }
+        }
+        return std::sqrt(energy / std::max(1, count));
+    };
+    const double soloInside = renderBandTone(8000.0, false, true);
+    const double soloOutside = renderBandTone(100.0, false, true);
+    CHECK(soloInside > soloOutside * 20.0, "band Solo rejects out-of-band program content");
+    const double lowClean = renderBandTone(100.0, false, false);
+    const double lowDriven = renderBandTone(100.0, true, false);
+    const double highClean = renderBandTone(8000.0, false, false);
+    const double highDriven = renderBandTone(8000.0, true, false);
+    CHECK(std::abs(lowDriven - lowClean) < lowClean * 0.02,
+          "high-band drive leaves low-frequency program essentially unchanged");
+    CHECK(std::abs(highDriven - highClean) > highClean * 0.05,
+          "high-band drive measurably changes in-band program");
+
     const double dyn64 = dynamicLevelForBlockSize(64);
     const double dyn257 = dynamicLevelForBlockSize(257);
     const double dyn1024 = dynamicLevelForBlockSize(1024);
@@ -191,6 +256,18 @@ int main()
     CHECK(dynSpread < 0.015, "dynamic EQ is reproducible across 64/257/1024 sample blocks");
     std::printf("dynamic block-size levels: 64 %.7f, 257 %.7f, 1024 %.7f, spread %.3f%%\n",
                 dyn64, dyn257, dyn1024, dynSpread * 100.0);
+
+    // The cut slope is a continuous 3..48 dB/oct control. Each increase must
+    // monotonically deepen rejection one decade below the corner.
+    {
+        double previous = std::numeric_limits<double>::infinity();
+        for (float slope : { 3.0f, 6.0f, 9.0f, 12.0f, 18.0f, 24.0f, 36.0f, 48.0f })
+        {
+            const double level = renderCutLevel(slope);
+            CHECK(level <= previous * 1.01, "variable low-cut slope increases rejection monotonically");
+            previous = level;
+        }
+    }
 
     // Latency contract: clean minimum-phase is exactly zero; a band's 5 ms
     // lookahead and linear phase are additive and reported to the host.
@@ -200,7 +277,7 @@ int main()
         p.prepareToPlay(48000.0, 256);
         CHECK(p.getLatencySamples() == 0, "clean minimum-phase reports zero samples");
         setPlain(p, id(2, "dyn_on"), 1.0f);
-        setPlain(p, id(2, "dyn_lookahead"), 1.0f);
+        setPlain(p, id(2, "dyn_lookahead"), 5.0f);
         CHECK(p.getLatencySamples() == 240, "5 ms lookahead reports 240 samples at 48 kHz");
         setPlain(p, "linear_phase", 1.0f);
         CHECK(p.getLatencySamples() == 2048 + 240,
@@ -213,23 +290,25 @@ int main()
         CHECK(p.getLatencySamples() == 2048 + 240, "Maximum linear phase reports 2048 samples");
     }
 
-    // Nonlinear-only oversampling adds its own measured IIR anti-alias-filter
-    // latency, and is dormant when no drive section is actually processing.
+    // Global oversampling includes the dynamic path and reports its measured
+    // anti-alias filter latency whether or not drive is currently non-zero.
     {
         DefaultEqualizerAudioProcessor p;
         p.prepareToPlay(48000.0, 256);
         setPlain(p, "oversampling", 3.0f);
-        CHECK(p.getLatencySamples() == 0, "oversampling is zero-latency while nonlinear drive is inactive");
+        const int globalOsLatency = p.getLatencySamples();
+        CHECK(globalOsLatency > 0, "global 8x oversampling reports anti-alias filter latency");
         setPlain(p, id(1, "drive_on"), 1.0f);
         setPlain(p, id(1, "drive"), 50.0f);
-        CHECK(p.getLatencySamples() == 5, "8x drive oversampling reports its 5-sample filter latency");
+        CHECK(p.getLatencySamples() == globalOsLatency,
+              "drive activation does not change global oversampling latency");
     }
 
     {
         DefaultEqualizerAudioProcessor p;
         for (int b = 1; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(2, "on"), 1.0f); setPlain(p, id(2, "dyn_on"), 1.0f);
-        setPlain(p, id(2, "dyn_lookahead"), 1.0f);
+        setPlain(p, id(2, "dyn_lookahead"), 5.0f);
         p.prepareToPlay(48000.0, 512);
         juce::AudioBuffer<float> impulse(2, 512); impulse.clear();
         impulse.setSample(0, 0, 1.0f); impulse.setSample(1, 0, 1.0f);
@@ -263,13 +342,46 @@ int main()
               "linear-phase impulse peak matches reported Economy latency within even-FIR half-sample rounding");
     }
 
+    // Every linear quality must preserve a valid finite impulse and align its
+    // main peak with the latency reported to the host on odd block sizes.
+    for (int quality = 0; quality < 3; ++quality)
+    {
+        DefaultEqualizerAudioProcessor p;
+        for (int b = 1; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
+        setPlain(p, "linear_quality", (float)quality); setPlain(p, "linear_phase", 1.0f);
+        p.prepareToPlay(48000.0, 257); juce::Thread::sleep(120);
+        constexpr int total = 5000;
+        std::vector<float> rendered((size_t)total, 0.0f);
+        juce::AudioBuffer<float> block(2, 257); juce::MidiBuffer midi;
+        int written = 0;
+        while (written < total)
+        {
+            block.clear();
+            if (written == 0) { block.setSample(0, 0, 1.0f); block.setSample(1, 0, 1.0f); }
+            p.processBlock(block, midi);
+            const int copy = std::min(257, total - written);
+            for (int i = 0; i < copy; ++i) rendered[(size_t)(written + i)] = block.getSample(0, i);
+            written += copy;
+        }
+        int peak = 0; double energy = 0.0;
+        for (int i = 0; i < total; ++i)
+        {
+            CHECK(std::isfinite(rendered[(size_t)i]), "linear phase output remains finite");
+            energy += (double)rendered[(size_t)i] * rendered[(size_t)i];
+            if (std::abs(rendered[(size_t)i]) > std::abs(rendered[(size_t)peak])) peak = i;
+        }
+        CHECK(energy > 0.1 && energy < 2.0, "linear phase quality produces a sane non-silent impulse");
+        CHECK(std::abs(peak - p.getLatencySamples()) <= 1,
+              "linear phase quality impulse peak matches reported latency");
+    }
+
     // v2 state round-trip preserves continuous slope and per-band Side mode.
     {
         DefaultEqualizerAudioProcessor source;
         setPlain(source, id(3, "slope"), 37.3f);
         setPlain(source, id(3, "ch"), 4.0f);
         setPlain(source, id(3, "drive_mix"), 42.5f);
-        setPlain(source, id(3, "dyn_lookahead"), 1.0f);
+        setPlain(source, id(3, "dyn_lookahead"), 5.0f);
         juce::MemoryBlock state;
         source.getStateInformation(state);
         DefaultEqualizerAudioProcessor restored;
@@ -280,7 +392,7 @@ int main()
               "per-band Side routing survives state round-trip");
         CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "drive_mix"))->load() - 42.5f) < 0.02f,
               "drive Mix survives state round-trip");
-        CHECK(restored.apvts.getRawParameterValue(id(3, "dyn_lookahead"))->load() > 0.5f,
+        CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "dyn_lookahead"))->load() - 5.0f) < 0.01f,
               "per-band lookahead survives state round-trip");
     }
 
@@ -323,21 +435,49 @@ int main()
     }
 
 
-    // A/B slots are independent full audio states and both survive project recall.
+    // Reusing a deleted slot must never resurrect its previous routing, dynamic
+    // or drive state. A graph-created band starts from parameter defaults.
     {
-        DefaultEqualizerAudioProcessor source;
-        setPlain(source, id(1, "gain"), 7.25f); source.storeSnapshot(true);
-        setPlain(source, id(1, "gain"), -5.5f); source.storeSnapshot(false);
-        source.snapshotB = source.apvts.copyState(); source.isSlotA = false;
-        juce::MemoryBlock data; source.getStateInformation(data);
-        DefaultEqualizerAudioProcessor restored;
-        restored.setStateInformation(data.getData(), (int)data.getSize());
-        restored.recallSnapshot(true);
-        CHECK(std::abs(restored.apvts.getRawParameterValue(id(1, "gain"))->load() - 7.25f) < 0.02f,
-              "A/B recall restores slot A exactly");
-        restored.recallSnapshot(false);
-        CHECK(std::abs(restored.apvts.getRawParameterValue(id(1, "gain"))->load() + 5.5f) < 0.02f,
-              "A/B recall restores slot B exactly");
+        DefaultEqualizerAudioProcessor p;
+        setPlain(p, id(1, "dyn_on"), 1.0f);
+        setPlain(p, id(1, "dyn_thresh"), -41.0f);
+        setPlain(p, id(1, "drive"), 83.0f);
+        setPlain(p, id(1, "drive_mix"), 27.0f);
+        setPlain(p, id(1, "ch"), 4.0f);
+        p.resetBandToDefaults(0, false);
+        p.resetBandToDefaults(0, true, 777.0f, -3.5f);
+        CHECK(p.apvts.getRawParameterValue(id(1, "dyn_on"))->load() < 0.5f,
+              "recreated band resets dynamic processing");
+        CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive"))->load()) < 0.01f,
+              "recreated band resets drive amount");
+        CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive_mix"))->load() - 100.0f) < 0.01f,
+              "recreated band restores default drive mix");
+        CHECK(p.apvts.getRawParameterValue(id(1, "ch"))->load() < 0.5f,
+              "recreated band restores Stereo routing");
+        CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "freq"))->load() - 777.0f) < 0.1f,
+              "recreated band applies requested graph frequency");
+    }
+
+    // Schema-v3 A/B projects migrate the audible slot into schema-v5's single
+    // unambiguous audio state.
+    {
+        DefaultEqualizerAudioProcessor legacy;
+        setPlain(legacy, id(1, "gain"), 7.0f);
+        auto a = legacy.apvts.copyState(); a.setProperty("snapshotSlot", "A", nullptr);
+        setPlain(legacy, id(1, "gain"), -5.0f);
+        auto b = legacy.apvts.copyState(); b.setProperty("snapshotSlot", "B", nullptr);
+        juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
+        root.setProperty("schemaVersion", 3, nullptr); root.setProperty("activeSlot", "B", nullptr);
+        root.appendChild(a, nullptr); root.appendChild(b, nullptr);
+        juce::MemoryBlock encoded;
+        auto xml = root.createXml();
+        juce::AudioProcessor::copyXmlToBinary(*xml, encoded);
+        DefaultEqualizerAudioProcessor migrated;
+        migrated.setStateInformation(encoded.getData(), (int)encoded.getSize());
+        CHECK(std::abs(migrated.apvts.getRawParameterValue(id(1, "gain"))->load() + 5.0f) < 0.01f,
+              "schema-v3 migration preserves the previously active audible slot");
+        CHECK(migrated.apvts.getParameter(id(1, "link")) == nullptr,
+              "obsolete A/B link-group parameter is not published");
     }
 
     // Corrupt state must be rejected without altering a safe default.

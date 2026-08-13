@@ -15,9 +15,9 @@ filters, dynamic processing, interaction, and UI. Original history is retained.
 
 ## default_distortion
 
-Reused author-owned family design, click-free latency-aligned bypass, and
-adapted stateless Morph Soft Clip, Hard Clip, Recursive Fold, and Sine Fold
-per-band drive modes:
+Reused author-owned family design, click-free latency-aligned bypass, Smart
+Auto Gain interaction, and the first ten user-facing drive algorithms/control
+semantics (Soft Clip through Sine Erosion):
 
 - repository: https://github.com/lsooxlla8/default_distortion
 - revision: `d145fab57e943869939d6a987cc69f90d676a4ae`
@@ -45,12 +45,18 @@ smooth upper-frequency-only RBJ/matched blend were added. See
 
 ## ZLEqualizer
 
-Functional audit reference only; no source or branded assets were copied:
+Analyzer FFT normalisation, fractional-octave linear-power smoothing and decay
+architecture were adapted; no names, logos or branded assets were copied:
 
 - repository: https://github.com/ZL-Audio/ZLEqualizer
 - revision: `26b0ed14cbbac254344e37d872235ce349b79c26`
 - copyright: zsliu98 and contributors
 - license: GNU AGPL version 3
+
+Modified integration lives in `Source/DSP/SpectrumFIFO.h` and
+`Source/UI/ResponseCurveComponent.cpp`: JUCE FFT replaces ZL's SIMD FFT,
+triple-buffer publication remains from this project's FreeEQ8-derived path,
+and the UI uses the default_* monochrome dual-spectrum presentation.
 
 ## JUCE
 

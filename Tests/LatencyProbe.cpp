@@ -7,10 +7,10 @@ int main()
     for (int order = 1; order <= 3; ++order)
     {
         juce::dsp::Oversampling<float> os(
-            2, order, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true);
+            2, order, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true);
         os.initProcessing(512);
         const auto latency = juce::roundToInt(os.getLatencyInSamples());
-        std::printf("drive_%dx=%d\n", 1 << order, latency);
+        std::printf("global_%dx=%d\n", 1 << order, latency);
         if (latency <= 0)
             return 1;
     }

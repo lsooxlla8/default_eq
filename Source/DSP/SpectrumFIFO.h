@@ -39,13 +39,14 @@
 class SpectrumFIFO
 {
 public:
-    static constexpr int fftOrder  = 12;             // 4096-point FFT
-    static constexpr int fftSize   = 1 << fftOrder;  // 4096
-    static constexpr int numBins   = fftSize / 2;    // 2048
+    static constexpr int fftOrder  = 13;             // 8192-point maximum FFT
+    static constexpr int fftSize   = 1 << fftOrder;
+    static constexpr int numBins   = fftSize / 2;
+    static constexpr int publishHop = fftSize / 4;
     static constexpr int numSlots  = 3;
 
     SpectrumFIFO()
-        : fftLow(10), fftMedium(11), fftHigh(12)
+        : fftLow(11), fftMedium(12), fftHigh(13)
     {
         for (auto& buf : slots)
             std::fill(buf.begin(), buf.end(), 0.0f);
@@ -59,12 +60,14 @@ public:
         readSlot  = 2;
         fresh.store(false, std::memory_order_relaxed);
         fifoWriteIndex.store(0, std::memory_order_relaxed);
+        samplesSincePublish = 0;
     }
 
     // Reset the FIFO state (call from prepareToPlay or when going offline/online).
     void reset()
     {
         fifoWriteIndex.store(0, std::memory_order_relaxed);
+        samplesSincePublish = 0;
         writeSlot = 0;
         midSlot.store(1, std::memory_order_relaxed);
         readSlot  = 2;
@@ -80,10 +83,12 @@ public:
         int idx = fifoWriteIndex.load(std::memory_order_relaxed);
         for (int i = 0; i < numSamples; ++i)
         {
-            slots[(size_t)writeSlot][(size_t)idx] = data[i];
-            if (++idx >= fftSize)
+            capture[(size_t)idx] = data[i];
+            if (++idx >= fftSize) idx = 0;
+            if (++samplesSincePublish >= publishHop)
             {
-                idx = 0;
+                samplesSincePublish = 0;
+                snapshotCapture(idx);
                 writerFlip();
             }
         }
@@ -96,10 +101,12 @@ public:
         int idx = fifoWriteIndex.load(std::memory_order_relaxed);
         for (int i = 0; i < numSamples; ++i)
         {
-            slots[(size_t)writeSlot][(size_t)idx] = (L[i] + R[i]) * 0.5f;
-            if (++idx >= fftSize)
+            capture[(size_t)idx] = (L[i] + R[i]) * 0.5f;
+            if (++idx >= fftSize) idx = 0;
+            if (++samplesSincePublish >= publishHop)
             {
-                idx = 0;
+                samplesSincePublish = 0;
+                snapshotCapture(idx);
                 writerFlip();
             }
         }
@@ -119,7 +126,7 @@ public:
         readSlot = midSlot.exchange(readSlot, std::memory_order_acquire);
 
         const int resolution = resolutionIndex.load(std::memory_order_relaxed);
-        const int activeOrder = resolution == 0 ? 10 : (resolution == 1 ? 11 : 12);
+        const int activeOrder = resolution == 0 ? 11 : (resolution == 1 ? 12 : 13);
         const int activeSize = 1 << activeOrder;
         currentBins = activeSize / 2;
         const auto& src = slots[(size_t)readSlot];
@@ -131,14 +138,30 @@ public:
             const float hann = 0.5f * (1.0f - std::cos(juce::MathConstants<float>::twoPi * phase));
             fftData[(size_t)i] = src[(size_t)(sourceOffset + i)] * hann;
         }
-        if (activeOrder == 10) fftLow.performFrequencyOnlyForwardTransform(fftData.data());
-        else if (activeOrder == 11) fftMedium.performFrequencyOnlyForwardTransform(fftData.data());
+        if (activeOrder == 11) fftLow.performFrequencyOnlyForwardTransform(fftData.data());
+        else if (activeOrder == 12) fftMedium.performFrequencyOnlyForwardTransform(fftData.data());
         else fftHigh.performFrequencyOnlyForwardTransform(fftData.data());
 
+        // ZLEqualizer-inspired perceptual smoothing: average linear power over
+        // a constant fractional-octave width before converting to dB. This
+        // avoids the jagged low-resolution trace and the bias caused by
+        // averaging already-logarithmic values.
+        cumulativePower[0] = 0.0;
         for (int i = 0; i < currentBins; ++i)
         {
-            const float mag = fftData[(size_t)i] / (float)activeSize;
-            outputMagnitudes[(size_t)i] = 20.0f * std::log10(std::max(mag, 1e-7f));
+            const float normalized = fftData[(size_t)i] * (4.0f / (float)activeSize);
+            linearPower[(size_t)i] = normalized * normalized;
+            cumulativePower[(size_t)i + 1] = cumulativePower[(size_t)i] + linearPower[(size_t)i];
+        }
+        const double octaveWidth = resolution == 0 ? 1.0 / 6.0
+                                  : resolution == 1 ? 1.0 / 12.0 : 1.0 / 24.0;
+        const double factor = std::pow(2.0, octaveWidth * 0.5);
+        for (int i = 0; i < currentBins; ++i)
+        {
+            const int lo = std::clamp((int)std::floor((double)i / factor), 0, currentBins - 1);
+            const int hi = std::clamp((int)std::ceil((double)i * factor) + 1, lo + 1, currentBins);
+            const double power = (cumulativePower[(size_t)hi] - cumulativePower[(size_t)lo]) / (double)(hi - lo);
+            outputMagnitudes[(size_t)i] = 10.0f * std::log10((float)std::max(power, 1.0e-14));
         }
 
         return true;
@@ -157,16 +180,27 @@ private:
         fresh.store(true, std::memory_order_release);
     }
 
+    void snapshotCapture(int oldestSample)
+    {
+        auto& destination = slots[(size_t) writeSlot];
+        for (int i = 0; i < fftSize; ++i)
+            destination[(size_t)i] = capture[(size_t)((oldestSample + i) % fftSize)];
+    }
+
     juce::dsp::FFT fftLow, fftMedium, fftHigh;
 
     std::array<std::array<float, fftSize>, numSlots> slots {};
+    std::array<float, fftSize>                        capture {};
     std::array<float, fftSize * 2>                   fftData {};
     std::array<float, numBins>                       outputMagnitudes {};
+    std::array<float, numBins>                       linearPower {};
+    std::array<double, numBins + 1>                  cumulativePower {};
 
     std::atomic<int>  fifoWriteIndex { 0 };
     std::atomic<int>  midSlot        { 1 };
     std::atomic<bool> fresh          { false };
-    std::atomic<int> resolutionIndex { 2 };
+    std::atomic<int> resolutionIndex { 1 };
+    int samplesSincePublish = 0;
     int currentBins = numBins;
 
     // Producer-local / consumer-local slot indices. Only touched by their

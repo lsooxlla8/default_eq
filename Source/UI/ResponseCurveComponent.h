@@ -5,6 +5,7 @@
 #include "../DSP/Biquad.h"
 #include "../Config.h"
 #include "../DSP/EQBand.h"
+#include "../DSP/SpectrumFIFO.h"
 
 class DefaultEqualizerAudioProcessor;
 
@@ -37,14 +38,19 @@ public:
     void setAnalyzerVisible(bool shouldShow) { analyzerVisible = shouldShow; repaint(); }
     void setAnalyzerSources(bool input, bool output) { showInputSpectrum = input; showOutputSpectrum = output; repaint(); }
     void setSpectrumFrozen(bool frozen) { spectrumFrozen = frozen; }
+    void dismissNumericEditor();
+    bool isNumericEditorComponent(const juce::Component* component) const noexcept
+    {
+        return component == &numericEditor || numericEditor.isParentOf(component);
+    }
     void setAnalyzerSettings(float floorDb, float rangeDb, float speed, float averaging,
-                             int resolution, float tilt, bool holdPeaks, bool piano)
+                             int resolution, float tilt, bool holdPeaks)
     {
         analyzerFloorDb = floorDb; analyzerRangeDb = rangeDb;
         analyzerDecayDb = juce::jmap(speed, 0.0f, 100.0f, 0.15f, 4.0f);
         analyzerAveraging = juce::jmap(averaging, 0.0f, 100.0f, 1.0f, 0.08f);
         analyzerStride = resolution == 0 ? 4 : (resolution == 1 ? 2 : 1);
-        analyzerTiltDbPerOct = tilt; peakHold = holdPeaks; pianoVisible = piano;
+        analyzerTiltDbPerOct = tilt; peakHold = holdPeaks;
         if (!peakHold) { std::fill(std::begin(peakInputSpectrum), std::end(peakInputSpectrum), -120.0f);
                          std::fill(std::begin(peakOutputSpectrum), std::end(peakOutputSpectrum), -120.0f); }
         repaint();
@@ -62,7 +68,7 @@ private:
     float perBandMagnitudes[kNumBands][numPoints] = {};
 
     // Spectrum analyzer display data
-    static constexpr int maxSpectrumBins = 2048;
+    static constexpr int maxSpectrumBins = SpectrumFIFO::numBins;
     float inputSpectrum[maxSpectrumBins] = {}, outputSpectrum[maxSpectrumBins] = {};
     float smoothedInputSpectrum[maxSpectrumBins] = {}, smoothedOutputSpectrum[maxSpectrumBins] = {};
     float peakInputSpectrum[maxSpectrumBins] = {}, peakOutputSpectrum[maxSpectrumBins] = {};
@@ -83,7 +89,7 @@ private:
     float analyzerFloorDb = -90.0f, analyzerRangeDb = 90.0f, analyzerDecayDb = 1.5f;
     float analyzerAveraging = 0.35f, analyzerTiltDbPerOct = 0.0f;
     int analyzerStride = 1;
-    bool peakHold = false, pianoVisible = false;
+    bool peakHold = false;
 
     // Coordinate mapping
     float freqToX(float freqHz) const;
@@ -106,7 +112,6 @@ private:
     void paintNodes(juce::Graphics& g);
     void paintHoverCard(juce::Graphics& g);
 #if DEFAULT_EQUALIZER_FULL
-    void paintPianoRoll(juce::Graphics& g);
     void paintCollisionWarnings(juce::Graphics& g);
 #endif
 

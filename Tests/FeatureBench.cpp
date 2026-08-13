@@ -423,49 +423,7 @@ static void bench_smoothing()
            "includes amortised bq.set() cost");
 }
 
-// --- 8. Band linking — propagation overhead ----------------------------------
-
-static void bench_band_linking()
-{
-    // Band linking fires on parameter change, not per sample.
-    // Measure the propagation loop: iterate 8 bands, check link group, update.
-    constexpr int ITERS = 1000000;
-
-    float gains[8] = { 0, 3, -3, 6, -6, 3, 0, -3 };
-    int   groups[8] = { 1, 1, 0,  1,  0, 1, 2,  2  };
-    float results_arr[8];
-
-    auto fn = [&]() {
-        for (int iter = 0; iter < ITERS; ++iter)
-        {
-            float delta = 0.5f;
-            int srcGroup = 1;
-            float src_gain = gains[0] + delta;
-            for (int i = 0; i < 8; ++i)
-            {
-                if (groups[i] == srcGroup)
-                    results_arr[i] = std::clamp(gains[i] + delta, -24.0f, 24.0f);
-            }
-        }
-    };
-
-    // This is per-event not per-sample; express as µs per link event
-    auto t0 = Clock::now();
-    for (int warmup = 0; warmup < 4; ++warmup) fn();
-    t0 = Clock::now();
-    fn();
-    auto t1 = Clock::now();
-    double us = std::chrono::duration<double, std::nano>(t1 - t0).count() / ITERS / 1000.0;
-
-    // Store as ns/sample but note it's per-event
-    double ns_fake = us * 1000.0 / 512.0; // amortised if one link per block
-    char note[128];
-    std::snprintf(note, sizeof(note), "%.4f us per link-propagation event (8-band scan)", us);
-    record("Band linking (per event)", "Ratio-based freq, delta-based gain/Q propagation",
-           ns_fake, note);
-}
-
-// --- 9. Adaptive Q scaling ---------------------------------------------------
+// --- 8. Adaptive Q scaling ---------------------------------------------------
 
 static void bench_adaptive_q()
 {
@@ -1357,7 +1315,6 @@ int main(int argc, char** argv)
     bench_mid_side();
     bench_oversampling_cost();
     bench_smoothing();
-    bench_band_linking();
     bench_adaptive_q();
     bench_saturation();
     bench_spectrum_fifo();

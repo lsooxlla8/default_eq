@@ -170,6 +170,15 @@ void ResponseCurveComponent::updateResponseCurve()
             const float logMax = std::log10(maxFreq);
             const float f = std::pow(10.0f, logMin + (float)i / (float)(numPoints - 1) * (logMax - logMin));
 
+            if (tp == Biquad::Type::HighPass || tp == Biquad::Type::LowPass)
+            {
+                const double ratio = tp == Biquad::Type::HighPass ? (double)freq / f : f / (double)freq;
+                const double exponent = std::max(0.9966, (double)proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load() / 3.01029995664);
+                const float mag = (float)(-10.0 * std::log10(1.0 + std::pow(ratio, exponent)));
+                perBandMagnitudes[b][i] = mag;
+                magnitudes[i] += mag;
+                continue;
+            }
             const float baseMag = computeMagnitudeDb(tempBq, f, sr);
             float fractionalMag = 0.0f;
             if (fractional > 0.0001f)
@@ -206,9 +215,6 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     g.fillAll(bg);
 
     paintGrid(g);
-#if DEFAULT_EQUALIZER_FULL
-    if (pianoVisible) paintPianoRoll(g);
-#endif
     if (analyzerVisible) paintSpectrum(g);
     paintMatchPreview(g);
     paintBandCurves(g);
@@ -564,6 +570,8 @@ int ResponseCurveComponent::hitTestNode(float mx, float my) const
 // ── Mouse interaction ──────────────────────────────────────────────
 void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
 {
+    if (numericEditor.isVisible() && !numericEditor.getBounds().contains(e.getPosition()))
+        dismissNumericEditor();
     const int hit = hitTestNode((float)e.x, (float)e.y);
 
     if (e.mods.isPopupMenu() && hit >= 0)
@@ -574,6 +582,7 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
         const int idx = hit + 1;
 
         juce::PopupMenu menu;
+        menu.setLookAndFeel(&getLookAndFeel());
         menu.addItem(1, "Enable/Disable Band " + juce::String(idx));
         menu.addSeparator();
         menu.addItem(10, "Bell");
@@ -615,23 +624,13 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
             }
             else if (result == 2)
             {
-                if (auto* param = proc.apvts.getParameter(bandId(idx, "on")))
-                    param->setValueNotifyingHost(0.0f);
+                proc.undoManager.beginNewTransaction("Delete EQ band");
+                proc.resetBandToDefaults(idx - 1, false);
             }
             else if (result == 3)
             {
                 proc.undoManager.beginNewTransaction("Reset EQ band");
-                const std::pair<const char*, float> defaults[] = {
-                    {"on", 1.0f}, {"type", 0.0f}, {"gain", 0.0f}, {"q", 1.0f}, {"slope", 12.0f},
-                    {"ch", 0.0f}, {"dyn_on", 0.0f}, {"drive", 0.0f}, {"drive_mix", 100.0f}, {"drive_output", 0.0f}
-                };
-                for (const auto& item : defaults)
-                    if (auto* parameter = proc.apvts.getParameter(bandId(idx, item.first)))
-                    {
-                        parameter->beginChangeGesture();
-                        parameter->setValueNotifyingHost(parameter->convertTo0to1(item.second));
-                        parameter->endChangeGesture();
-                    }
+                proc.resetBandToDefaults(idx - 1, true);
             }
             else if (result >= 10 && result <= 16)
             {
@@ -649,12 +648,19 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
                 proc.undoManager.beginNewTransaction(result == 30 ? "Bypass selected bands" : "Delete selected bands");
                 for (int b = 0; b < kNumBands; ++b)
                     if (selection[(size_t)b])
+                    {
+                        if (result == 31)
+                        {
+                            proc.resetBandToDefaults(b, false);
+                            continue;
+                        }
                         if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "on")))
                         {
                             parameter->beginChangeGesture();
                             parameter->setValueNotifyingHost(0.0f);
                             parameter->endChangeGesture();
                         }
+                    }
             }
             else if (result >= 40 && result <= 44)
             {
@@ -751,7 +757,11 @@ void ResponseCurveComponent::mouseDoubleClick(const juce::MouseEvent& e)
     const int existing = hitTestNode((float)e.x, (float)e.y);
     if (existing >= 0)
     {
-        showNumericEditor(existing, "freq", (float)e.x, (float)e.y);
+        proc.undoManager.beginNewTransaction("Delete EQ band");
+        proc.resetBandToDefaults(existing, false);
+        selection[(size_t) existing] = false;
+        selectedBand = -1;
+        repaint();
         return;
     }
 
@@ -766,19 +776,9 @@ void ResponseCurveComponent::mouseDoubleClick(const juce::MouseEvent& e)
         return;
 
     proc.undoManager.beginNewTransaction("Create EQ band");
-    const int idx = freeBand + 1;
-    const auto set = [this, idx](const char* suffix, float plainValue)
-    {
-        if (auto* p = proc.apvts.getParameter(bandId(idx, suffix)))
-        {
-            p->beginChangeGesture();
-            p->setValueNotifyingHost(p->convertTo0to1(plainValue));
-            p->endChangeGesture();
-        }
-    };
-    set("freq", std::clamp(xToFreq((float)e.x), minFreq, maxFreq));
-    set("gain", std::clamp(yToDb((float)e.y), minDb, maxDb));
-    set("on", 1.0f);
+    proc.resetBandToDefaults(freeBand, true,
+        std::clamp(xToFreq((float)e.x), minFreq, maxFreq),
+        std::clamp(yToDb((float)e.y), minDb, maxDb));
     selectedBand = freeBand;
     repaint();
 }
@@ -826,6 +826,12 @@ void ResponseCurveComponent::commitNumericEditor()
     grabKeyboardFocus();
 }
 
+void ResponseCurveComponent::dismissNumericEditor()
+{
+    numericParameter = nullptr;
+    numericEditor.setVisible(false);
+}
+
 void ResponseCurveComponent::mouseMove(const juce::MouseEvent& e)
 {
     const int hit = hitTestNode((float)e.x, (float)e.y);
@@ -853,7 +859,7 @@ void ResponseCurveComponent::mouseWheelMove(const juce::MouseEvent& e,
     selectedBand = hit;
     if (!selection[(size_t)hit]) { selection.fill(false); selection[(size_t)hit] = true; }
     const float oldQ = proc.apvts.getRawParameterValue(bandId(hit + 1, "q"))->load();
-    const float factor = std::pow(2.0f, wheel.deltaY * 0.55f);
+    const float factor = std::pow(2.0f, wheel.deltaY * 0.9f);
     juce::ignoreUnused(oldQ);
     proc.undoManager.beginNewTransaction(std::count(selection.begin(), selection.end(), true) > 1
         ? "Adjust selected band Q" : "Adjust band Q");
@@ -870,27 +876,6 @@ void ResponseCurveComponent::mouseWheelMove(const juce::MouseEvent& e,
 }
 
 #if DEFAULT_EQUALIZER_FULL
-// ── Piano roll overlay (C1-C8 note lines) ─────────────────────────
-void ResponseCurveComponent::paintPianoRoll(juce::Graphics& g)
-{
-    const float h = (float)getHeight();
-    g.setFont(8.0f);
-
-    // C1 = 32.7 Hz through C8 = 4186 Hz
-    static const float cNotes[] = { 32.70f, 65.41f, 130.81f, 261.63f, 523.25f, 1046.50f, 2093.00f, 4186.01f };
-    static const char* cLabels[] = { "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8" };
-
-    for (int i = 0; i < 8; ++i)
-    {
-        const float x = freqToX(cNotes[i]);
-        const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
-        g.setColour(fg.withAlpha(0.12f));
-        g.drawVerticalLine((int)x, 0.0f, h);
-        g.setColour(fg.withAlpha(0.25f));
-        g.drawText(cLabels[i], (int)x + 2, 2, 18, 10, juce::Justification::left);
-    }
-}
-
 // ── Collision detection (warn when bands overlap within 1/3 octave) ──
 void ResponseCurveComponent::paintCollisionWarnings(juce::Graphics& g)
 {

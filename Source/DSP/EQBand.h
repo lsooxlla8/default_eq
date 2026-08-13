@@ -3,6 +3,7 @@
 #include "Biquad.h"
 #include "../Config.h"
 #include <array>
+#include <vector>
 
 // Channel routing for Mid/Side and L/R independent processing.
 enum class ChannelRoute { Stereo = 0, Left = 1, Right = 2, Mid = 3, Side = 4 };
@@ -10,8 +11,8 @@ enum class ChannelRoute { Stereo = 0, Left = 1, Right = 2, Mid = 3, Side = 4 };
 // Saturation / waveshaper modes retained and expanded from the FreeEQ8 base.
 enum class SaturationType
 {
-    Tanh = 0, Tube, Tape, Transistor,
-    MorphSoftClip, HardClip, RecursiveFold, SineFold
+    SoftClip = 0, HardClip, DiodeClipper, TriodeStage, TransistorFET,
+    TapeHysteresis, HarmonicMorph, PhaseDistortion, SpectralClip, SineErosion
 };
 
 // EQBand with lightweight parameter smoothing and cascaded biquads.
@@ -35,7 +36,10 @@ struct EQBand
     float driveAmount = 0.0f;
     float driveMix = 1.0f;
     float driveOutputGain = 1.0f;
-    SaturationType satType = SaturationType::Tanh;
+    SaturationType satType = SaturationType::SoftClip;
+    float driveCharacter = 0.0f;
+    float driveSecondary = 0.0f;
+    float driveTone = 0.0f;
 
     // Dynamic EQ state
     bool dynEnabled = false;
@@ -73,6 +77,9 @@ struct EQBand
         for (auto& bq : biquads)
             bq.reset();
         scBiquad.reset();
+        auditionBiquad.reset();
+        driveBandBiquad.reset();
+        for (auto& cut : cutStages) cut.reset();
 
         freqSm.reset(sampleRate, 0.02);   // 20ms
         qSm.reset(sampleRate, 0.02);
@@ -89,6 +96,12 @@ struct EQBand
         envLevel = 0.0f;
         dynGainMod = 0.0f;
         intervalCounter = 0;
+        driveMemoryL = driveMemoryR = driveToneStateL = driveToneStateR = 0.0f;
+        drivePhaseL = drivePhaseR = 0.0;
+        driveDelayPosL = driveDelayPosR = 0;
+        const size_t maximumDelay = (size_t)std::ceil(sampleRate * 8.0 * 0.05) + 2u;
+        driveDelayL.assign(maximumDelay, 0.0f);
+        driveDelayR.assign(maximumDelay, 0.0f);
     }
 
     void beginBlock(double sampleRate, bool isEnabled, Biquad::Type newType,
@@ -98,11 +111,14 @@ struct EQBand
     {
         enabled = isEnabled;
         type = newType;
-        slopeDbPerOct = std::clamp(newSlopeDbPerOct, 0.0f, 48.0f);
+        slopeDbPerOct = std::clamp(newSlopeDbPerOct, 3.0f, 48.0f);
         const float stageAmount = slopeDbPerOct / 12.0f;
         fullStages = std::clamp((int) std::floor(stageAmount), 0, maxStages);
         fractionalStage = stageAmount - (float) fullStages;
         numStages = std::clamp(fullStages + (fractionalStage > 0.0001f ? 1 : 0), 0, maxStages);
+        const float cutStageAmount = slopeDbPerOct / 6.0f;
+        cutFullStages = std::clamp((int)std::floor(cutStageAmount), 0, maxCutStages);
+        cutFractionalStage = cutStageAmount - (float)cutFullStages;
         channelRoute = newRoute;
         decrampEnabled = useDecramping;
 
@@ -236,31 +252,45 @@ struct EQBand
         }
 
         if (driveAmount > 0.001f)
-        {
-            const float preDriveL = l;
-            const float preDriveR = r;
-            switch (channelRoute)
-            {
-                case ChannelRoute::Stereo: applySaturation(l, r); break;
-                case ChannelRoute::Left:   l = saturateOne(l); break;
-                case ChannelRoute::Right:  r = saturateOne(r); break;
-                case ChannelRoute::Mid:
-                case ChannelRoute::Side:
-                    // Mid/Side drive follows the already reconstructed routed
-                    // filter signal; filtering remains exactly neutral at 0 dB.
-                    applyRoutedSaturation(l, r, channelRoute == ChannelRoute::Mid);
-                    break;
-            }
+            applySpectralDrive(l, r);
+    }
 
-            l = (preDriveL + driveMix * (l - preDriveL)) * driveOutputGain;
-            r = (preDriveR + driveMix * (r - preDriveR)) * driveOutputGain;
-            l = dcBlock(l, dcXL, dcYL);
-            r = dcBlock(r, dcXR, dcYR);
+    // A solo is an audition operation, not merely "disable the other EQ
+    // stages": it returns only the frequency window represented by this node.
+    inline void processAudition(float& l, float& r)
+    {
+        switch (channelRoute)
+        {
+            case ChannelRoute::Stereo:
+                l = auditionBiquad.processL(l); r = auditionBiquad.processR(r); break;
+            case ChannelRoute::Left:
+                l = auditionBiquad.processL(l); r = 0.0f; break;
+            case ChannelRoute::Right:
+                r = auditionBiquad.processR(r); l = 0.0f; break;
+            case ChannelRoute::Mid:
+            case ChannelRoute::Side:
+            {
+                constexpr float invSqrt2 = 0.7071067811865475f;
+                float mid = (l + r) * invSqrt2;
+                float side = (l - r) * invSqrt2;
+                if (channelRoute == ChannelRoute::Mid)
+                {
+                    mid = auditionBiquad.processL(mid); side = 0.0f;
+                }
+                else
+                {
+                    side = auditionBiquad.processR(side); mid = 0.0f;
+                }
+                l = (mid + side) * invSqrt2;
+                r = (mid - side) * invSqrt2;
+            } break;
         }
     }
 
     inline float processLeft(float x)
     {
+        if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
+            return processCut(x, false);
         for (int s = 0; s < fullStages; ++s)
             x = biquads[(size_t)s].processL(x);
         if (fractionalStage > 0.0001f && fullStages < maxStages)
@@ -274,6 +304,8 @@ struct EQBand
 
     inline float processRight(float x)
     {
+        if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
+            return processCut(x, true);
         for (int s = 0; s < fullStages; ++s)
             x = biquads[(size_t)s].processR(x);
         if (fractionalStage > 0.0001f && fullStages < maxStages)
@@ -285,118 +317,177 @@ struct EQBand
         return x;
     }
 
-    inline float saturateOne(float x) const
+    inline float saturateOne(float x, bool rightState = false)
     {
-        float other = 0.0f;
-        applySaturation(x, other);
+        const float d = 1.0f + driveAmount * 15.0f;
+        const float c = std::clamp(driveCharacter, 0.0f, 1.0f);
+        float& memory = rightState ? driveMemoryR : driveMemoryL;
+        switch (satType)
+        {
+            case SaturationType::SoftClip:
+            {
+                const float cubic = std::clamp(x * d - std::pow(x * d, 3.0f) / 3.0f,
+                                                -2.0f / 3.0f, 2.0f / 3.0f) * 1.5f;
+                return juce::jmap(c, std::tanh(x * d), cubic);
+            }
+            case SaturationType::HardClip:
+                return std::clamp(juce::jmap(c, x * d, std::tanh(x * d)), -1.0f, 1.0f);
+            case SaturationType::DiodeClipper:
+            {
+                const float driven = x * d;
+                const float feedback = std::atan(1.8f * driven) / std::atan(1.8f);
+                const float ground = std::copysign(1.0f - std::exp(-2.8f * std::abs(driven)), driven);
+                return juce::jmap(c, feedback, ground);
+            }
+            case SaturationType::TriodeStage:
+            {
+                const float bias = (c * 2.0f - 1.0f) * 0.58f;
+                const float grid = x * d + bias;
+                const float curve = 1.08f * grid + 0.34f * grid * grid - 0.055f * grid * grid * grid;
+                const float zero = std::tanh(1.08f * bias + 0.34f * bias * bias - 0.055f * bias * bias * bias);
+                return std::clamp((std::tanh(curve) - zero) / std::max(0.1f, 1.0f - std::abs(zero)), -1.0f, 1.0f);
+            }
+            case SaturationType::TransistorFET:
+            {
+                const float gateBias = -0.12f + 1.18f * (c * 2.0f - 1.0f);
+                const float gate = std::max(0.0f, x * d + gateBias);
+                const float base = std::max(0.0f, gateBias);
+                return std::tanh(2.2f * (gate * gate - base * base) / (1.0f + 0.55f * std::abs(c * 2.0f - 1.0f)));
+            }
+            case SaturationType::TapeHysteresis:
+            {
+                // Stable stateful hysteresis loop using the same Drive /
+                // Hysteresis / Bias semantics as default_distortion.
+                const float bias = (driveSecondary * 2.0f - 1.0f) * 0.18f;
+                const float target = std::tanh((x * d + bias) + c * 0.8f * memory);
+                memory += (0.02f + 0.18f * (1.0f - c)) * (target - memory);
+                return 0.72f * target + 0.28f * memory;
+            }
+            case SaturationType::HarmonicMorph:
+            {
+                const float bounded = std::tanh(x * d);
+                const float second = 2.0f * bounded * bounded - 1.0f;
+                const float third = 4.0f * bounded * bounded * bounded - 3.0f * bounded;
+                return juce::jmap(c, second, third);
+            }
+            case SaturationType::PhaseDistortion:
+                return processModulatedDelay(x, c, driveAmount, 0.0f, rightState);
+            case SaturationType::SpectralClip:
+            {
+                // Per-band magnitude shaper. The surrounding band extractor
+                // supplies the spectral isolation; Character controls knee.
+                const float threshold = juce::jmap(c, 0.9f, 0.08f);
+                const float driven = x * d;
+                const float mag = std::abs(driven);
+                const float clipped = threshold * std::tanh(mag / std::max(0.001f, threshold));
+                return std::copysign(clipped, driven);
+            }
+            case SaturationType::SineErosion:
+                return processModulatedDelay(x, c, driveAmount, driveSecondary, rightState);
+        }
         return x;
     }
 
-    inline void applyRoutedSaturation(float& l, float& r, bool midRoute) const
+    inline void applyRoutedSaturation(float& l, float& r, bool midRoute)
     {
         constexpr float invSqrt2 = 0.7071067811865475f;
         float mid = (l + r) * invSqrt2;
         float side = (l - r) * invSqrt2;
-        if (midRoute) mid = saturateOne(mid); else side = saturateOne(side);
+        if (midRoute) mid = saturateOne(mid, false); else side = saturateOne(side, true);
         l = (mid + side) * invSqrt2;
         r = (mid - side) * invSqrt2;
     }
 
     // Saturation waveshaper — applies gain-compensated nonlinearity
-    inline void applySaturation(float& l, float& r) const
+    inline void applySaturation(float& l, float& r)
     {
         const float d = 1.0f + driveAmount * 9.0f; // 1x to 10x drive
 
-        switch (satType)
-        {
-            case SaturationType::Tanh:
-            {
-                const float invTanhD = 1.0f / std::tanh(d);
-                l = std::tanh(l * d) * invTanhD;
-                r = std::tanh(r * d) * invTanhD;
-                break;
-            } break;
-
-            case SaturationType::Tube:
-            {
-                // Asymmetric soft clip: even harmonics from positive bias
-                auto tube = [d](float x) -> float {
-                    float xd = x * d;
-                    // Positive half clips softer (tube-style asymmetry)
-                    if (xd >= 0.0f)
-                        return xd / (1.0f + xd);
-                    else
-                        return xd / (1.0f - 0.5f * xd);
-                };
-                float normL = tube(1.0f);  // normalise so unity input → unity output
-                l = tube(l) / normL;
-                r = tube(r) / normL;
-            } break;
-
-            case SaturationType::Tape:
-            {
-                // Arctangent saturation with bias — warm, smooth
-                const float invAtanD = 1.0f / std::atan(d);
-                l = std::atan(l * d) * invAtanD;
-                r = std::atan(r * d) * invAtanD;
-            } break;
-
-            case SaturationType::Transistor:
-            {
-                // Hard clip — aggressive, odd harmonics
-                const float invD = 1.0f / d;
-                l = std::clamp(l * d, -1.0f, 1.0f) * invD;
-                r = std::clamp(r * d, -1.0f, 1.0f) * invD;
-            } break;
-
-            // Adapted from the author-owned default_distortion distortion
-            // family (revision recorded in THIRD_PARTY_NOTICES.md). These are
-            // deliberately reduced, stateless per-band variants: no branding,
-            // tables, or engine state is copied into this EQ.
-            case SaturationType::MorphSoftClip:
-            {
-                const auto shape = [d](float x)
-                {
-                    const float driven = x * d;
-                    const float cubic = std::clamp(driven - driven * driven * driven / 3.0f, -2.0f / 3.0f, 2.0f / 3.0f) * 1.5f;
-                    const float soft = std::tanh(driven) / std::tanh(d);
-                    return 0.5f * (soft + cubic);
-                };
-                l = shape(l); r = shape(r);
-            } break;
-
-            case SaturationType::HardClip:
-                l = std::clamp(l * d, -1.0f, 1.0f);
-                r = std::clamp(r * d, -1.0f, 1.0f);
-                break;
-
-            case SaturationType::RecursiveFold:
-            {
-                const auto fold = [d](float x)
-                {
-                    float value = x * d;
-                    for (int iteration = 0; iteration < 12; ++iteration)
-                    {
-                        if (value > 1.0f) value = 2.0f - value;
-                        else if (value < -1.0f) value = -2.0f - value;
-                        else break;
-                    }
-                    return std::clamp(value, -1.0f, 1.0f);
-                };
-                l = fold(l); r = fold(r);
-            } break;
-
-            case SaturationType::SineFold:
-                l = std::sin(juce::MathConstants<float>::halfPi * l * d);
-                r = std::sin(juce::MathConstants<float>::halfPi * r * d);
-                break;
-        }
+        juce::ignoreUnused(d);
+        l = saturateOne(l, false);
+        r = saturateOne(r, true);
     }
 
 private:
     // Sidechain bandpass for dynamic EQ envelope (always RBJ — not audible)
     Biquad scBiquad;
+    Biquad auditionBiquad;
+    Biquad driveBandBiquad;
+    struct FirstOrderCut
+    {
+        float b0 = 1.0f, b1 = 0.0f, a1 = 0.0f;
+        float x1L = 0.0f, y1L = 0.0f, x1R = 0.0f, y1R = 0.0f;
+        void reset() { x1L = y1L = x1R = y1R = 0.0f; }
+        void set(bool highPass, double sampleRate, float frequency)
+        {
+            const float k = std::tan(juce::MathConstants<float>::pi
+                                      * std::clamp(frequency, 5.0f, (float)sampleRate * 0.49f)
+                                      / (float)sampleRate);
+            const float norm = 1.0f / (1.0f + k);
+            if (highPass) { b0 = norm; b1 = -norm; }
+            else          { b0 = k * norm; b1 = b0; }
+            a1 = (k - 1.0f) * norm;
+        }
+        float process(float x, bool right)
+        {
+            auto& x1 = right ? x1R : x1L;
+            auto& y1 = right ? y1R : y1L;
+            const float y = b0 * x + b1 * x1 - a1 * y1;
+            x1 = x; y1 = y;
+            return y;
+        }
+    };
+    static constexpr int maxCutStages = 8;
+    std::array<FirstOrderCut, maxCutStages> cutStages;
+    int cutFullStages = 2;
+    float cutFractionalStage = 0.0f;
     float dcXL = 0.0f, dcYL = 0.0f, dcXR = 0.0f, dcYR = 0.0f;
+    float driveMemoryL = 0.0f, driveMemoryR = 0.0f;
+    float driveToneStateL = 0.0f, driveToneStateR = 0.0f;
+    std::vector<float> driveDelayL, driveDelayR;
+    int driveDelayPosL = 0, driveDelayPosR = 0;
+    double drivePhaseL = 0.0, drivePhaseR = 0.0;
+
+    inline float processModulatedDelay(float x, float character, float depth,
+                                       float noiseMix, bool rightState)
+    {
+        auto& delay = rightState ? driveDelayR : driveDelayL;
+        auto& pos = rightState ? driveDelayPosR : driveDelayPosL;
+        auto& phase = rightState ? drivePhaseR : drivePhaseL;
+        auto& memory = rightState ? driveMemoryR : driveMemoryL;
+        const float frequency = character <= 0.5f
+            ? 4000.0f * character * character
+            : 1000.0f * std::pow(10.0f, 2.0f * character - 1.0f);
+        phase += juce::MathConstants<double>::twoPi * frequency / std::max(1.0, processSampleRate);
+        if (phase >= juce::MathConstants<double>::twoPi) phase -= juce::MathConstants<double>::twoPi;
+        memory = 0.97f * memory + 0.03f * std::sin((float)phase * 12.9898f + 78.233f);
+        const float source = juce::jmap(noiseMix, std::sin((float)phase), std::tanh(memory * 2.0f));
+        const int delayCapacity = (int)delay.size();
+        if (delayCapacity < 2) return x;
+        const float delaySamples = std::clamp(0.001f * 50.0f * std::pow(depth, 2.5849625f)
+                                              * (0.5f + 0.5f * source) * (float)processSampleRate,
+                                              0.0f, (float)(delayCapacity - 2));
+        delay[(size_t)pos] = x;
+        float read = (float)pos - delaySamples;
+        while (read < 0.0f) read += (float)delayCapacity;
+        const int first = (int)read % delayCapacity;
+        const int second = (first + 1) % delayCapacity;
+        const float out = juce::jmap(read - std::floor(read), delay[(size_t)first], delay[(size_t)second]);
+        pos = (pos + 1) % delayCapacity;
+        return out;
+    }
+
+    inline float processCut(float x, bool right)
+    {
+        for (int stage = 0; stage < cutFullStages; ++stage)
+            x = cutStages[(size_t)stage].process(x, right);
+        if (cutFractionalStage > 0.0001f && cutFullStages < maxCutStages)
+        {
+            const float wet = cutStages[(size_t)cutFullStages].process(x, right);
+            x += cutFractionalStage * (wet - x);
+        }
+        return x;
+    }
 
     static inline float dcBlock(float x, float& previousX, float& previousY)
     {
@@ -406,8 +497,62 @@ private:
         return y;
     }
 
+    inline void applySpectralDrive(float& l, float& r)
+    {
+        constexpr float invSqrt2 = 0.7071067811865475f;
+        const auto driveOneBand = [this](float band, bool rightState)
+        {
+            float& toneState = rightState ? driveToneStateR : driveToneStateL;
+            toneState += 0.025f * (band - toneState);
+            const float toned = band + driveTone * 0.9f * (band - toneState);
+            float wet = saturateOne(toned, rightState) * driveOutputGain;
+            wet = rightState ? dcBlock(wet, dcXR, dcYR) : dcBlock(wet, dcXL, dcYL);
+            return driveMix * (wet - band);
+        };
+
+        switch (channelRoute)
+        {
+            case ChannelRoute::Stereo:
+            {
+                const float bandL = driveBandBiquad.processL(l);
+                const float bandR = driveBandBiquad.processR(r);
+                l += driveOneBand(bandL, false);
+                r += driveOneBand(bandR, true);
+            } break;
+            case ChannelRoute::Left:
+            {
+                const float band = driveBandBiquad.processL(l);
+                l += driveOneBand(band, false);
+            } break;
+            case ChannelRoute::Right:
+            {
+                const float band = driveBandBiquad.processR(r);
+                r += driveOneBand(band, true);
+            } break;
+            case ChannelRoute::Mid:
+            case ChannelRoute::Side:
+            {
+                float mid = (l + r) * invSqrt2;
+                float side = (l - r) * invSqrt2;
+                if (channelRoute == ChannelRoute::Mid)
+                {
+                    const float band = driveBandBiquad.processL(mid);
+                    mid += driveOneBand(band, false);
+                }
+                else
+                {
+                    const float band = driveBandBiquad.processR(side);
+                    side += driveOneBand(band, true);
+                }
+                l = (mid + side) * invSqrt2;
+                r = (mid - side) * invSqrt2;
+            } break;
+        }
+    }
+
     void setAllStages(double sampleRate)
     {
+        processSampleRate = sampleRate;
         // Incorporate dynamic gain modulation into the filter coefficients
         const float effectiveStages = std::max(1.0f, slopeDbPerOct / 12.0f);
         const float effectiveGainDb = (gainDb + dynGainMod) / effectiveStages;
@@ -418,7 +563,15 @@ private:
             else
                 biquads[(size_t)s].set(type, sampleRate, freqHz, Q, effectiveGainDb);
 
+        const bool highPass = type == Biquad::Type::HighPass;
+        for (auto& stage : cutStages)
+            stage.set(highPass, sampleRate, freqHz);
+
         // Sidechain bandpass tracks band center frequency for envelope detection
         scBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, 2.0, 0.0);
+        const float auditionQ = std::clamp(Q, 0.2f, 12.0f);
+        auditionBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, auditionQ, 0.0);
+        driveBandBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, auditionQ, 0.0);
     }
+    double processSampleRate = 44100.0;
 };

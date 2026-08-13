@@ -232,12 +232,17 @@ private:
         fft.performRealOnlyInverseTransform(channelBuf.data());
 
         for (int i = 0; i < n; ++i)
-        {
             data[i] = channelBuf[(size_t)i] + overlap[(size_t)i];
-            overlap[(size_t)i] = 0.0f;
-        }
 
-        for (int i = n; i < fftSize; ++i)
-            overlap[(size_t)(i - n)] += channelBuf[(size_t)i];
+        // Advance the outstanding convolution tail by exactly this host
+        // chunk, then add the new tail. The previous implementation added
+        // the new tail at zero without shifting the old one; variable host
+        // block sizes therefore stacked energy at the wrong timestamps and
+        // caused the silence/bursting reported in Standard and High modes.
+        const int remaining = fftSize - n;
+        for (int i = 0; i < remaining; ++i)
+            overlap[(size_t)i] = overlap[(size_t)(i + n)] + channelBuf[(size_t)(i + n)];
+        for (int i = remaining; i < fftSize; ++i)
+            overlap[(size_t)i] = 0.0f;
     }
 };

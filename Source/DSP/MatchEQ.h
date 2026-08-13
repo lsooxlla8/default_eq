@@ -150,6 +150,16 @@ public:
     bool hasCapture() const { return hasCapturedData.load(std::memory_order_acquire); }
     bool isCapturing() const { return capturing.load(std::memory_order_acquire); }
     bool isAnalyzing() const { return analyzing.load(std::memory_order_acquire); }
+    float getCaptureProgress() const noexcept
+    {
+        return std::clamp((float)captureFrames.load(std::memory_order_relaxed)
+                          / (float)std::max(1, requiredAnalysisFrames.load(std::memory_order_relaxed)), 0.0f, 1.0f);
+    }
+    float getAnalysisProgress() const noexcept
+    {
+        return std::clamp((float)analyzeFrames.load(std::memory_order_relaxed)
+                          / (float)std::max(1, requiredAnalysisFrames.load(std::memory_order_relaxed)), 0.0f, 1.0f);
+    }
     void setAnalysisSeconds(double seconds, double sampleRate) noexcept
     {
         const int frames = (int)std::ceil(std::clamp(seconds, 0.25, 5.0) * sampleRate / (double)fftSize);
@@ -285,7 +295,15 @@ private:
             capturedSpectrum[(size_t)i] += db;
         }
 
-        captureFrames.fetch_add(1, std::memory_order_relaxed);
+        const int frames = captureFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (frames >= requiredAnalysisFrames.load(std::memory_order_relaxed))
+        {
+            const float inv = 1.0f / (float)frames;
+            for (int i = 0; i < numBins; ++i)
+                capturedSpectrum[(size_t)i] *= inv;
+            capturing.store(false, std::memory_order_release);
+            hasCapturedData.store(true, std::memory_order_release);
+        }
     }
 
     void processAnalysisFrame(const float* samples)

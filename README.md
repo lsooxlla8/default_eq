@@ -8,8 +8,8 @@ in Git history and [third-party notices](THIRD_PARTY_NOTICES.md).
 The interface follows the `default_*` paper/ink family but is designed around
 direct graph editing: frequency and gain are moved on the RTA, Q uses the mouse
 wheel, and detailed controls appear only in compact per-band workspaces. There
-is deliberately no preset concept; host project recall, versioned state, A/B,
-and Undo/Redo remain complete.
+is deliberately no preset or A/B concept; host project recall, versioned state,
+and keyboard Undo/Redo remain complete.
 
 See [implementation status](docs/implementation-status.md) for verified scope,
 and the [0.1.0 verification record](docs/verification-0.1.0.md) for measured

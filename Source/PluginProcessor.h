@@ -65,35 +65,17 @@ public:
     // Match EQ (public for UI capture/match control)
     MatchEQ matchEQ;
 
-    // ── A/B comparison ────────────────────────────────────────────
-    juce::ValueTree snapshotA, snapshotB;
-    bool isSlotA = true;  // true = editing slot A
-
-    void storeSnapshot(bool slotA)
-    {
-        auto state = apvts.copyState();
-        if (slotA) snapshotA = state;
-        else       snapshotB = state;
-    }
-
-    void recallSnapshot(bool slotA)
-    {
-        auto& snap = slotA ? snapshotA : snapshotB;
-        if (snap.isValid())
-            apvts.replaceState(snap);
-    }
-
-    void copySnapshot(bool fromAtoB)
-    {
-        if (fromAtoB) snapshotB = snapshotA.createCopy();
-        else          snapshotA = snapshotB.createCopy();
-    }
-
     // ── Auto-gain bypass ───────────────────────────────────────────
     std::atomic<float> autoGainCompDb { 0.0f }; // smoothed compensation in dB
     std::atomic<int> sidechainAuditionBand { -1 }; // transient UI action; never serialized
     std::atomic<int> soloBand { -1 }; // transient UI action; never serialized
     std::atomic<bool> smartAutoGainLocked { false };
+    std::atomic<float> smartAutoGainProgress { 0.0f };
+    // Restores every parameter owned by one band. New graph nodes always call
+    // this before assigning frequency/gain, so a recycled slot cannot inherit
+    // deleted dynamic, routing or drive settings.
+    void resetBandToDefaults(int zeroBasedBand, bool enable = false,
+                             float frequency = -1.0f, float gainDb = 0.0f);
     float getBandDynamicGainDb(int index) const noexcept
     {
         return index >= 0 && index < kNumBands
@@ -127,6 +109,7 @@ private:
     std::array<std::atomic<float>, kNumBands> bandDynamicGainDb {};
     double smartInputEnergy = 0.0, smartOutputEnergy = 0.0;
     int64_t smartEnergySamples = 0;
+    std::uint64_t smartParameterSignature = 0;
     void applyLookaheadDelay(juce::AudioBuffer<float>&, int delaySamples) noexcept;
     int requestedLookaheadSamples() const noexcept;
 
@@ -161,22 +144,7 @@ private:
     void buildLinearPhaseMagnitude();        // runs on background thread only
     void updateReportedLatency() noexcept;
 
-    // Band linking.
-    //
-    // parameterChanged can be entered concurrently from more than one thread:
-    // hosts may drive automation from their own thread, and pluginval's
-    // "Parameter thread safety" test does so deliberately. The propagation guard
-    // must therefore be atomic. A plain bool let two threads past the check, and
-    // let one thread clear the flag while another was still propagating; the
-    // resulting setValueNotifyingHost call re-entered the APVTS/UndoManager
-    // write path and glibc aborted with EDEADLK (recursive lock, exit 134).
-    // macOS did not diagnose it, so the defect only surfaced on Linux.
     void parameterChanged(const juce::String& parameterID, float newValue) override;
-    std::atomic<bool> propagatingLink { false };
-    std::atomic<float> lastLinkedFreq[kNumBands] {};
-    std::atomic<float> lastLinkedGain[kNumBands] {};
-    std::atomic<float> lastLinkedQ[kNumBands] {};
-    void initLinkTracking();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DefaultEqualizerAudioProcessor)
 };
