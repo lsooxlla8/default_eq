@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea for FreeEQ8
+about: Suggest an idea for default_equalizer
 title: '[FEATURE] '
 labels: enhancement
 assignees: ''

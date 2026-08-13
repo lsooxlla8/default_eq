@@ -1,248 +1,174 @@
 #pragma once
+
 #include <juce_dsp/juce_dsp.h>
-#include "Biquad.h"   // provides constexpr kPi
+#include "Biquad.h"
+
+#include <algorithm>
 #include <array>
 #include <atomic>
-#include <vector>
 #include <cmath>
-#include <algorithm>
+#include <memory>
 
-// Linear-phase EQ engine.
-// Generates a symmetric FIR from the combined biquad magnitude response
-// and applies it via overlap-add FFT convolution.
-//
-// Threading (A5):
-//   rebuildFromMagnitude() is called from a background juce::Thread (owned
-//   by DefaultEqualizerAudioProcessor). It writes the result into a *writer-owned*
-//   kernel slot, then atomically swaps slot indices with processBlock()
-//   (audio thread) via the canonical swap-chain triple-buffer protocol.
-//   processBlock() only mutates its local readKernelSlot and reads it
-//   thereafter. writeKernelSlot, midKernelSlot, and readKernelSlot form a
-//   permutation of {0,1,2} at every quiescent point, so the writer never
-//   overwrites the slot the audio thread is reading, even if the writer
-//   laps the reader (two rebuilds per audio block).
+// Composite linear-phase FIR followed by JUCE's zero-additional-latency,
+// uniformly partitioned convolution engine. The previous implementation did
+// one 8192-point forward and inverse FFT for every host block, so a 64-sample
+// block was disproportionately expensive. Partitioning makes the workload
+// depend on the signal duration and FIR length rather than host block count.
 class LinearPhaseEngine
 {
 public:
-    static constexpr int firLength  = 4096;               // FIR taps
-    static constexpr int fftOrder   = 13;                 // 2^13 = 8192 (firLength * 2 for OLA)
-    static constexpr int fftSize    = 1 << fftOrder;      // 8192
-    static constexpr int latency    = firLength / 2;      // 2048 samples
-    static constexpr int kNumKernelSlots = 3;
+    static constexpr int firLength = 4096;
+    static constexpr int fftOrder = 13;
+    static constexpr int fftSize = 1 << fftOrder;
+    static constexpr int latency = firLength / 2;
 
-    LinearPhaseEngine() : fft(fftOrder) {}
+    LinearPhaseEngine() = default;
+    ~LinearPhaseEngine()
+    {
+        delete pendingImpulse.exchange(nullptr, std::memory_order_acq_rel);
+        drainRetiredImpulses();
+    }
 
-    void prepare(double sampleRate, int /*maxBlockSize*/)
+    void prepare(double sampleRate, int maxBlockSize)
     {
         sr = sampleRate;
-        std::fill(overlapL.begin(), overlapL.end(), 0.0f);
-        std::fill(overlapR.begin(), overlapR.end(), 0.0f);
-        for (auto& k : kernelSlots)
-            std::fill(k.begin(), k.end(), 0.0f);
-        writeKernelSlot = 0;
-        midKernelSlot.store(1, std::memory_order_relaxed);
-        readKernelSlot  = 2;
-        kernelFresh.store(false, std::memory_order_relaxed);
-        kernelHasBeenLoaded = false;
-        needsRebuild = true;
+        juce::dsp::ProcessSpec spec { sampleRate, (juce::uint32)std::max(1, maxBlockSize), 2 };
+        convolution.prepare(spec);
+        convolution.reset();
+        delete pendingImpulse.exchange(nullptr, std::memory_order_acq_rel);
+        drainRetiredImpulses();
+        kernelHasBeenLoaded.store(false, std::memory_order_release);
+        needsRebuild.store(true, std::memory_order_release);
     }
 
-    void reset()
+    void reset() { convolution.reset(); }
+
+    // prepareToPlay-only: loading before the final prepare makes JUCE finish
+    // building the initial partition set synchronously, so the first processed
+    // impulse cannot leak through while the internal queue catches up.
+    void activatePendingBeforeProcessing(int maxBlockSize)
     {
-        std::fill(overlapL.begin(), overlapL.end(), 0.0f);
-        std::fill(overlapR.begin(), overlapR.end(), 0.0f);
+        if (auto* pending = pendingImpulse.exchange(nullptr, std::memory_order_acq_rel))
+        {
+            convolution.loadImpulseResponse(std::move(*pending), sr,
+                juce::dsp::Convolution::Stereo::no,
+                juce::dsp::Convolution::Trim::no,
+                juce::dsp::Convolution::Normalise::no);
+            delete pending;
+            juce::dsp::ProcessSpec spec { sr, (juce::uint32)std::max(1, maxBlockSize), 2 };
+            convolution.prepare(spec);
+            kernelHasBeenLoaded.store(true, std::memory_order_release);
+        }
     }
 
-    // Called from the background rebuild thread. Fills the writer's private
-    // kernel slot, then atomically swaps with midKernelSlot and flags a new
-    // kernel as available. Safe for the writer to run arbitrarily faster
-    // than the reader: the reader's readKernelSlot is never touched.
-    // magnitudeDb: array of dB values at linearly-spaced frequency bins (0..sr/2).
-    // numBins: number of magnitude bins (typically firLength/2 + 1 = 2049).
-    void rebuildFromMagnitude(const float* magnitudeDb, int numBins, int requestedFirLength = firLength)
+    // Background-thread only. Builds a symmetric time-domain FIR and publishes
+    // ownership through a single atomic pointer. Superseded unpublished kernels
+    // are deleted here, never on the audio thread.
+    void rebuildFromMagnitude(const float* magnitudeDb, int numBins,
+                              int requestedFirLength = firLength)
     {
+        drainRetiredImpulses();
         const int activeLength = std::clamp(requestedFirLength, 1024, firLength);
-        auto& writeBuf = kernelSlots[(size_t)writeKernelSlot];
-
-        // Build the frequency domain array for JUCE's real-only format.
-        // JUCE requires 2*fftSize floats for performRealOnlyInverseTransform.
-        // Packing: [Re0, ReN/2, Re1, Im1, Re2, Im2, ...]
-        // For zero phase: all Im = 0, just set the real parts.
-        std::fill(rebuildFreqBuf.begin(), rebuildFreqBuf.end(), 0.0f);
-
-        // Bin 0 (DC)
+        std::fill(rebuildFrequency.begin(), rebuildFrequency.end(), 0.0f);
+        rebuildFrequency[0] = std::pow(10.0f, magnitudeDb[0] / 20.0f);
+        for (int bin = 1; bin < fftSize / 2; ++bin)
         {
-            const float db = magnitudeDb[0];
-            rebuildFreqBuf[0] = std::pow(10.0f, db / 20.0f);
+            const float fraction = (float)bin / (float)(fftSize / 2);
+            const int source = std::min((int)(fraction * (float)(numBins - 1)), numBins - 1);
+            rebuildFrequency[(size_t)(bin * 2)] = std::pow(10.0f, magnitudeDb[source] / 20.0f);
         }
-        // Bins 1..N/2-1
-        for (int i = 1; i < fftSize / 2; ++i)
+        rebuildFrequency[1] = std::pow(10.0f, magnitudeDb[numBins - 1] / 20.0f);
+        rebuildFft.performRealOnlyInverseTransform(rebuildFrequency.data());
+
+        auto impulse = std::make_unique<juce::AudioBuffer<float>>(1, activeLength);
+        auto* destination = impulse->getWritePointer(0);
+        for (int tap = 0; tap < activeLength; ++tap)
         {
-            const float frac = (float)i / (float)(fftSize / 2);
-            const int srcBin = std::min((int)(frac * (float)(numBins - 1)), numBins - 1);
-            const float db = magnitudeDb[srcBin];
-            const float linGain = std::pow(10.0f, db / 20.0f);
-            rebuildFreqBuf[(size_t)(i * 2)]     = linGain; // Real
-            rebuildFreqBuf[(size_t)(i * 2 + 1)] = 0.0f;    // Imag (zero phase)
-        }
-        // Nyquist bin
-        {
-            const float db = magnitudeDb[numBins - 1];
-            rebuildFreqBuf[1] = std::pow(10.0f, db / 20.0f); // JUCE packs Nyquist in [1]
+            const int source = (tap - activeLength / 2 + fftSize) % fftSize;
+            const float window = 0.5f * (1.0f - std::cos(
+                2.0f * (float)kPi * (float)tap / (float)(activeLength - 1)));
+            destination[tap] = rebuildFrequency[(size_t)source] * window;
         }
 
-        // IFFT to get impulse response
-        fft.performRealOnlyInverseTransform(rebuildFreqBuf.data());
-
-        // Circular shift: move the center of the impulse to the middle of the FIR
-        std::array<float, firLength> fir {};
-        for (int i = 0; i < activeLength; ++i)
-        {
-            int srcIdx = (i - activeLength / 2 + fftSize) % fftSize;
-            fir[(size_t)i] = rebuildFreqBuf[(size_t)srcIdx];
-        }
-
-        // Apply Hann window to the FIR
-        for (int i = 0; i < activeLength; ++i)
-        {
-            const float w = 0.5f * (1.0f - std::cos(2.0f * (float)kPi * (float)i / (float)(activeLength - 1)));
-            fir[(size_t)i] *= w;
-        }
-
-        // Pre-compute FFT of the FIR kernel into the writer's private slot.
-        std::fill(writeBuf.begin(), writeBuf.end(), 0.0f);
-        for (int i = 0; i < firLength; ++i)
-            writeBuf[(size_t)i] = fir[(size_t)i];
-
-        fft.performRealOnlyForwardTransform(writeBuf.data());
-
-        // Publish via swap-chain: swap writer's slot with midKernelSlot.
-        // Release so the audio thread's acquire in processBlock() sees the
-        // filled kernel bytes.
-        writeKernelSlot = midKernelSlot.exchange(writeKernelSlot,
-                                                 std::memory_order_release);
-        kernelFresh.store(true, std::memory_order_release);
-        needsRebuild = false;
+        auto* superseded = pendingImpulse.exchange(impulse.release(), std::memory_order_acq_rel);
+        delete superseded;
+        needsRebuild.store(false, std::memory_order_release);
     }
 
-    // Process a block of audio using overlap-add convolution.
-    // inputL/R: pointers to input samples (also used as output).
-    // numSamples: number of samples in this block.
-    //
-    // At the top of each block, if the background rebuild thread has
-    // published a new kernel (kernelFresh=true), we atomically swap the
-    // reader's private slot with midKernelSlot, which gives us the latest
-    // rebuild and returns our previously-held slot to the pool. The reader
-    // then uses its private slot exclusively for the rest of the block —
-    // the writer cannot touch it.
-    //
-    // If no kernel has been published yet (cold-start before the background
-    // rebuild thread completes its first pass), we pass audio through
-    // unchanged rather than apply a zero kernel.
-    void processBlock(float* inputL, float* inputR, int numSamples)
+    void processBlock(float* left, float* right, int numSamples)
     {
-        if (kernelFresh.exchange(false, std::memory_order_acquire))
+        // JUCE requires load/process calls to be serialised, but its load is
+        // explicitly wait-free. The worker allocates the buffer; audio merely
+        // transfers ownership and retires the now-empty wrapper for deletion
+        // back on the worker.
+        if (retirementQueueHasSpace())
         {
-            // Swap in the latest-published kernel; return our old slot.
-            readKernelSlot = midKernelSlot.exchange(readKernelSlot,
-                                                    std::memory_order_acquire);
-            kernelHasBeenLoaded = true;
+            if (auto* pending = pendingImpulse.exchange(nullptr, std::memory_order_acq_rel))
+            {
+                convolution.loadImpulseResponse(std::move(*pending), sr,
+                    juce::dsp::Convolution::Stereo::no,
+                    juce::dsp::Convolution::Trim::no,
+                    juce::dsp::Convolution::Normalise::no);
+                retireImpulseFromAudio(pending);
+                kernelHasBeenLoaded.store(true, std::memory_order_release);
+            }
         }
+        if (!kernelHasBeenLoaded.load(std::memory_order_acquire)) return;
 
-        if (!kernelHasBeenLoaded)
-            return; // pass-through until first kernel is ready
-
-        const float* kernel = kernelSlots[(size_t)readKernelSlot].data();
-
-        const int maxChunk = fftSize - firLength;
-        int offset = 0;
-        while (offset < numSamples)
-        {
-            const int chunkSize = std::min(maxChunk, numSamples - offset);
-            processChunk(inputL + offset, inputR + offset, chunkSize, kernel);
-            offset += chunkSize;
-        }
+        float* channels[] { left, right };
+        const size_t channelCount = left == right ? 1u : 2u;
+        juce::dsp::AudioBlock<float> block(channels, channelCount, (size_t)numSamples);
+        juce::dsp::ProcessContextReplacing<float> context(block);
+        convolution.process(context);
     }
 
-    bool getNeedsRebuild() const { return needsRebuild; }
+    bool getNeedsRebuild() const { return needsRebuild.load(std::memory_order_acquire); }
     bool isKernelReady() const
     {
-        // Reader sees a kernel once it has successfully swapped at least one
-        // in from the publisher.
-        return kernelHasBeenLoaded || kernelFresh.load(std::memory_order_acquire);
+        return kernelHasBeenLoaded.load(std::memory_order_acquire)
+            || pendingImpulse.load(std::memory_order_acquire) != nullptr;
     }
 
 private:
-    juce::dsp::FFT fft;
-    double sr = 44100.0;
-    bool needsRebuild = true;
-    bool kernelHasBeenLoaded = false;   // audio-thread local
+    static constexpr unsigned retiredQueueSize = 8;
 
-    // Swap-chain triple-buffer for the FIR kernel. See class header comment.
-    std::array<std::array<float, fftSize * 2>, kNumKernelSlots> kernelSlots {};
-    std::atomic<int>  midKernelSlot   { 1 };
-    std::atomic<bool> kernelFresh     { false };
-
-    // Private per-thread slot indices. writeKernelSlot is only touched by
-    // the rebuild thread; readKernelSlot is only touched by the audio thread.
-    int writeKernelSlot = 0;
-    int readKernelSlot  = 2;
-
-    // Scratch buffer for rebuildFromMagnitude (background thread only)
-    std::array<float, fftSize * 2> rebuildFreqBuf {};
-
-    // Scratch buffer for processChannel (audio thread only)
-    std::array<float, fftSize * 2> channelBuf {};
-
-    // Overlap buffers for overlap-add
-    std::array<float, fftSize> overlapL {};
-    std::array<float, fftSize> overlapR {};
-
-    void processChunk(float* L, float* R, int n, const float* kernel)
+    bool retirementQueueHasSpace() const noexcept
     {
-        processChannel(L, n, overlapL, kernel);
-        if (R != L) processChannel(R, n, overlapR, kernel);
+        const auto write = retiredWrite.load(std::memory_order_relaxed);
+        const auto next = (write + 1u) % retiredQueueSize;
+        return next != retiredRead.load(std::memory_order_acquire);
     }
 
-    void processChannel(float* data, int n, std::array<float, fftSize>& overlap,
-                        const float* kernel)
+    void retireImpulseFromAudio(juce::AudioBuffer<float>* impulse) noexcept
     {
-        // Zero-pad input to fftSize (JUCE real-only FFT needs 2*fftSize floats)
-        std::fill(channelBuf.begin(), channelBuf.end(), 0.0f);
-        for (int i = 0; i < n; ++i)
-            channelBuf[(size_t)i] = data[i];
+        const auto write = retiredWrite.load(std::memory_order_relaxed);
+        const auto next = (write + 1u) % retiredQueueSize;
+        jassert(next != retiredRead.load(std::memory_order_acquire));
+        retiredImpulses[write] = impulse;
+        retiredWrite.store(next, std::memory_order_release);
+    }
 
-        // Forward FFT of input
-        fft.performRealOnlyForwardTransform(channelBuf.data());
-
-        // Complex multiply with FIR kernel in frequency domain.
-        // JUCE real-only format: [Re0, ReN/2, Re1, Im1, Re2, Im2, ...]
-        channelBuf[0] *= kernel[0];               // DC
-        channelBuf[1] *= kernel[1];               // Nyquist
-        for (int i = 1; i < fftSize / 2; ++i)
+    void drainRetiredImpulses() noexcept
+    {
+        auto read = retiredRead.load(std::memory_order_relaxed);
+        const auto write = retiredWrite.load(std::memory_order_acquire);
+        while (read != write)
         {
-            const int ri = i * 2;
-            const int ii = i * 2 + 1;
-            const float ar = channelBuf[(size_t)ri], ai = channelBuf[(size_t)ii];
-            const float br = kernel[(size_t)ri],     bi = kernel[(size_t)ii];
-            channelBuf[(size_t)ri] = ar * br - ai * bi;
-            channelBuf[(size_t)ii] = ar * bi + ai * br;
+            delete retiredImpulses[read];
+            retiredImpulses[read] = nullptr;
+            read = (read + 1u) % retiredQueueSize;
         }
-
-        fft.performRealOnlyInverseTransform(channelBuf.data());
-
-        for (int i = 0; i < n; ++i)
-            data[i] = channelBuf[(size_t)i] + overlap[(size_t)i];
-
-        // Advance the outstanding convolution tail by exactly this host
-        // chunk, then add the new tail. The previous implementation added
-        // the new tail at zero without shifting the old one; variable host
-        // block sizes therefore stacked energy at the wrong timestamps and
-        // caused the silence/bursting reported in Standard and High modes.
-        const int remaining = fftSize - n;
-        for (int i = 0; i < remaining; ++i)
-            overlap[(size_t)i] = overlap[(size_t)(i + n)] + channelBuf[(size_t)(i + n)];
-        for (int i = remaining; i < fftSize; ++i)
-            overlap[(size_t)i] = 0.0f;
+        retiredRead.store(read, std::memory_order_release);
     }
+
+    juce::dsp::FFT rebuildFft { fftOrder };
+    juce::dsp::Convolution convolution;
+    std::array<float, fftSize * 2> rebuildFrequency {};
+    std::atomic<juce::AudioBuffer<float>*> pendingImpulse { nullptr };
+    std::array<juce::AudioBuffer<float>*, retiredQueueSize> retiredImpulses {};
+    std::atomic<unsigned> retiredWrite { 0 };
+    std::atomic<unsigned> retiredRead { 0 };
+    std::atomic<bool> kernelHasBeenLoaded { false };
+    std::atomic<bool> needsRebuild { true };
+    double sr = 44100.0;
 };

@@ -52,6 +52,7 @@ public:
     // Spectrum analyzer FIFO (post-EQ by default)
     SpectrumFIFO spectrumFifo;
     SpectrumFIFO preSpectrumFifo;
+    void setAnalyzerEnabled(bool enabled) noexcept { analyzerEnabled.store(enabled, std::memory_order_release); }
 
     // Output metering (read from UI thread)
     std::atomic<float> meterPeakL { 0.0f };
@@ -88,12 +89,40 @@ public:
     int currentLinearPhaseLatency() const noexcept
     {
         static constexpr int latencies[] { 512, 1024, 2048 };
-        const int quality = std::clamp((int)apvts.getRawParameterValue("linear_quality")->load(), 0, 2);
+        const int quality = std::clamp(linearQualityParam != nullptr ? (int)linearQualityParam->load() : 2, 0, 2);
         return latencies[quality];
     }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParams();
+
+    struct BandParameterPointers
+    {
+        std::atomic<float>* present = nullptr; std::atomic<float>* on = nullptr;
+        std::atomic<float>* type = nullptr; std::atomic<float>* slope = nullptr;
+        std::atomic<float>* placementMode = nullptr; std::atomic<float>* placement = nullptr;
+        std::atomic<float>* freq = nullptr; std::atomic<float>* q = nullptr; std::atomic<float>* gain = nullptr;
+        std::atomic<float>* drive = nullptr; std::atomic<float>* driveOn = nullptr;
+        std::atomic<float>* driveMix = nullptr; std::atomic<float>* driveOutput = nullptr;
+        std::atomic<float>* driveCharacter = nullptr; std::atomic<float>* driveSecondary = nullptr;
+        std::atomic<float>* driveAutoGain = nullptr; std::atomic<float>* satMode = nullptr;
+        std::atomic<float>* dynMode = nullptr; std::atomic<float>* scSource = nullptr;
+        std::atomic<float>* dynLookahead = nullptr; std::atomic<float>* dynThresh = nullptr;
+        std::atomic<float>* dynRange = nullptr; std::atomic<float>* dynRatio = nullptr;
+        std::atomic<float>* dynAttack = nullptr; std::atomic<float>* dynRelease = nullptr;
+    };
+    std::array<BandParameterPointers, kNumBands> bandParams {};
+    std::atomic<float>* outputGainParam = nullptr;
+    std::atomic<float>* scaleParam = nullptr;
+    std::atomic<float>* adaptiveQParam = nullptr;
+    std::atomic<float>* decrampParam = nullptr;
+    std::atomic<float>* linearPhaseParam = nullptr;
+    std::atomic<float>* linearQualityParam = nullptr;
+    std::atomic<float>* oversamplingParam = nullptr;
+    std::atomic<float>* autoGainModeParam = nullptr;
+    std::atomic<float>* pluginEnabledParam = nullptr;
+    void cacheParameterPointers();
+    std::atomic<bool> analyzerEnabled { false };
 
     std::array<EQBand, kNumBands> bands;
     GlobalBypass globalBypass;
@@ -132,8 +161,9 @@ private:
     // buildLinearPhaseMagnitude + rebuildFromMagnitude used to run on the
     // audio thread when linPhaseDirty was seen; it is a ~2k-bin
     // magnitude evaluation plus an 8192-pt FFT per dirty block. Now a
-    // dedicated background juce::Thread owns the rebuild, writes into the
-    // engine's inactive kernel buffer, and atomically swaps activeKernelIdx.
+    // dedicated background juce::Thread owns FIR construction; the audio
+    // callback adopts ready IR ownership with JUCE's wait-free load and runs
+    // zero-additional-latency uniform partitioned convolution.
     class LinPhaseRebuildThread;
     std::unique_ptr<LinPhaseRebuildThread> linPhaseRebuildThread;
     void requestLinearPhaseRebuild();

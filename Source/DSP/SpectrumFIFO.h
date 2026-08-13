@@ -61,6 +61,28 @@ public:
         fresh.store(false, std::memory_order_relaxed);
         fifoWriteIndex.store(0, std::memory_order_relaxed);
         samplesSincePublish = 0;
+        for (int resolution = 0; resolution < 3; ++resolution)
+        {
+            const int activeSize = 1 << (resolution + 11);
+            for (int i = 0; i < activeSize; ++i)
+            {
+                const float phase = (float)i / (float)(activeSize - 1);
+                hannWindows[(size_t)resolution][(size_t)i] = 0.5f * (1.0f - std::cos(
+                    juce::MathConstants<float>::twoPi * phase));
+            }
+            const int bins = activeSize / 2;
+            const double octaveWidth = resolution == 0 ? 1.0 / 6.0
+                                      : resolution == 1 ? 1.0 / 12.0 : 1.0 / 24.0;
+            const double factor = std::pow(2.0, octaveWidth * 0.5);
+            for (int i = 0; i < bins; ++i)
+            {
+                smoothingLo[(size_t)resolution][(size_t)i] = std::clamp(
+                    (int)std::floor((double)i / factor), 0, bins - 1);
+                smoothingHi[(size_t)resolution][(size_t)i] = std::clamp(
+                    (int)std::ceil((double)i * factor) + 1,
+                    smoothingLo[(size_t)resolution][(size_t)i] + 1, bins);
+            }
+        }
     }
 
     // Reset the FIFO state (call from prepareToPlay or when going offline/online).
@@ -134,9 +156,8 @@ public:
         const int sourceOffset = fftSize - activeSize;
         for (int i = 0; i < activeSize; ++i)
         {
-            const float phase = (float)i / (float)(activeSize - 1);
-            const float hann = 0.5f * (1.0f - std::cos(juce::MathConstants<float>::twoPi * phase));
-            fftData[(size_t)i] = src[(size_t)(sourceOffset + i)] * hann;
+            fftData[(size_t)i] = src[(size_t)(sourceOffset + i)]
+                * hannWindows[(size_t)resolution][(size_t)i];
         }
         if (activeOrder == 11) fftLow.performFrequencyOnlyForwardTransform(fftData.data());
         else if (activeOrder == 12) fftMedium.performFrequencyOnlyForwardTransform(fftData.data());
@@ -153,13 +174,10 @@ public:
             linearPower[(size_t)i] = normalized * normalized;
             cumulativePower[(size_t)i + 1] = cumulativePower[(size_t)i] + linearPower[(size_t)i];
         }
-        const double octaveWidth = resolution == 0 ? 1.0 / 6.0
-                                  : resolution == 1 ? 1.0 / 12.0 : 1.0 / 24.0;
-        const double factor = std::pow(2.0, octaveWidth * 0.5);
         for (int i = 0; i < currentBins; ++i)
         {
-            const int lo = std::clamp((int)std::floor((double)i / factor), 0, currentBins - 1);
-            const int hi = std::clamp((int)std::ceil((double)i * factor) + 1, lo + 1, currentBins);
+            const int lo = smoothingLo[(size_t)resolution][(size_t)i];
+            const int hi = smoothingHi[(size_t)resolution][(size_t)i];
             const double power = (cumulativePower[(size_t)hi] - cumulativePower[(size_t)lo]) / (double)(hi - lo);
             outputMagnitudes[(size_t)i] = 10.0f * std::log10((float)std::max(power, 1.0e-14));
         }
@@ -195,6 +213,8 @@ private:
     std::array<float, numBins>                       outputMagnitudes {};
     std::array<float, numBins>                       linearPower {};
     std::array<double, numBins + 1>                  cumulativePower {};
+    std::array<std::array<float, fftSize>, 3>        hannWindows {};
+    std::array<std::array<int, numBins>, 3>          smoothingLo {}, smoothingHi {};
 
     std::atomic<int>  fifoWriteIndex { 0 };
     std::atomic<int>  midSlot        { 1 };

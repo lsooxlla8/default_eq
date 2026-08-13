@@ -33,7 +33,7 @@ int main()
         for (size_t t = 0; t < types.size(); ++t)
             for (double f = 20.0; f <= 20000.0; f *= 1.15)          // 20 Hz - 20 kHz
                 for (double q = 0.1; q <= 24.0; q += 0.1)           // full Q range
-                    for (double g = -24.0; g <= 24.0; g += 0.5)     // full gain range
+                    for (double g = -36.0; g <= 36.0; g += 0.5)     // full gain range
                     {
                         Biquad bq;
                         bq.set(types[t], sr, f, q, g);

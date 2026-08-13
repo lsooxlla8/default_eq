@@ -18,6 +18,7 @@ struct EQBand
 {
     bool enabled = true;
     Biquad::Type type = Biquad::Type::Bell;
+    Biquad::Type parameterType = Biquad::Type::Bell;
     bool midSidePlacement = false;
     float placement = 0.0f;
 
@@ -46,11 +47,17 @@ struct EQBand
     float dynRangeDb = 6.0f;
     bool dynUpward = false;
     bool useExternalSidechain = false;
+    bool detectorListen = false;
     float dynAttackMs = 10.0f;
     float dynReleaseMs = 100.0f;
     float envLevel = 0.0f;       // current envelope level (linear)
     float dynGainMod = 0.0f;     // current dynamic gain modulation in dB
     float lastSidechainSample = 0.0f;
+    float dynAttackCoeff = 1.0f;
+    float dynReleaseCoeff = 1.0f;
+    float cachedDynAttackMs = -1.0f;
+    float cachedDynReleaseMs = -1.0f;
+    double cachedDynSampleRate = 0.0;
 
     // Cascaded biquad stages: 1 = 12 dB/oct, 2 = 24 dB/oct, 4 = 48 dB/oct
     int numStages = 1;
@@ -69,6 +76,8 @@ struct EQBand
     // Coefficient update interval while smoothing (in samples)
     int coeffUpdateInterval = 16;
     int intervalCounter = 0;
+    int dynamicControlCounter = 0;
+    bool coefficientsValid = false;
 
     void reset(double sampleRate)
     {
@@ -94,6 +103,10 @@ struct EQBand
         envLevel = 0.0f;
         dynGainMod = 0.0f;
         intervalCounter = 0;
+        dynamicControlCounter = 0;
+        coefficientsValid = false;
+        driveProcessSampleRate = 0.0;
+        drivePreparedFrequency = drivePreparedQ = -1.0f;
         driveMemoryL = driveMemoryR = 0.0f;
         drivePhaseL = drivePhaseR = 0.0;
         driveDelayPosL = driveDelayPosR = 0;
@@ -108,9 +121,15 @@ struct EQBand
                     float newPlacement = 0.0f,
                     bool useDecramping = false)
     {
+        const float clampedSlope = std::clamp(newSlopeDbPerOct, 3.0f, 48.0f);
+        const float clampedPlacement = std::clamp(newPlacement, -1.0f, 1.0f);
+        const bool topologyChanged = !coefficientsValid || processSampleRate != sampleRate
+            || enabled != isEnabled || type != newType || slopeDbPerOct != clampedSlope
+            || decrampEnabled != useDecramping;
+        const bool auxiliaryChanged = topologyChanged || targetFreqHz != newFreqHz || targetQ != newQ;
         enabled = isEnabled;
         type = newType;
-        slopeDbPerOct = std::clamp(newSlopeDbPerOct, 3.0f, 48.0f);
+        slopeDbPerOct = clampedSlope;
         const float stageAmount = slopeDbPerOct / 12.0f;
         fullStages = std::clamp((int) std::floor(stageAmount), 0, maxStages);
         fractionalStage = stageAmount - (float) fullStages;
@@ -119,7 +138,7 @@ struct EQBand
         cutFullStages = std::clamp((int)std::floor(cutStageAmount), 0, maxCutStages);
         cutFractionalStage = cutStageAmount - (float)cutFullStages;
         midSidePlacement = useMidSidePlacement;
-        placement = std::clamp(newPlacement, -1.0f, 1.0f);
+        placement = clampedPlacement;
         decrampEnabled = useDecramping;
 
         targetFreqHz = newFreqHz;
@@ -131,18 +150,21 @@ struct EQBand
         if (qSm.getTargetValue() != targetQ)         qSm.setTargetValue(targetQ);
         if (gainSm.getTargetValue() != targetGainDb) gainSm.setTargetValue(targetGainDb);
 
-        // If not smoothing, update coefficients once per block
         if (!enabled) return;
 
-        if (!(freqSm.isSmoothing() || qSm.isSmoothing() || gainSm.isSmoothing()))
+        updateDynamicTimeConstants(sampleRate);
+        if (topologyChanged || auxiliaryChanged || !coefficientsValid)
         {
-            freqHz = targetFreqHz;
-            Q = targetQ;
-            gainDb = targetGainDb;
-            setAllStages(sampleRate);
+            if (!coefficientsValid)
+            {
+                freqHz = targetFreqHz;
+                Q = targetQ;
+                gainDb = targetGainDb;
+            }
+            setAllStages(sampleRate, true);
+            coefficientsValid = true;
         }
 
-        intervalCounter = 0;
     }
 
     inline void maybeUpdateCoeffs(double sampleRate)
@@ -158,7 +180,8 @@ struct EQBand
                 freqHz = freqSm.getNextValue();
                 Q      = qSm.getNextValue();
                 gainDb = gainSm.getNextValue();
-                setAllStages(sampleRate);
+                const bool movingFrequencyOrQ = freqSm.isSmoothing() || qSm.isSmoothing();
+                setAllStages(sampleRate, movingFrequencyOrQ);
             }
             else
             {
@@ -172,23 +195,35 @@ struct EQBand
     // Update dynamic EQ envelope from the input signal (call per sample, before process).
     inline void updateDynamicEnvelope(float l, float r, double sampleRate)
     {
-        if (!enabled) { dynGainMod = 0.0f; lastSidechainSample = 0.0f; return; }
+        if (!enabled || (!dynEnabled && !detectorListen))
+        {
+            dynGainMod = 0.0f;
+            lastSidechainSample = 0.0f;
+            return;
+        }
 
         // Sidechain: bandpass-filter the input at the band frequency
         const float scMono = (l + r) * 0.5f;
         const float scFiltered = scBiquad.processL(scMono);
         lastSidechainSample = scFiltered;
-        if (!dynEnabled) { dynGainMod = 0.0f; return; }
+        if (!dynEnabled)
+        {
+            dynGainMod = 0.0f;
+            return;
+        }
         const float rectified = std::abs(scFiltered);
 
-        // One-pole envelope follower
-        const float attackCoeff  = 1.0f - std::exp(-1.0f / (float)(sampleRate * dynAttackMs * 0.001f));
-        const float releaseCoeff = 1.0f - std::exp(-1.0f / (float)(sampleRate * dynReleaseMs * 0.001f));
-
         if (rectified > envLevel)
-            envLevel += attackCoeff * (rectified - envLevel);
+            envLevel += dynAttackCoeff * (rectified - envLevel);
         else
-            envLevel += releaseCoeff * (rectified - envLevel);
+            envLevel += dynReleaseCoeff * (rectified - envLevel);
+
+        // The envelope itself remains sample-accurate. The transfer curve and
+        // coefficient target are control-rate values, which removes almost all
+        // per-sample log work without making the result block-size dependent.
+        if (++dynamicControlCounter < coeffUpdateInterval)
+            return;
+        dynamicControlCounter = 0;
 
         // Compute gain reduction
         const float envDb = 20.0f * std::log10(std::max(envLevel, 1e-7f));
@@ -210,6 +245,12 @@ struct EQBand
 
     inline void process(float& l, float& r)
     {
+        processEqualizer(l, r);
+        processDrive(l, r);
+    }
+
+    inline void processEqualizer(float& l, float& r)
+    {
         if (!enabled) return;
         const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
         const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
@@ -229,9 +270,26 @@ struct EQBand
             l = (mid + side) * invSqrt2;
             r = (mid - side) * invSqrt2;
         }
+    }
 
-        if (driveAmount > 0.001f)
+    inline void processDrive(float& l, float& r)
+    {
+        if (enabled && driveAmount > 0.001f)
             applySpectralDrive(l, r);
+    }
+
+    bool driveActive() const noexcept { return enabled && driveAmount > 0.001f; }
+
+    void prepareDriveRate(double sampleRate)
+    {
+        if (driveProcessSampleRate == sampleRate && drivePreparedFrequency == freqHz
+            && drivePreparedQ == Q)
+            return;
+        driveProcessSampleRate = sampleRate;
+        driveBandBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz,
+                            std::clamp(Q, 0.2f, 12.0f), 0.0);
+        drivePreparedFrequency = freqHz;
+        drivePreparedQ = Q;
     }
 
     // A solo is an audition operation, not merely "disable the other EQ
@@ -414,6 +472,8 @@ private:
     std::vector<float> driveDelayL, driveDelayR;
     int driveDelayPosL = 0, driveDelayPosR = 0;
     double drivePhaseL = 0.0, drivePhaseR = 0.0;
+    double driveProcessSampleRate = 0.0;
+    float drivePreparedFrequency = -1.0f, drivePreparedQ = -1.0f;
 
     inline float processModulatedDelay(float x, float character, float depth,
                                        float noiseMix, bool rightState)
@@ -425,14 +485,14 @@ private:
         const float frequency = character <= 0.5f
             ? 4000.0f * character * character
             : 1000.0f * std::pow(10.0f, 2.0f * character - 1.0f);
-        phase += juce::MathConstants<double>::twoPi * frequency / std::max(1.0, processSampleRate);
+        phase += juce::MathConstants<double>::twoPi * frequency / std::max(1.0, driveProcessSampleRate);
         if (phase >= juce::MathConstants<double>::twoPi) phase -= juce::MathConstants<double>::twoPi;
         memory = 0.97f * memory + 0.03f * std::sin((float)phase * 12.9898f + 78.233f);
         const float source = juce::jmap(noiseMix, std::sin((float)phase), std::tanh(memory * 2.0f));
         const int delayCapacity = (int)delay.size();
         if (delayCapacity < 2) return x;
         const float delaySamples = std::clamp(0.001f * 50.0f * std::pow(depth, 2.5849625f)
-                                              * (0.5f + 0.5f * source) * (float)processSampleRate,
+                                              * (0.5f + 0.5f * source) * (float)driveProcessSampleRate,
                                               0.0f, (float)(delayCapacity - 2));
         delay[(size_t)pos] = x;
         float read = (float)pos - delaySamples;
@@ -493,7 +553,21 @@ private:
         }
     }
 
-    void setAllStages(double sampleRate)
+    void updateDynamicTimeConstants(double sampleRate)
+    {
+        if (cachedDynSampleRate == sampleRate && cachedDynAttackMs == dynAttackMs
+            && cachedDynReleaseMs == dynReleaseMs)
+            return;
+        const float safeAttack = std::max(0.01f, dynAttackMs);
+        const float safeRelease = std::max(0.01f, dynReleaseMs);
+        dynAttackCoeff = 1.0f - std::exp(-1.0f / (float)(sampleRate * safeAttack * 0.001f));
+        dynReleaseCoeff = 1.0f - std::exp(-1.0f / (float)(sampleRate * safeRelease * 0.001f));
+        cachedDynSampleRate = sampleRate;
+        cachedDynAttackMs = dynAttackMs;
+        cachedDynReleaseMs = dynReleaseMs;
+    }
+
+    void setAllStages(double sampleRate, bool updateAuxiliary)
     {
         processSampleRate = sampleRate;
         // Incorporate dynamic gain modulation into the filter coefficients
@@ -506,15 +580,17 @@ private:
             else
                 biquads[(size_t)s].set(type, sampleRate, freqHz, Q, effectiveGainDb);
 
-        const bool highPass = type == Biquad::Type::HighPass;
-        for (auto& stage : cutStages)
-            stage.set(highPass, sampleRate, freqHz);
+        if (updateAuxiliary)
+        {
+            const bool highPass = type == Biquad::Type::HighPass;
+            if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
+                for (auto& stage : cutStages)
+                    stage.set(highPass, sampleRate, freqHz);
 
-        // Sidechain bandpass tracks band center frequency for envelope detection
-        scBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, 2.0, 0.0);
-        const float auditionQ = std::clamp(Q, 0.2f, 12.0f);
-        auditionBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, auditionQ, 0.0);
-        driveBandBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, auditionQ, 0.0);
+            scBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, 2.0, 0.0);
+            const float auditionQ = std::clamp(Q, 0.2f, 12.0f);
+            auditionBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, auditionQ, 0.0);
+        }
     }
     double processSampleRate = 44100.0;
 };

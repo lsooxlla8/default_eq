@@ -2,7 +2,6 @@
 
 namespace
 {
-std::atomic<int> sharedDarkTheme { -1 };
 juce::Font mono(float size, bool bold = false)
 {
     return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), size,
@@ -34,229 +33,10 @@ juce::String cleanDb(double value, int digits = 2)
 
 int workspaceHeightForWidth(int width) noexcept
 {
-    if (width < 820) return 120;
-    if (width < 1080) return 132;
-    return 144;
+    if (width < 820) return 84;
+    if (width < 1080) return 92;
+    return 100;
 }
-}
-
-FamilyLookAndFeel::FamilyLookAndFeel() { setDark(false); }
-
-void FamilyLookAndFeel::setDark(bool shouldBeDark)
-{
-    dark = shouldBeDark;
-    const auto fg = foreground(), bg = background();
-    setColour(juce::Label::textColourId, fg);
-    setColour(juce::Label::backgroundColourId, bg);
-    setColour(juce::TextEditor::textColourId, fg);
-    setColour(juce::TextEditor::backgroundColourId, bg);
-    setColour(juce::TextEditor::outlineColourId, fg);
-    setColour(juce::Slider::textBoxTextColourId, fg);
-    setColour(juce::Slider::textBoxBackgroundColourId, bg);
-    setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-    setColour(juce::ComboBox::backgroundColourId, bg);
-    setColour(juce::ComboBox::textColourId, fg);
-    setColour(juce::ComboBox::outlineColourId, fg);
-    setColour(juce::ComboBox::arrowColourId, fg);
-    setColour(juce::PopupMenu::backgroundColourId, bg);
-    setColour(juce::PopupMenu::textColourId, fg);
-    setColour(juce::PopupMenu::highlightedBackgroundColourId, fg);
-    setColour(juce::PopupMenu::highlightedTextColourId, bg);
-}
-
-juce::Font FamilyLookAndFeel::getTextButtonFont(juce::TextButton&, int h)
-{
-    return mono(juce::jlimit(9.0f, 15.0f, h * 0.40f), true);
-}
-
-juce::Font FamilyLookAndFeel::getComboBoxFont(juce::ComboBox& box)
-{
-    return mono(juce::jlimit(9.0f, 13.0f, box.getHeight() * 0.42f), true);
-}
-
-juce::Font FamilyLookAndFeel::getLabelFont(juce::Label& label)
-{
-    return mono(juce::jlimit(9.0f, 13.0f, label.getHeight() * 0.48f), true);
-}
-
-juce::Font FamilyLookAndFeel::getPopupMenuFont() { return mono(12.0f, true); }
-
-void FamilyLookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
-{
-    label.setBounds(8, 1, juce::jmax(1, box.getWidth() - 34), box.getHeight() - 2);
-    label.setFont(getComboBoxFont(box));
-    label.setJustificationType(juce::Justification::centredLeft);
-}
-
-void FamilyLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button& button,
-                                              const juce::Colour&, bool over, bool down)
-{
-    if (button.getName() == "wordmark")
-    {
-        g.setColour(background());
-        g.fillAll();
-        return;
-    }
-    const bool active = button.getToggleState();
-    const auto bounds = button.getLocalBounds();
-    const int border = 2;
-    const auto content = bounds.reduced(border);
-    g.setColour(foreground()); g.fillRect(bounds);
-    g.setColour(background()); g.fillRect(content);
-    if (active || down)
-    {
-        g.setColour(foreground());
-        g.fillRect(content.reduced(2));
-    }
-    const float progress = (float)button.getProperties().getWithDefault("progress", 0.0f);
-    if (progress > 0.001f && progress < 1.0f)
-    {
-        g.setColour(active || down ? background() : foreground());
-        g.fillRect((float)content.getX() + 3.0f, (float)content.getBottom() - 5.0f,
-                   ((float)content.getWidth() - 6.0f) * std::clamp(progress, 0.0f, 1.0f), 2.0f);
-    }
-    if (over)
-    {
-        const auto highlight = content.reduced(4);
-        if (!highlight.isEmpty())
-        {
-            g.setColour(active || down ? background() : foreground());
-            g.drawRect(highlight, 1);
-        }
-    }
-}
-
-void FamilyLookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bool down)
-{
-    if (button.getName() == "wordmark")
-    {
-        g.setColour(foreground());
-        g.setFont(mono(juce::jlimit(12.0f, 18.0f, button.getHeight() * 0.31f), true));
-        g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(12, 2),
-                         juce::Justification::centred, 1);
-        return;
-    }
-    const bool active = button.getToggleState() || down;
-    g.setColour((active ? background() : foreground()).withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.35f));
-    g.setFont(getTextButtonFont(button, button.getHeight()));
-    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(5, 2), juce::Justification::centred, 1);
-}
-
-void FamilyLookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button, bool over, bool down)
-{
-    drawButtonBackground(g, button, {}, over, down);
-    const bool active = button.getToggleState() || down;
-    g.setColour((active ? background() : foreground()).withMultipliedAlpha(button.isEnabled() ? 1.0f : 0.35f));
-    g.setFont(mono(juce::jlimit(8.0f, 12.0f, button.getHeight() * 0.42f), true));
-    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(4, 2), juce::Justification::centred, 1);
-}
-
-void FamilyLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h,
-                                         float pos, float, float, juce::Slider& slider)
-{
-    const auto side = (float) juce::jmin(w, h);
-    auto r = juce::Rectangle<float>((float)x + ((float)w - side) * 0.5f,
-                                    (float)y + ((float)h - side) * 0.5f, side, side);
-    const auto fg = foreground().withMultipliedAlpha(slider.isEnabled() ? 1.0f : 0.35f);
-    g.setColour(background()); g.fillRect(r);
-    g.setColour(fg); g.drawRect(r, 2.0f);
-    auto inner = r.reduced(8.0f);
-    g.setColour(fg.withAlpha(0.12f)); g.fillRect(inner);
-    for (int i = 1; i < 4; ++i)
-    {
-        const float p = (float)i / 4.0f;
-        g.setColour(fg.withAlpha(0.16f));
-        g.drawVerticalLine(juce::roundToInt(inner.getX() + inner.getWidth() * p), inner.getY(), inner.getBottom());
-        g.drawHorizontalLine(juce::roundToInt(inner.getY() + inner.getHeight() * p), inner.getX(), inner.getRight());
-    }
-    const float fillH = inner.getHeight() * pos;
-    g.setColour(fg.withAlpha(0.88f));
-    g.fillRect(inner.getX(), inner.getBottom() - fillH, inner.getWidth(), fillH);
-    const float marker = juce::jmax(4.0f, side * 0.07f);
-    g.setColour(fg);
-    g.fillRect(inner.getX() + pos * (inner.getWidth() - marker), inner.getY() - marker * 0.5f, marker, marker);
-}
-
-void FamilyLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h,
-                                         float pos, float min, float max,
-                                         juce::Slider::SliderStyle style, juce::Slider& slider)
-{
-    if (slider.getName() != "LOOKAHEAD" && slider.getName() != "OUTPUT_HDR"
-        && slider.getName() != "PLACEMENT" && slider.getName() != "OVERSAMPLING")
-        return juce::LookAndFeel_V4::drawLinearSlider(g, x, y, w, h, pos, min, max, style, slider);
-    juce::ignoreUnused(min, max, style);
-    // JUCE reserves thumb travel inside the x/w arguments even when our
-    // rectangular sliders have no thumb. Draw against the component itself so
-    // stacked sliders exactly match the button above them.
-    auto r = slider.getLocalBounds().toFloat();
-    g.setColour(background()); g.fillRect(r);
-    g.setColour(foreground()); g.drawRect(r, 2.0f);
-    const float proportion = (float)slider.valueToProportionOfLength(slider.getValue());
-    juce::Rectangle<float> fillRect;
-    if (slider.getName() == "OUTPUT_HDR")
-    {
-        auto inner = r.reduced(4.0f);
-        fillRect = inner.withTop(inner.getBottom() - inner.getHeight() * proportion);
-        if (proportion > 0.001f) { g.setColour(foreground()); g.fillRect(fillRect); }
-    }
-    else if (slider.getName() == "PLACEMENT")
-    {
-        auto inner = r.reduced(4.0f);
-        const float centre = inner.getCentreX();
-        const float marker = inner.getX() + inner.getWidth() * proportion;
-        fillRect = marker < centre ? juce::Rectangle<float>(marker, inner.getY(), centre - marker, inner.getHeight())
-                                   : juce::Rectangle<float>(centre, inner.getY(), marker - centre, inner.getHeight());
-        if (fillRect.getWidth() > 0.5f) { g.setColour(foreground()); g.fillRect(fillRect); }
-        g.setColour(foreground().withAlpha(0.35f)); g.drawVerticalLine(juce::roundToInt(centre), inner.getY(), inner.getBottom());
-    }
-    else if (proportion > 0.001f)
-    {
-        fillRect = r.reduced(4.0f).withWidth((r.getWidth() - 8.0f) * proportion);
-        g.setColour(foreground()); g.fillRect(fillRect);
-    }
-    g.setFont(mono(10.0f, true));
-    const bool midSidePlacement = (bool)slider.getProperties().getWithDefault("midSide", false);
-    const auto value = slider.getName() == "PLACEMENT"
-        ? (std::abs(slider.getValue()) < 0.05 ? "CENTER"
-           : slider.getValue() < 0.0 ? juce::String(midSidePlacement ? "M " : "L ") + juce::String(std::abs(slider.getValue()), 0)
-                                     : juce::String(midSidePlacement ? "S " : "R ") + juce::String(slider.getValue(), 0))
-        : slider.getName() == "OVERSAMPLING"
-        ? juce::String("OS ") + std::array<const char*, 4> { "OFF", "2X", "4X", "8X" }
-            [(size_t)juce::jlimit(0, 3, juce::roundToInt(slider.getValue()))]
-        : slider.getValue() <= 0.001 ? "LOOK OFF"
-        : "LOOK " + juce::String(slider.getValue(), 2) + "ms";
-    const auto textBounds = r.toNearestInt().reduced(4, 1);
-    const auto drawValue = [&](juce::Colour colour)
-    {
-        g.setColour(colour);
-        if (slider.getName() == "OUTPUT_HDR")
-        {
-            auto outputTextBounds = textBounds;
-            auto top = outputTextBounds.removeFromTop(outputTextBounds.getHeight() / 2);
-            g.drawFittedText("OUT", top, juce::Justification::centredBottom, 1);
-            const double clean = std::abs(slider.getValue()) < 0.005 ? 0.0 : slider.getValue();
-            g.drawFittedText(juce::String(clean, 1), outputTextBounds, juce::Justification::centredTop, 1);
-        }
-        else
-            g.drawFittedText(value, textBounds, juce::Justification::centred, 1);
-    };
-    drawValue(foreground());
-    if (!fillRect.isEmpty())
-    {
-        juce::Graphics::ScopedSaveState saved(g);
-        g.reduceClipRegion(fillRect.toNearestInt());
-        drawValue(background());
-    }
-}
-
-void FamilyLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool,
-                                     int, int, int, int, juce::ComboBox& box)
-{
-    const auto fg = foreground().withMultipliedAlpha(box.isEnabled() ? 1.0f : 0.35f);
-    g.setColour(background()); g.fillRect(0, 0, w, h);
-    g.setColour(fg); g.drawRect(0, 0, w, h, 2);
-    const int marker = juce::jmax(7, h / 5);
-    g.fillRect(w - marker - 8, (h - marker) / 2, marker, marker);
 }
 
 DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(DefaultEqualizerAudioProcessor& p)
@@ -268,10 +48,7 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     options.folderName = "icanseesounds";
     options.osxLibrarySubFolder = "Application Support";
     uiPreferences = std::make_unique<juce::PropertiesFile>(options);
-    const int storedTheme = uiPreferences->getBoolValue("darkTheme", false) ? 1 : 0;
-    int unset = -1;
-    sharedDarkTheme.compare_exchange_strong(unset, storedTheme);
-    darkTheme = sharedDarkTheme.load(std::memory_order_acquire) != 0;
+    darkTheme = !default_family::ThemePreferences::loadLight();
     familyLook.setDark(darkTheme);
     setLookAndFeel(&familyLook);
     responseCurve.setDarkMode(darkTheme);
@@ -290,10 +67,9 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     addAndMakeVisible(responseCurve);
 
     auto addButton = [this](auto& button) { addAndMakeVisible(button); };
-    themeBtn.setName("wordmark");
     nextBrandGlitchTimeMs = juce::Time::getMillisecondCounterHiRes() + 4000.0;
     addButton(themeBtn); addButton(powerBtn); addButton(workspaceToggleBtn);
-    addButton(bandPageBtn); addButton(dynamicPageBtn); addButton(analyzerPageBtn); addButton(matchPageBtn);
+    addAndMakeVisible(pageRail);
     addButton(bandOn); addButton(bandSolo); addButton(adaptiveQBtn); addButton(placementModeBtn);
     addButton(sidechainAudition); addButton(driveOn); addButton(driveAutoGain);
     addButton(analyzerVisible); addButton(spectrumFreeze);
@@ -410,10 +186,9 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     themeBtn.onClick = [this]
     {
         darkTheme = !darkTheme;
-        sharedDarkTheme.store(darkTheme ? 1 : 0, std::memory_order_release);
         familyLook.setDark(darkTheme); responseCurve.setDarkMode(darkTheme);
         applySliderPalette();
-        uiPreferences->setValue("darkTheme", darkTheme);
+        default_family::ThemePreferences::saveLight(!darkTheme);
         sendLookAndFeelChange(); repaint();
     };
     autoGainBtn.onClick = [this]
@@ -427,10 +202,10 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
             parameter->endChangeGesture();
         }
     };
-    bandPageBtn.onClick = [this] { setWorkspacePage(WorkspacePage::Band); };
-    dynamicPageBtn.onClick = [this] { setWorkspacePage(WorkspacePage::Dynamic); };
-    analyzerPageBtn.onClick = [this] { setWorkspacePage(WorkspacePage::Analyzer); };
-    matchPageBtn.onClick = [this] { setWorkspacePage(WorkspacePage::Match); };
+    pageRail.onPageChange = [this](int page)
+    {
+        setWorkspacePage(static_cast<WorkspacePage>(juce::jlimit(0, 3, page)));
+    };
     workspaceToggleBtn.onClick = [this] { setWorkspaceExpanded(!workspaceExpanded, true); };
     phaseModeBox.onChange = [this]
     {
@@ -481,20 +256,41 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     {
         uiPreferences->setValue("analyzerVisible", analyzerVisible.getToggleState());
         responseCurve.setAnalyzerVisible(analyzerVisible.getToggleState());
+        updateAnalyzerLifecycle();
     };
     responseCurve.setAnalyzerVisible(analyzerVisible.getToggleState());
+    updateAnalyzerLifecycle();
     responseCurve.setAnalyzerSources(true, true);
     spectrumFreeze.setClickingTogglesState(true);
-    spectrumFreeze.onClick = [this] { responseCurve.setSpectrumFrozen(spectrumFreeze.getToggleState()); };
+    spectrumFreeze.onClick = [this]
+    {
+        responseCurve.setSpectrumFrozen(spectrumFreeze.getToggleState());
+        updateAnalyzerLifecycle();
+    };
     analyzerPeakHold.setClickingTogglesState(true);
     analyzerPeakHold.setToggleState(uiPreferences->getBoolValue("analyzerPeakHold", false), juce::dontSendNotification);
     if (!uiPreferences->getBoolValue("analyzerResolutionV2", false))
     {
-        const int legacy = uiPreferences->getIntValue("analyzerResolution", 3);
-        uiPreferences->setValue("analyzerResolution", legacy == 3 ? 2 : std::max(1, legacy - 1));
+        if (uiPreferences->containsKey("analyzerResolution"))
+        {
+            const int legacy = uiPreferences->getIntValue("analyzerResolution", 3);
+            uiPreferences->setValue("analyzerResolution", legacy == 3 ? 2 : std::max(1, legacy - 1));
+        }
+        else
+        {
+            // Fresh installs start at the most detailed analyzer mode.
+            uiPreferences->setValue("analyzerResolution", 3);
+        }
         uiPreferences->setValue("analyzerResolutionV2", true);
     }
-    analyzerResolutionBox.setSelectedId(uiPreferences->getIntValue("analyzerResolution", 2), juce::dontSendNotification);
+    // One-time preference migration for the new product default. Afterwards
+    // the user's explicit analyzer choice remains persistent as before.
+    if (!uiPreferences->getBoolValue("analyzerResolutionV3", false))
+    {
+        uiPreferences->setValue("analyzerResolution", 3);
+        uiPreferences->setValue("analyzerResolutionV3", true);
+    }
+    analyzerResolutionBox.setSelectedId(uiPreferences->getIntValue("analyzerResolution", 3), juce::dontSendNotification);
     const auto analyzerChanged = [this] { updateAnalyzerSettings(); };
     analyzerPeakHold.onClick = analyzerChanged;
     analyzerResolutionBox.onChange = analyzerChanged;
@@ -509,6 +305,11 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     decrampAtt = std::make_unique<ButtonAttachment>(proc.apvts, "decramp", decrampBtn);
     oversamplingAtt = std::make_unique<SliderAttachment>(proc.apvts, "oversampling", oversamplingSlider);
     outputAtt = std::make_unique<SliderAttachment>(proc.apvts, "output_gain", outputSlider);
+
+    const int initialAutoMode = (int)proc.apvts.getRawParameterValue("auto_gain_mode")->load();
+    autoGainBtn.setButtonText(initialAutoMode == 0 ? "AUTO GAIN: OFF"
+                              : initialAutoMode == 1 ? "AUTO GAIN" : "SMART AUTO GAIN");
+    autoGainBtn.setToggleState(initialAutoMode > 0, juce::dontSendNotification);
 
     setWantsKeyboardFocus(true);
     selectBand(0);
@@ -525,6 +326,7 @@ DefaultEqualizerAudioProcessorEditor::~DefaultEqualizerAudioProcessorEditor()
     removeMouseListener(this);
     proc.sidechainAuditionBand.store(-1, std::memory_order_release);
     proc.soloBand.store(-1, std::memory_order_release);
+    proc.setAnalyzerEnabled(false);
     if (uiPreferences)
     {
         uiPreferences->removeValue("windowWidth");
@@ -541,6 +343,17 @@ void DefaultEqualizerAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         saturationMouseInteraction = true;
     if (!responseCurve.isNumericEditorComponent(event.originalComponent))
         responseCurve.dismissNumericEditor();
+}
+
+void DefaultEqualizerAudioProcessorEditor::visibilityChanged()
+{
+    updateAnalyzerLifecycle();
+}
+
+void DefaultEqualizerAudioProcessorEditor::updateAnalyzerLifecycle()
+{
+    proc.setAnalyzerEnabled(isShowing() && analyzerVisible.getToggleState()
+                            && !spectrumFreeze.getToggleState());
 }
 
 void DefaultEqualizerAudioProcessorEditor::initParameter(juce::Slider& slider, const juce::String& name)
@@ -670,10 +483,7 @@ void DefaultEqualizerAudioProcessorEditor::selectBand(int band, bool updateGraph
 void DefaultEqualizerAudioProcessorEditor::setWorkspacePage(WorkspacePage page)
 {
     workspacePage = page;
-    bandPageBtn.setToggleState(page == WorkspacePage::Band, juce::dontSendNotification);
-    dynamicPageBtn.setToggleState(page == WorkspacePage::Dynamic, juce::dontSendNotification);
-    analyzerPageBtn.setToggleState(page == WorkspacePage::Analyzer, juce::dontSendNotification);
-    matchPageBtn.setToggleState(page == WorkspacePage::Match, juce::dontSendNotification);
+    pageRail.setSelectedPage(static_cast<int>(page), juce::dontSendNotification);
 
     const bool band = workspaceExpanded && page == WorkspacePage::Band;
     const bool dyn = workspaceExpanded && page == WorkspacePage::Dynamic;
@@ -697,8 +507,7 @@ void DefaultEqualizerAudioProcessorEditor::setWorkspacePage(WorkspacePage page)
                              static_cast<juce::Component*>(&adaptiveQBtn) })
         component->setVisible(true);
     for (auto* component : matchComponents) component->setVisible(match);
-    for (auto* tab : { &bandPageBtn, &dynamicPageBtn, &analyzerPageBtn, &matchPageBtn })
-        tab->setVisible(workspaceExpanded);
+    pageRail.setVisible(workspaceExpanded);
     resized(); repaint();
 }
 
@@ -741,7 +550,13 @@ bool DefaultEqualizerAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 
 void DefaultEqualizerAudioProcessorEditor::timerCallback()
 {
-    const bool sharedDark = sharedDarkTheme.load(std::memory_order_acquire) != 0;
+    // Hosts can attach an already-visible editor to a native window without a
+    // JUCE visibilityChanged() callback. Reconcile the cheap atomic analyzer
+    // gate here as well, so reopening the editor cannot leave Spectrum visibly
+    // enabled while the audio-side producer remains stopped.
+    updateAnalyzerLifecycle();
+
+    const bool sharedDark = !default_family::ThemePreferences::loadLight();
     if (sharedDark != darkTheme)
     {
         darkTheme = sharedDark;
@@ -782,8 +597,8 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
     autoGainBtn.setButtonText(autoMode == 0 ? "AUTO GAIN: OFF" : autoMode == 1 ? "AUTO GAIN"
                                                                     : "SMART AUTO GAIN");
     autoGainBtn.setToggleState(autoMode > 0, juce::dontSendNotification);
-    autoGainBtn.getProperties().set("progress", smartSelected && !smartLocked
-        ? proc.smartAutoGainProgress.load(std::memory_order_relaxed) : 0.0f);
+    autoGainBtn.setLoadingState(proc.smartAutoGainProgress.load(std::memory_order_relaxed),
+        smartSelected && !smartLocked, uiPreferences->getBoolValue("reducedMotion", false));
     if (smartSelected)
         autoGainBtn.setTooltip(smartLocked ? "Smart Auto Gain: locked"
                                            : "Smart Auto Gain: analysing");
@@ -828,7 +643,8 @@ void DefaultEqualizerAudioProcessorEditor::paint(juce::Graphics& g)
     const int workspaceH = workspaceExpanded ? workspaceHeightForWidth(getWidth()) : 0;
     g.fillAll(fg);
     g.setColour(bg); g.fillRect(0, 0, getWidth(), headerH);
-    const int seamX = juce::jmin(220, getWidth() / 4);
+    const int seamX = juce::roundToInt((float)default_family::metrics::wordmarkWidth
+                                      * (float)getWidth() / (float)default_family::metrics::designWidth);
     const int seam = juce::jmax(18, headerH * 3 / 8);
     g.setColour(fg); g.fillRect(seamX, 0, seam, seam); g.fillRect(seamX, headerH - seam, seam, seam);
     if (workspaceExpanded)
@@ -846,15 +662,22 @@ void DefaultEqualizerAudioProcessorEditor::paint(juce::Graphics& g)
                                                   &analyzerRange, &analyzerFloor, &analyzerSpeed, &analyzerAveraging, &analyzerTilt };
     for (auto* slider : sliders)
         if (slider->isVisible() && slider != &outputSlider)
-            g.drawText(slider->getName(), slider->getX(), slider->getY() - 12, slider->getWidth(), 11, juce::Justification::centred);
+        {
+            g.drawText(slider->getName(), slider->getX(), slider->getY() - 12,
+                       slider->getWidth(), 11,
+                       juce::Justification::centred);
+        }
 }
 
 void DefaultEqualizerAudioProcessorEditor::resized()
 {
     const int w = getWidth(), h = getHeight();
+    familyLook.setUiScale(juce::jlimit(0.90f, 1.25f,
+        (float)w / (float)default_family::metrics::designWidth));
     const int headerH = juce::jlimit(56, 70, juce::roundToInt(64.0f * w / 860.0f));
     const int workspaceH = workspaceExpanded ? workspaceHeightForWidth(w) : 0;
-    const int wordW = juce::jmin(220, w / 4);
+    const int wordW = juce::roundToInt((float)default_family::metrics::wordmarkWidth
+                                      * (float)w / (float)default_family::metrics::designWidth);
     const int seamW = juce::jmax(18, headerH * 3 / 8);
     themeBtn.setBounds(0, 0, wordW, headerH);
 
@@ -865,7 +688,7 @@ void DefaultEqualizerAudioProcessorEditor::resized()
     powerBtn.setBounds(powerX, actionY, powerW, actionH);
 
     const int autoW = w < 820 ? 120 : 152;
-    const int outW = actionH;
+    const int outW = w < 820 ? 60 : 68;
     const int sectionGap = 4;
     const int autoX = powerX - 4 - autoW;
     const int outputX = autoX - sectionGap - outW;
@@ -885,13 +708,17 @@ void DefaultEqualizerAudioProcessorEditor::resized()
     oversamplingSlider.setBounds(globalX, actionY, osW, actionH); globalX += osW + globalGap;
     decrampBtn.setBounds(globalX, actionY, decrampW, actionH);
 
-    const int graphTop = headerH + 10;
+    // default_distortion leaves a four-pixel structural frame around its
+    // response surface at the 860 px design size.
+    const int graphFrame = juce::jmax(3, juce::roundToInt(4.0f * familyLook.getUiScale()));
+    const int graphTop = headerH + graphFrame;
     const int toggleH = 28;
     const int toggleY = h - workspaceH - toggleH - 8;
-    adaptiveQBtn.setBounds(10, toggleY, 128, toggleH);
-    workspaceToggleBtn.setBounds(w - 186, toggleY, 176, toggleH);
-    const int graphBottom = toggleY - 8;
-    responseCurve.setBounds(10, graphTop, w - 20, juce::jmax(160, graphBottom - graphTop));
+    adaptiveQBtn.setBounds(graphFrame, toggleY, 128, toggleH);
+    workspaceToggleBtn.setBounds(w - graphFrame - 176, toggleY, 176, toggleH);
+    const int graphBottom = toggleY - graphFrame;
+    responseCurve.setBounds(graphFrame, graphTop, w - graphFrame * 2,
+                            juce::jmax(160, graphBottom - graphTop));
 
     if (!workspaceExpanded)
         return;
@@ -900,19 +727,34 @@ void DefaultEqualizerAudioProcessorEditor::resized()
     const int rowH = w < 820 ? 24 : w < 1080 ? 28 : 32;
     const int gap = 4;
     const int pairH = rowH * 2 + gap;
+    // JUCE reserves the exact 16 px text-box height below the rotary area.
+    // Therefore a pairH-wide component with pairH+16 height produces a visible
+    // square exactly as tall as the neighbouring two-row stack.
     const int knobSide = pairH;
-    const int knobComponentH = knobSide + 20;
-    const int tabsY = workspaceY + 8, tabH = rowH;
-    int tx = 10;
-    bandPageBtn.setBounds(tx, tabsY, 68, tabH); tx += 68 + gap;
-    dynamicPageBtn.setBounds(tx, tabsY, 84, tabH); tx += 84 + gap;
-    analyzerPageBtn.setBounds(tx, tabsY, 60, tabH); tx += 60 + gap;
-    matchPageBtn.setBounds(tx, tabsY, 68, tabH);
+    const int knobComponentH = knobSide + 16;
+    const int pairY = workspaceY + 12;
+    // Band defines the horizontal grid for every page. At the narrow 720 px
+    // limit its text columns contract, while the five knob squares retain the
+    // exact shared size and positions used by Dynamic, RTA and Match.
+    const int bandOnW = w < 820 ? 40 : w < 1080 ? 48 : 52;
+    const int bandSelectorW = w < 820 ? 120 : w < 1080 ? 156 : 172;
+    const int bandPlaceW = w < 820 ? 68 : w < 1080 ? 84 : 96;
+    const int bandDriveButtonW = w < 820 ? 64 : w < 1080 ? 76 : 84;
+    const int bandContentWidth = bandOnW + bandSelectorW + bandPlaceW + bandDriveButtonW
+        + knobSide * 5 + gap * 8;
+    const int railX = workspaceToggleBtn.getBounds().getCentreX() - knobSide / 2;
+    pageRail.setBounds(railX, pairY, knobSide, pairH);
 
-    const int contentY = tabsY + tabH + 8;
-    const int contentH = h - contentY - 8;
-    const int centreY = contentY + contentH / 2;
-    const int pairY = centreY - pairH / 2;
+    // Equal whitespace on both sides of the Band row: screen edge -> first
+    // button equals final knob -> Page Rail.
+    const int bandStartX = juce::jmax(0, (pageRail.getX() - bandContentWidth) / 2);
+    const int bandFixedWidth = bandOnW + bandSelectorW + bandPlaceW + bandDriveButtonW;
+    const int firstBandKnobX = bandStartX + bandFixedWidth + gap * 4;
+    const std::array<int, 5> sharedKnobX { firstBandKnobX,
+        firstBandKnobX + (knobSide + gap),
+        firstBandKnobX + (knobSide + gap) * 2,
+        firstBandKnobX + (knobSide + gap) * 3,
+        firstBandKnobX + (knobSide + gap) * 4 };
 
     const auto stack = [rowH, gap](juce::Component& top, juce::Component& bottom,
                                    int x, int y, int width)
@@ -923,54 +765,50 @@ void DefaultEqualizerAudioProcessorEditor::resized()
 
     if (workspacePage == WorkspacePage::Band)
     {
-        const int onW = w < 820 ? 44 : w < 1080 ? 48 : 52;
-        const int selectorW = w < 820 ? 140 : w < 1080 ? 156 : 172;
-        const int placeW = w < 820 ? 72 : w < 1080 ? 84 : 96;
-        const int driveButtonW = w < 820 ? 68 : w < 1080 ? 76 : 84;
-        const int fixed = onW + selectorW + placeW + driveButtonW;
-        const int fixedGaps = gap * 8;
-        const int total = fixed + knobSide * 5 + fixedGaps;
-        int x = juce::jmax(10, (w - total) / 2);
-        stack(bandOn, bandSolo, x, pairY, onW); x += onW + gap;
-        stack(typeBox, saturationBox, x, pairY, selectorW); x += selectorW + gap;
-        stack(placementModeBtn, placementSlider, x, pairY, placeW); x += placeW + gap;
-        stack(driveOn, driveAutoGain, x, pairY, driveButtonW); x += driveButtonW + gap;
+        int x = bandStartX;
+        stack(bandOn, bandSolo, x, pairY, bandOnW); x += bandOnW + gap;
+        stack(typeBox, saturationBox, x, pairY, bandSelectorW); x += bandSelectorW + gap;
+        stack(placementModeBtn, placementSlider, x, pairY, bandPlaceW); x += bandPlaceW + gap;
+        stack(driveOn, driveAutoGain, x, pairY, bandDriveButtonW); x += bandDriveButtonW + gap;
         const int knobY = pairY;
-        slopeSlider.setBounds(x, knobY, knobSide, knobComponentH); x += knobSide + gap;
-        driveSlider.setBounds(x, knobY, knobSide, knobComponentH); x += knobSide + gap;
-        for (auto* slider : { &driveCharacterSlider, &driveMixSlider, &driveOutputSlider })
-        { slider->setBounds(x, knobY, knobSide, knobComponentH); x += knobSide + gap; }
+        const std::array<juce::Slider*, 5> bandKnobs { &slopeSlider, &driveSlider,
+            &driveCharacterSlider, &driveMixSlider, &driveOutputSlider };
+        for (size_t index = 0; index < bandKnobs.size(); ++index)
+            bandKnobs[index]->setBounds(sharedKnobX[index], knobY, knobSide, knobComponentH);
     }
-    else if (workspacePage == WorkspacePage::Dynamic)
+    else
     {
-        const int modeW = w < 820 ? 80 : w < 1080 ? 92 : 104;
-        const int actionW = w < 820 ? 104 : w < 1080 ? 120 : 136;
-        const int dynTotal = modeW + actionW + knobSide * 5 + gap * 6;
-        int x = juce::jmax(10, (w - dynTotal) / 2);
-        stack(dynModeBox, sidechainBox, x, pairY, modeW); x += modeW + gap;
-        stack(sidechainAudition, dynLookahead, x, pairY, actionW); x += actionW + gap;
-        for (auto* slider : { &dynThreshold, &dynRange, &dynRatio, &dynAttack, &dynRelease })
-        { slider->setBounds(x, pairY, knobSide, knobComponentH); x += knobSide + gap; }
-    }
-    else if (workspacePage == WorkspacePage::Analyzer)
-    {
-        const int buttonW = w < 820 ? 84 : w < 1080 ? 92 : 100;
-        const int rtaTotal = buttonW * 2 + knobSide * 5 + gap * 6;
-        int x = juce::jmax(10, (w - rtaTotal) / 2);
-        stack(analyzerVisible, analyzerPeakHold, x, pairY, buttonW); x += buttonW + gap;
-        stack(spectrumFreeze, analyzerResolutionBox, x, pairY, buttonW); x += buttonW + gap;
-        for (auto* slider : { &analyzerRange, &analyzerFloor, &analyzerSpeed, &analyzerAveraging, &analyzerTilt })
-        { slider->setBounds(x, pairY, knobSide, knobComponentH); x += knobSide + gap; }
-    }
-    else if (workspacePage == WorkspacePage::Match)
-    {
-        const int buttonW = w < 820 ? 100 : w < 1080 ? 108 : 120;
-        const int matchTotal = buttonW * 2 + knobSide * 5 + gap * 6;
-        int x = juce::jmax(10, (w - matchTotal) / 2);
-        stack(matchCaptureBtn, matchApplyBtn, x, pairY, buttonW); x += buttonW + gap;
-        stack(matchCommitBtn, matchClearBtn, x, pairY, buttonW); x += buttonW + gap;
-        for (auto* slider : { &matchAmount, &matchSmoothing, &matchLow, &matchHigh, &matchTime })
-        { slider->setBounds(x, pairY, knobSide, knobComponentH); x += knobSide + gap; }
+        // Dynamic, RTA and Match deliberately share one immutable template.
+        // Switching pages changes only controls/text, never geometry.
+        const int firstColumnW = w < 820 ? 80 : w < 1080 ? 92 : 104;
+        const int secondColumnW = w < 820 ? 104 : w < 1080 ? 120 : 136;
+        const int secondX = sharedKnobX[0] - gap - secondColumnW;
+        const int firstX = secondX - gap - firstColumnW;
+
+        if (workspacePage == WorkspacePage::Dynamic)
+        {
+            stack(dynModeBox, sidechainBox, firstX, pairY, firstColumnW);
+            stack(sidechainAudition, dynLookahead, secondX, pairY, secondColumnW);
+            int index = 0;
+            for (auto* slider : { &dynThreshold, &dynRange, &dynRatio, &dynAttack, &dynRelease })
+                slider->setBounds(sharedKnobX[(size_t)index++], pairY, knobSide, knobComponentH);
+        }
+        else if (workspacePage == WorkspacePage::Analyzer)
+        {
+            stack(analyzerVisible, analyzerPeakHold, firstX, pairY, firstColumnW);
+            stack(spectrumFreeze, analyzerResolutionBox, secondX, pairY, secondColumnW);
+            int index = 0;
+            for (auto* slider : { &analyzerRange, &analyzerFloor, &analyzerSpeed, &analyzerAveraging, &analyzerTilt })
+                slider->setBounds(sharedKnobX[(size_t)index++], pairY, knobSide, knobComponentH);
+        }
+        else if (workspacePage == WorkspacePage::Match)
+        {
+            stack(matchCaptureBtn, matchApplyBtn, firstX, pairY, firstColumnW);
+            stack(matchCommitBtn, matchClearBtn, secondX, pairY, secondColumnW);
+            int index = 0;
+            for (auto* slider : { &matchAmount, &matchSmoothing, &matchLow, &matchHigh, &matchTime })
+                slider->setBounds(sharedKnobX[(size_t)index++], pairY, knobSide, knobComponentH);
+        }
     }
 }
 

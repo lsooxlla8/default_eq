@@ -46,7 +46,7 @@ int main()
         for (double f0 : corners)
             for (auto type : { Biquad::Type::LowShelf, Biquad::Type::HighShelf })
                 for (double q = 0.1; q <= 24.0; q += 0.1)
-                    for (double g = -24.0; g <= 24.0; g += 1.0)
+                    for (double g = -36.0; g <= 36.0; g += 1.0)
                     {
                         if (g == 0.0) continue;
 

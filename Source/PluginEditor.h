@@ -4,32 +4,9 @@
 #include "Config.h"
 #include "PluginProcessor.h"
 #include "UI/ResponseCurveComponent.h"
+#include "UI/DefaultFamilyUI.h"
 
-class FamilyLookAndFeel final : public juce::LookAndFeel_V4
-{
-public:
-    FamilyLookAndFeel();
-    void setDark(bool);
-    bool isDark() const noexcept { return dark; }
-    juce::Colour paper() const noexcept { return juce::Colour(0xfff6f6f6); }
-    juce::Colour ink() const noexcept { return juce::Colour(0xff050505); }
-    juce::Colour foreground() const noexcept { return dark ? paper() : ink(); }
-    juce::Colour background() const noexcept { return dark ? ink() : paper(); }
-    juce::Font getTextButtonFont(juce::TextButton&, int) override;
-    juce::Font getComboBoxFont(juce::ComboBox&) override;
-    juce::Font getLabelFont(juce::Label&) override;
-    juce::Font getPopupMenuFont() override;
-    void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
-    void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool, bool) override;
-    void drawButtonText(juce::Graphics&, juce::TextButton&, bool, bool) override;
-    void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
-    void drawRotarySlider(juce::Graphics&, int, int, int, int, float, float, float, juce::Slider&) override;
-    void drawLinearSlider(juce::Graphics&, int, int, int, int, float, float, float,
-                          juce::Slider::SliderStyle, juce::Slider&) override;
-    void drawComboBox(juce::Graphics&, int, int, bool, int, int, int, int, juce::ComboBox&) override;
-private:
-    bool dark = true;
-};
+using FamilyLookAndFeel = default_family::LookAndFeel;
 
 class DefaultEqualizerAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                                     private juce::Timer
@@ -39,6 +16,7 @@ public:
     ~DefaultEqualizerAudioProcessorEditor() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    void visibilityChanged() override;
     bool keyPressed(const juce::KeyPress&) override;
     void mouseDown(const juce::MouseEvent&) override;
 
@@ -55,6 +33,7 @@ private:
     void updateDriveControls(bool resetModeDefaults = false);
     void applyMatchToBands();
     void updateAnalyzerSettings();
+    void updateAnalyzerLifecycle();
 
     DefaultEqualizerAudioProcessor& proc;
     ResponseCurveComponent responseCurve;
@@ -72,14 +51,13 @@ private:
     int expandedWindowHeight = 620;
 
     // Header: product identity, selected object, global actions and power.
-    juce::TextButton themeBtn { "default_equalizer" };
-    juce::TextButton autoGainBtn { "AUTO GAIN: OFF" };
+    default_family::WordmarkButton themeBtn { "default_equalizer" };
+    default_family::SmartGainButton autoGainBtn { "AUTO GAIN: OFF" };
     juce::ToggleButton powerBtn { "ON" };
     juce::TextButton workspaceToggleBtn { "ADVANCED" };
 
     // Workspace navigation. Only the selected layer is visible.
-    juce::TextButton bandPageBtn { "BAND" }, dynamicPageBtn { "DYNAMIC" };
-    juce::TextButton analyzerPageBtn { "RTA" }, matchPageBtn { "MATCH" };
+    default_family::PageRail pageRail;
 
     // Band page. Frequency/gain/Q intentionally live on the graph only.
     juce::ToggleButton bandOn { "ON" }, bandSolo { "SOLO" }, adaptiveQBtn { "ADAPTIVE Q" };

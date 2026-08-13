@@ -6,6 +6,8 @@
 #include "../Config.h"
 #include "../DSP/EQBand.h"
 #include "../DSP/SpectrumFIFO.h"
+#include <algorithm>
+#include <cmath>
 
 class DefaultEqualizerAudioProcessor;
 
@@ -60,6 +62,10 @@ public:
     static juce::Colour getBandColour(int bandIndex);
     static int defaultTypeForNewBand(float frequencyHz, float gainDb) noexcept;
     static bool isCutType(int type) noexcept { return type == 3 || type == 4; }
+    static float cutQFromVerticalDrag(float startQ, float deltaY) noexcept
+    {
+        return std::clamp(startQ * std::pow(2.0f, -deltaY / 80.0f), 0.1f, 24.0f);
+    }
 
 private:
     DefaultEqualizerAudioProcessor& proc;
@@ -68,6 +74,9 @@ private:
     static constexpr int numPoints = 512;
     float magnitudes[numPoints] = {};
     float perBandMagnitudes[kNumBands][numPoints] = {};
+    float responseFrequencies[numPoints] = {};
+    double responseGridSampleRate = 0.0;
+    std::uint64_t responseSignature = 0;
 
     // Spectrum analyzer display data
     static constexpr int maxSpectrumBins = SpectrumFIFO::numBins;
@@ -87,14 +96,18 @@ private:
     bool shiftGesturePending = false;
     bool momentarySoloActive = false;
     int modifierGestureBand = -1;
+    int mostRecentlyCreatedBand = -1;
+    std::int64_t mostRecentCreationTimeMs = 0;
     std::array<bool, kNumBands> selection {};
-    std::array<float, kNumBands> dragStartFreq {}, dragStartGain {};
+    std::array<float, kNumBands> dragStartFreq {}, dragStartGain {}, dragStartQ {};
     std::array<float, kNumBands> dragStartDrive {};
     std::array<float, kNumBands> dragStartThreshold {};
-    std::array<juce::RangedAudioParameter*, kNumBands> dragFreqParams {}, dragGainParams {};
+    std::array<juce::RangedAudioParameter*, kNumBands> dragFreqParams {}, dragGainParams {}, dragQParams {};
     std::array<juce::RangedAudioParameter*, kNumBands> dragDriveParams {};
     std::array<juce::RangedAudioParameter*, kNumBands> dragThresholdParams {};
     float groupAnchorFreq = 1000.0f, groupAnchorGain = 0.0f;
+    float displayMaxDb = 12.0f;
+    bool rangeExpansionAvailable = true;
     bool darkMode = true;
     bool analyzerVisible = true;
     bool showInputSpectrum = true, showOutputSpectrum = true, spectrumFrozen = false;
@@ -129,6 +142,8 @@ private:
 
     // Hit test for band nodes
     int hitTestNode(float x, float y) const;
+    int createBandAt(float x, float y, std::int64_t eventTimeMs);
+    void beginStaticBandDrag(int band, bool beginUndoTransaction);
     void showNumericEditor(int band, const juce::String& suffix, float x, float y);
     void commitNumericEditor();
     juce::TextEditor numericEditor;
@@ -138,8 +153,9 @@ private:
     // Display range
     static constexpr float minFreq = 20.0f;
     static constexpr float maxFreq = 20000.0f;
-    static constexpr float minDb = -24.0f;
-    static constexpr float maxDb = 24.0f;
+    static constexpr float minBandGainDb = -36.0f;
+    static constexpr float maxBandGainDb = 36.0f;
+    static constexpr float maxDisplayDb = 36.0f;
     static constexpr float nodeRadius = 7.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ResponseCurveComponent)

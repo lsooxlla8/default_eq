@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug to help us improve FreeEQ8
+about: Report a bug in default_equalizer
 title: '[BUG] '
 labels: bug
 assignees: ''

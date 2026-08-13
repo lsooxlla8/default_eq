@@ -1,306 +1,212 @@
-name: Build & Release
+name: Build and release
 
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g. v2.1.0)'
-        required: true
 
 permissions:
   contents: write
 
 jobs:
-  build-macos:
+  macos:
+    name: macOS universal
     runs-on: macos-14
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install CMake
-        run: brew install cmake
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G "Unix Makefiles"
+          -DCMAKE_BUILD_TYPE=Release
+          -DDEFAULT_EQUALIZER_BUILD_TESTS=ON
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
 
-      - name: Build universal binary (FreeEQ8 + ProEQ8)
-        run: |
-          mkdir -p build
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.13"
-          cmake --build build --config Release --target FreeEQ8_All
-          cmake --build build --config Release --target ProEQ8_All
+      - name: Build
+        run: cmake --build build --config Release --parallel 3
 
-      - name: Verify universal binaries
-        run: |
-          echo "=== FreeEQ8 VST3 ==="
-          file build/FreeEQ8_artefacts/Release/VST3/FreeEQ8.vst3/Contents/MacOS/FreeEQ8
-          lipo -info build/FreeEQ8_artefacts/Release/VST3/FreeEQ8.vst3/Contents/MacOS/FreeEQ8
-          echo "=== FreeEQ8 AU ==="
-          file build/FreeEQ8_artefacts/Release/AU/FreeEQ8.component/Contents/MacOS/FreeEQ8
-          lipo -info build/FreeEQ8_artefacts/Release/AU/FreeEQ8.component/Contents/MacOS/FreeEQ8
-          echo "=== FreeEQ8 Standalone ==="
-          file build/FreeEQ8_artefacts/Release/Standalone/FreeEQ8.app/Contents/MacOS/FreeEQ8
-          lipo -info build/FreeEQ8_artefacts/Release/Standalone/FreeEQ8.app/Contents/MacOS/FreeEQ8
-          echo "=== ProEQ8 VST3 ==="
-          file build/ProEQ8_artefacts/Release/VST3/ProEQ8.vst3/Contents/MacOS/ProEQ8
-          lipo -info build/ProEQ8_artefacts/Release/VST3/ProEQ8.vst3/Contents/MacOS/ProEQ8
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
-      - name: Download pluginval
+      - name: Verify universal binaries and signatures
         run: |
-          for i in 1 2 3; do
-            curl -LO https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip && break
-            echo "Retry $i..."
-            sleep 5
+          vst3="build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3"
+          au="build/DefaultEqualizer_artefacts/Release/AU/default_equalizer.component"
+          app="build/DefaultEqualizer_artefacts/Release/Standalone/default_equalizer.app"
+          for bundle in "$vst3" "$au" "$app"; do
+            codesign --force --deep --sign - "$bundle"
+            codesign --verify --deep --strict "$bundle"
           done
-          unzip pluginval_macOS.zip
+          for binary in \
+            "$vst3/Contents/MacOS/default_equalizer" \
+            "$au/Contents/MacOS/default_equalizer" \
+            "$app/Contents/MacOS/default_equalizer"; do
+            lipo -verify_arch arm64 x86_64 "$binary"
+          done
+
+      - name: Validate Audio Unit
+        run: |
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          rm -rf "$HOME/Library/Audio/Plug-Ins/Components/default_equalizer.component"
+          cp -R build/DefaultEqualizer_artefacts/Release/AU/default_equalizer.component \
+            "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(["auval", "-v", "aufx", "Deq1", "Icss"], check=True, timeout=180)
+          PY
+
+      - name: Validate VST3 with pluginval
+        run: |
+          curl --fail --location --retry 3 \
+            --output pluginval.zip \
+            https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip
           chmod +x pluginval.app/Contents/MacOS/pluginval
-
-      - name: Validate FreeEQ8 VST3
-        run: |
           pluginval.app/Contents/MacOS/pluginval \
-            --validate "build/FreeEQ8_artefacts/Release/VST3/FreeEQ8.vst3" \
-            --strictness-level 10 \
-            --timeout-ms 120000
+            --validate build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 \
+            --strictness-level 10 --timeout-ms 120000
 
-      # pluginval's "auval" test shells out to Apple's auvaltool with
-      # "-strict STRESS -v", which reliably hangs on hosted macOS runners and
-      # leaves an orphan auvaltool process. Raising --timeout-ms does not help;
-      # it is a hang, not slowness. The test is excluded here via the supported
-      # --disabled-tests mechanism so the AU still gets pluginval's full suite,
-      # and auval is run separately below as a non-blocking check.
-      #
-      # Note this only affects the AU step: for VST3 the auval test is a no-op.
-      - name: Validate FreeEQ8 AU
+      - name: Package
         run: |
-          pluginval.app/Contents/MacOS/pluginval \
-            --validate "build/FreeEQ8_artefacts/Release/AU/FreeEQ8.component" \
-            --strictness-level 10 \
-            --timeout-ms 120000 \
-            --disabled-tests Tests/pluginval_disabled_tests.txt
+          version="${GITHUB_REF_NAME#v}"
+          package="default_equalizer-v${version}-macOS-universal"
+          mkdir -p "build/$package"
+          cp -R build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 "build/$package/"
+          cp -R build/DefaultEqualizer_artefacts/Release/AU/default_equalizer.component "build/$package/"
+          cp -R build/DefaultEqualizer_artefacts/Release/Standalone/default_equalizer.app "build/$package/"
+          cp README.md LICENSE.md THIRD_PARTY_NOTICES.md "build/$package/"
+          ditto -c -k --sequesterRsrc --keepParent "build/$package" "build/$package.zip"
 
-      - name: Validate ProEQ8 VST3
-        run: |
-          pluginval.app/Contents/MacOS/pluginval \
-            --validate "build/ProEQ8_artefacts/Release/VST3/ProEQ8.vst3" \
-            --strictness-level 10 \
-            --timeout-ms 120000
-
-      - name: Package DMG
-        run: ./package_macos.sh build
-
-      # Best-effort auval, without STRESS mode. Informational only - a hang or
-      # failure must not block a release, since pluginval has already validated
-      # the AU above. Deliberately placed after packaging: auvaltool loads the
-      # component, and holding it open risks "Resource busy" during hdiutil.
-      - name: auval (non-blocking)
-        continue-on-error: true
-        run: |
-          auval -v aufx FEQ8 TzWd &
-          AUVAL_PID=$!
-          ( sleep 180; kill -9 $AUVAL_PID 2>/dev/null || true ) &
-          WATCHDOG_PID=$!
-          wait $AUVAL_PID 2>/dev/null || echo "auval did not complete cleanly (informational)"
-          kill -9 $WATCHDOG_PID 2>/dev/null || true
-
-      - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
-          path: build/FreeEQ8-v*-macOS.dmg
+          name: macos-universal
+          path: build/default_equalizer-v*-macOS-universal.zip
+          if-no-files-found: error
 
-  build-linux:
-    runs-on: ubuntu-latest
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Install dependencies
         run: |
-          sudo apt-get update -qq
-          # Try webkit2gtk-4.1 first (Ubuntu 24.04+), fall back to 4.0
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config \
-            libasound2-dev libjack-jackd2-dev \
-            libfreetype6-dev libx11-dev libxcomposite-dev \
-            libxcursor-dev libxext-dev libxfixes-dev \
-            libxinerama-dev libxrandr-dev libxrender-dev \
-            libcurl4-openssl-dev ladspa-sdk \
-            xvfb
-          sudo apt-get install -y libwebkit2gtk-4.1-dev || sudo apt-get install -y libwebkit2gtk-4.0-dev
+            build-essential cmake pkg-config xvfb unzip curl \
+            libasound2-dev libfreetype6-dev libx11-dev libxcomposite-dev \
+            libxcursor-dev libxext-dev libxfixes-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev libgl1-mesa-dev
 
-      - name: Build & run tests
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G "Unix Makefiles"
+          -DCMAKE_BUILD_TYPE=Release
+          -DDEFAULT_EQUALIZER_BUILD_TESTS=ON
+
+      - name: Build and test
         run: |
-          mkdir -p build
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFREEEQ8_BUILD_TESTS=ON
-          cmake --build build --config Release -j$(nproc)
-          ./build/FreeEQ8_Tests
-          ./build/FreeEQ8_ShelfNaNSweep
-          ./build/FreeEQ8_ShelfResponse
-          ./build/FreeEQ8_BiquadVsSvf
-          ./build/FreeEQ8_SvfTest
-          ./build/FreeEQ8_EngineIsolation
-          ./build/FreeEQ8_AuditTests
+          cmake --build build --config Release --parallel 3
+          ctest --test-dir build --output-on-failure
 
-      - name: Build ProEQ8
-        run: cmake --build build --config Release --target ProEQ8_All -j$(nproc)
-
-      - name: Download pluginval
+      - name: Validate VST3 with pluginval
         run: |
-          curl -LO https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
-          unzip pluginval_Linux.zip
+          curl --fail --location --retry 3 \
+            --output pluginval.zip \
+            https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+          unzip -q pluginval.zip
           chmod +x pluginval
-
-      # pluginval's Editor tests instantiate the plugin UI, which needs an X
-      # display. The runner is headless, so a bare invocation segfaults (exit 139)
-      # as soon as it reaches "Starting tests in: pluginval / Editor". xvfb-run
-      # provides a virtual framebuffer for the duration of the run.
-      - name: Validate FreeEQ8 VST3
-        run: |
           xvfb-run -a ./pluginval \
-            --validate "build/FreeEQ8_artefacts/Release/VST3/FreeEQ8.vst3" \
-            --strictness-level 10 \
-            --timeout-ms 120000
+            --validate build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 \
+            --strictness-level 10 --timeout-ms 120000
 
-      - name: Validate ProEQ8 VST3
+      - name: Package
         run: |
-          xvfb-run -a ./pluginval \
-            --validate "build/ProEQ8_artefacts/Release/VST3/ProEQ8.vst3" \
-            --strictness-level 10 \
-            --timeout-ms 120000
+          version="${GITHUB_REF_NAME#v}"
+          package="default_equalizer-v${version}-Linux-x86_64"
+          mkdir -p "build/$package"
+          cp -R build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 "build/$package/"
+          cp build/DefaultEqualizer_artefacts/Release/Standalone/default_equalizer "build/$package/default_equalizer-Standalone"
+          cp README.md LICENSE.md THIRD_PARTY_NOTICES.md "build/$package/"
+          tar -C build -czf "build/$package.tar.gz" "$package"
 
-      - name: Package tar.gz
-        run: |
-          VERSION=$(grep 'project(FreeEQ8 VERSION' CMakeLists.txt | sed 's/.*VERSION \([0-9.]*\).*/\1/')
-          DIR="FreeEQ8-v${VERSION}-Linux"
-          mkdir -p "build/${DIR}"
-          cp -r build/FreeEQ8_artefacts/Release/VST3/FreeEQ8.vst3 "build/${DIR}/"
-          # Include Standalone binary if built
-          STANDALONE="build/FreeEQ8_artefacts/Release/Standalone/FreeEQ8"
-          if [ -f "$STANDALONE" ]; then
-            cp "$STANDALONE" "build/${DIR}/FreeEQ8-Standalone"
-          fi
-          tar czf "build/${DIR}.tar.gz" -C build "${DIR}"
-
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: linux-tar
-          path: build/FreeEQ8-v*-Linux.tar.gz
+          name: linux-x86_64
+          path: build/default_equalizer-v*-Linux-x86_64.tar.gz
+          if-no-files-found: error
 
-  build-windows:
-    runs-on: windows-latest
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DDEFAULT_EQUALIZER_BUILD_TESTS=ON
 
-      - name: Build FreeEQ8 + ProEQ8
-        run: cmake --build build --config Release
+      - name: Build and test
+        run: |
+          cmake --build build --config Release --parallel 3
+          ctest --test-dir build -C Release --output-on-failure
 
-      - name: Download pluginval
+      - name: Validate VST3 with pluginval
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip" -OutFile pluginval.zip
-          Expand-Archive -Path pluginval.zip -DestinationPath pluginval
+          Invoke-WebRequest `
+            -Uri "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip" `
+            -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval
+          & .\pluginval\pluginval.exe `
+            --validate "build\DefaultEqualizer_artefacts\Release\VST3\default_equalizer.vst3" `
+            --strictness-level 10 --timeout-ms 120000
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Validate FreeEQ8 VST3
+      - name: Package
         shell: pwsh
         run: |
-          .\pluginval\pluginval.exe `
-            --validate "build\FreeEQ8_artefacts\Release\VST3\FreeEQ8.vst3" `
-            --strictness-level 10 `
-            --timeout-ms 120000
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $package = "default_equalizer-v$version-Windows-x64"
+          $directory = "build\$package"
+          New-Item -ItemType Directory -Path $directory -Force | Out-Null
+          Copy-Item -Recurse "build\DefaultEqualizer_artefacts\Release\VST3\default_equalizer.vst3" $directory
+          Copy-Item "build\DefaultEqualizer_artefacts\Release\Standalone\default_equalizer.exe" $directory
+          Copy-Item README.md, LICENSE.md, THIRD_PARTY_NOTICES.md $directory
+          Compress-Archive -Path "$directory\*" -DestinationPath "build\$package.zip" -Force
 
-      - name: Validate ProEQ8 VST3
-        shell: pwsh
-        run: |
-          .\pluginval\pluginval.exe `
-            --validate "build\ProEQ8_artefacts\Release\VST3\ProEQ8.vst3" `
-            --strictness-level 10 `
-            --timeout-ms 120000
-
-      - name: Package zip
-        shell: pwsh
-        run: |
-          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(FreeEQ8 VERSION ([0-9.]+)').Matches.Groups[1].Value
-          $zipName = "FreeEQ8-v${version}-Windows"
-          $staging = "build\$zipName"
-          New-Item -ItemType Directory -Path $staging -Force | Out-Null
-
-          # Copy VST3
-          $vst3 = "build\FreeEQ8_artefacts\Release\VST3\FreeEQ8.vst3"
-          if (Test-Path $vst3) {
-            Copy-Item -Recurse $vst3 "$staging\"
-          }
-
-          # Copy Standalone
-          $standalone = "build\FreeEQ8_artefacts\Release\Standalone\FreeEQ8.exe"
-          if (Test-Path $standalone) {
-            Copy-Item $standalone "$staging\"
-          }
-
-          # Create install instructions
-          @"
-          FreeEQ8 v${version} — Windows Installation
-          =============================================
-
-          1. Copy the FreeEQ8.vst3 folder to:
-             C:\Program Files\Common Files\VST3\
-
-          2. Rescan plugins in your DAW:
-             - Ableton Live: Preferences > Plug-ins > Rescan
-             - FL Studio: Options > Manage plugins > Find plugins
-             - Reaper: Options > Preferences > VST > Re-scan
-
-          https://github.com/GareBear99/FreeEQ8
-          License: GPL-3.0
-          "@ | Out-File -FilePath "$staging\README.txt" -Encoding utf8
-
-          Compress-Archive -Path "$staging\*" -DestinationPath "build\${zipName}.zip" -Force
-
-      - name: Upload Windows zip
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: windows-zip
-          path: build/FreeEQ8-v*-Windows.zip
+          name: windows-x64
+          path: build/default_equalizer-v*-Windows-x64.zip
+          if-no-files-found: error
 
   release:
-    needs: [build-macos, build-linux, build-windows]
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [macos, linux, windows]
     runs-on: ubuntu-latest
     steps:
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: macos-dmg
+          pattern: "*"
           path: artifacts
+          merge-multiple: true
 
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-tar
-          path: artifacts
+      - name: Generate checksums
+        run: cd artifacts && sha256sum * > SHA256SUMS.txt
 
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
         with:
-          name: windows-zip
-          path: artifacts
-
-      - name: Upload assets to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/*.dmg
-            artifacts/*.tar.gz
-            artifacts/*.zip
+          name: default_equalizer ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true
+          files: artifacts/*

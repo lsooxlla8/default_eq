@@ -222,7 +222,7 @@ int main()
         for (int type = 0; type <= 6; ++type)
             for (double freq : { 20.0, 1000.0, sr * 0.2, sr * 0.45 })
                 for (double q : { 0.1, 0.707, 4.0, 24.0 })
-                    for (double gain : { -24.0, 0.0, 24.0 })
+                    for (double gain : { -36.0, 0.0, 36.0 })
                     {
                         Biquad bq;
                         bq.setMatched(static_cast<Biquad::Type>(type), sr, freq, q, gain);

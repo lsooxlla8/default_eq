@@ -24,6 +24,12 @@ void setPlain(DefaultEqualizerAudioProcessor& p, const juce::String& parameterID
         parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
 }
 
+void activateBand(DefaultEqualizerAudioProcessor& p, int band = 1)
+{
+    setPlain(p, id(band, "present"), 1.0f);
+    setPlain(p, id(band, "on"), 1.0f);
+}
+
 void enableSidechain(DefaultEqualizerAudioProcessor& p)
 {
     auto layout = p.getBusesLayout();
@@ -35,6 +41,7 @@ void enableSidechain(DefaultEqualizerAudioProcessor& p)
 float runDynamic(bool externalSignal)
 {
     DefaultEqualizerAudioProcessor p;
+    activateBand(p);
     enableSidechain(p);
     setPlain(p, id(1, "type"), 0.0f);
     setPlain(p, id(1, "freq"), 1000.0f);
@@ -80,6 +87,7 @@ double measureDriveAlias(int oversamplingOrder)
     constexpr int fundamentalBin = 85;
     const double frequency = fundamentalBin * sampleRate / fftSize;
     DefaultEqualizerAudioProcessor p;
+    activateBand(p);
     for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
     setPlain(p, id(1, "on"), 1.0f); setPlain(p, id(1, "gain"), 0.0f);
     setPlain(p, id(1, "drive_on"), 1.0f); setPlain(p, id(1, "drive"), 36.0f);
@@ -118,6 +126,7 @@ double measureDriveAlias(int oversamplingOrder)
 double dynamicLevelForBlockSize(int blockSize)
 {
     DefaultEqualizerAudioProcessor p;
+    activateBand(p);
     enableSidechain(p);
     for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
     setPlain(p, id(1, "freq"), 1000.0f); setPlain(p, id(1, "gain"), 10.0f);
@@ -147,6 +156,7 @@ double dynamicLevelForBlockSize(int blockSize)
 double renderCutLevel(float slope)
 {
     DefaultEqualizerAudioProcessor p;
+    activateBand(p);
     for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
     setPlain(p, id(1, "type"), 3.0f); setPlain(p, id(1, "freq"), 1000.0f);
     setPlain(p, id(1, "slope"), slope); p.prepareToPlay(48000.0, 127);
@@ -171,6 +181,15 @@ double renderCutLevel(float slope)
 int main()
 {
     CHECK(kNumBands == 8, "product exposes exactly eight bands");
+    {
+        DefaultEqualizerAudioProcessor fresh;
+        CHECK(std::abs(fresh.apvts.getRawParameterValue("auto_gain_mode")->load() - 1.0f) < 0.01f,
+              "Regular Auto Gain is the new-instance default");
+        for (int band = 1; band <= kNumBands; ++band)
+            CHECK(fresh.apvts.getRawParameterValue(id(band, "present"))->load() < 0.5f
+                      && fresh.apvts.getRawParameterValue(id(band, "on"))->load() < 0.5f,
+                  "a fresh instance starts with no graph bands");
+    }
     CHECK(std::abs(DefaultEqualizerAudioProcessor::calculateAdaptiveQ(1.25f, 8.0f) - 2.45f) < 1.0e-6f,
           "Adaptive Q follows the documented deterministic formula");
 
@@ -178,6 +197,7 @@ int main()
     for (bool midSide : { false, true })
     {
         DefaultEqualizerAudioProcessor p;
+        for (int band = 1; band <= kNumBands; ++band) activateBand(p, band);
         for (int b = 1; b <= kNumBands; ++b)
         {
             setPlain(p, id(b, "gain"), 0.0f);
@@ -205,6 +225,10 @@ int main()
     const auto renderPlacement = [](float placement, bool midSide)
     {
         DefaultEqualizerAudioProcessor p;
+        // This isolates the per-band routing from the product-level default
+        // compensation mode, which is covered independently above.
+        setPlain(p, "auto_gain_mode", 0.0f);
+        activateBand(p);
         for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(1, "freq"), 1000.0f); setPlain(p, id(1, "gain"), 12.0f);
         setPlain(p, id(1, "q"), 1.0f); setPlain(p, id(1, "drive"), 0.0f);
@@ -244,6 +268,24 @@ int main()
     CHECK(placedMid.first > placedSide.first * 1.8,
           "continuous M/S placement distinguishes mono Mid from empty Side");
 
+    {
+        DefaultEqualizerAudioProcessor p;
+        activateBand(p);
+        p.prepareToPlay(48000.0, 256);
+        juce::AudioBuffer<float> block(2, 256); juce::MidiBuffer midi;
+        block.clear();
+        p.setAnalyzerEnabled(false);
+        for (int i = 0; i < 40; ++i) p.processBlock(block, midi);
+        CHECK(!p.spectrumFifo.processIfReady(), "hidden analyzer publishes no audio-side frames");
+        p.setAnalyzerEnabled(true);
+        for (int i = 0; i < 40; ++i) p.processBlock(block, midi);
+        CHECK(p.spectrumFifo.processIfReady(), "visible analyzer publishes lock-free audio frames");
+        p.spectrumFifo.reset();
+        p.setAnalyzerEnabled(false);
+        for (int i = 0; i < 40; ++i) p.processBlock(block, midi);
+        CHECK(!p.spectrumFifo.processIfReady(), "disabled analyzer stops publishing immediately");
+    }
+
     const float quietSC = runDynamic(false);
     const float loudSC = runDynamic(true);
     CHECK(std::abs(loudSC - quietSC) > quietSC * 0.08f, "external sidechain changes selected dynamic band");
@@ -258,6 +300,7 @@ int main()
     const auto renderDriveLevel = [](bool enabled, bool compensated)
     {
         DefaultEqualizerAudioProcessor p;
+        activateBand(p);
         for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(1, "freq"), 1000.0f); setPlain(p, id(1, "q"), 1.4f);
         setPlain(p, id(1, "gain"), 0.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
@@ -293,6 +336,8 @@ int main()
     const auto renderBandTone = [](double frequency, bool drive, bool solo)
     {
         DefaultEqualizerAudioProcessor p;
+        setPlain(p, "auto_gain_mode", 0.0f);
+        activateBand(p);
         for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(1, "freq"), 8000.0f); setPlain(p, id(1, "q"), 4.0f);
         setPlain(p, id(1, "drive_on"), drive ? 1.0f : 0.0f);
@@ -352,6 +397,7 @@ int main()
     // lookahead and linear phase are additive and reported to the host.
     {
         DefaultEqualizerAudioProcessor p;
+        activateBand(p);
         for (int b = 1; b <= kNumBands; ++b) setPlain(p, id(b, "drive"), 0.0f);
         p.prepareToPlay(48000.0, 256);
         CHECK(p.getLatencySamples() == 0, "clean minimum-phase reports zero samples");
@@ -364,29 +410,32 @@ int main()
         CHECK(p.getLatencySamples() == 2048 + 240,
               "linear phase and lookahead latency are additive");
         setPlain(p, "linear_quality", 0.0f);
-        CHECK(p.getLatencySamples() == 512 + 240, "Economy linear phase reports 512 samples");
+        CHECK(p.getLatencySamples() == 512 + 240, "Eco linear phase reports 512 samples");
         setPlain(p, "linear_quality", 1.0f);
         CHECK(p.getLatencySamples() == 1024 + 240, "Balanced linear phase reports 1024 samples");
         setPlain(p, "linear_quality", 2.0f);
         CHECK(p.getLatencySamples() == 2048 + 240, "Maximum linear phase reports 2048 samples");
     }
 
-    // Global oversampling includes the dynamic path and reports its measured
-    // anti-alias filter latency whether or not drive is currently non-zero.
+    // Oversampling is a global quality choice but only enters the nonlinear
+    // per-band drive path. Clean linear/dynamic EQ therefore remains zero
+    // latency and avoids paying the complete oversampled workload.
     {
         DefaultEqualizerAudioProcessor p;
+        activateBand(p);
         p.prepareToPlay(48000.0, 256);
         setPlain(p, "oversampling", 3.0f);
-        const int globalOsLatency = p.getLatencySamples();
-        CHECK(globalOsLatency > 0, "global 8x oversampling reports anti-alias filter latency");
+        CHECK(p.getLatencySamples() == 0, "clean EQ ignores nonlinear oversampling latency");
         setPlain(p, id(1, "drive_on"), 1.0f);
         setPlain(p, id(1, "drive"), 18.0f);
-        CHECK(p.getLatencySamples() == globalOsLatency,
-              "drive activation does not change global oversampling latency");
+        CHECK(p.getLatencySamples() > 0, "active drive reports oversampling filter latency");
+        setPlain(p, id(1, "drive"), 0.0f);
+        CHECK(p.getLatencySamples() == 0, "disabling nonlinear drive removes oversampling latency");
     }
 
     {
         DefaultEqualizerAudioProcessor p;
+        activateBand(p, 2);
         for (int b = 1; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(2, "on"), 1.0f);
         setPlain(p, id(2, "dyn_thresh"), -0.1f);
@@ -419,9 +468,9 @@ int main()
         int peak = 0;
         for (int i = 1; i < (int)rendered.size(); ++i)
             if (std::abs(rendered[(size_t)i]) > std::abs(rendered[(size_t)peak])) peak = i;
-        std::printf("linear Economy impulse peak: actual %d, reported %d\n", peak, p.getLatencySamples());
+        std::printf("linear Eco impulse peak: actual %d, reported %d\n", peak, p.getLatencySamples());
         CHECK(std::abs(peak - p.getLatencySamples()) <= 1,
-              "linear-phase impulse peak matches reported Economy latency within even-FIR half-sample rounding");
+              "linear-phase impulse peak matches reported Eco latency within even-FIR half-sample rounding");
     }
 
     // Every linear quality must preserve a valid finite impulse and align its
@@ -460,6 +509,7 @@ int main()
     // Current state round-trip preserves continuous slope and per-band M/S placement.
     {
         DefaultEqualizerAudioProcessor source;
+        activateBand(source);
         setPlain(source, id(3, "slope"), 37.3f);
         setPlain(source, id(3, "placement_mode"), 1.0f);
         setPlain(source, id(3, "placement"), 73.5f);
@@ -521,6 +571,7 @@ int main()
     // processors have been prepared from the same initial condition.
     {
         DefaultEqualizerAudioProcessor source;
+        activateBand(source);
         for (int b = 2; b <= kNumBands; ++b) setPlain(source, id(b, "on"), 0.0f);
         setPlain(source, id(1, "freq"), 1370.0f);
         setPlain(source, id(1, "gain"), 8.5f);
@@ -603,11 +654,18 @@ int main()
     CHECK(ResponseCurveComponent::isCutType(3) && ResponseCurveComponent::isCutType(4)
               && !ResponseCurveComponent::isCutType(0),
           "unmodified wheel routes only low/high cuts to slope");
+    CHECK(ResponseCurveComponent::cutQFromVerticalDrag(1.0f, -80.0f) > 1.99f
+              && ResponseCurveComponent::cutQFromVerticalDrag(1.0f, 80.0f) < 0.51f,
+          "vertical cut drag edits Q logarithmically in both directions");
+    CHECK(ResponseCurveComponent::cutQFromVerticalDrag(24.0f, -1000.0f) == 24.0f
+              && ResponseCurveComponent::cutQFromVerticalDrag(0.1f, 1000.0f) == 0.1f,
+          "vertical cut drag clamps Q to the published parameter range");
 
     // Bypass and deletion have separate state semantics: bypass preserves the
     // node slot while deletion clears it.
     {
         DefaultEqualizerAudioProcessor p;
+        activateBand(p);
         setPlain(p, id(1, "on"), 0.0f);
         CHECK(p.apvts.getRawParameterValue(id(1, "present"))->load() > 0.5f,
               "bypassed band remains present on the graph");

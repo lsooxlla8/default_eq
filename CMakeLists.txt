@@ -23,6 +23,11 @@ else()
   message(FATAL_ERROR "JUCE not found. Add as submodule in ./JUCE or pass -DJUCE_DIR=/path/to/JUCE")
 endif()
 
+set(DEFAULT_EQUALIZER_FORMATS VST3 Standalone)
+if(APPLE)
+    list(APPEND DEFAULT_EQUALIZER_FORMATS AU)
+endif()
+
 juce_add_plugin(DefaultEqualizer
     COMPANY_NAME "icanseesounds"
     IS_SYNTH FALSE
@@ -32,7 +37,7 @@ juce_add_plugin(DefaultEqualizer
     COPY_PLUGIN_AFTER_BUILD TRUE
     PLUGIN_MANUFACTURER_CODE Icss
     PLUGIN_CODE Deq1
-    FORMATS VST3 AU Standalone
+    FORMATS ${DEFAULT_EQUALIZER_FORMATS}
     # juce_vst3_helper.exe loads the built plugin to emit moduleinfo.json and
     # has been observed hanging indefinitely on Windows CI. The manifest is
     # optional metadata, so skip generating it during the build.
@@ -59,6 +64,8 @@ target_sources(DefaultEqualizer PRIVATE
     Source/DSP/GlobalBypass.h
     Source/UI/ResponseCurveComponent.h
     Source/UI/ResponseCurveComponent.cpp
+    Source/UI/DefaultFamilyUI.h
+    Source/UI/DefaultFamilyUI.cpp
     Source/UI/LevelMeter.h
 )
 
@@ -74,6 +81,7 @@ target_link_libraries(DefaultEqualizer PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_cryptography
+    juce::juce_recommended_config_flags
 )
 
 # ── Optional test target (standalone, no JUCE dependency) ────────────
