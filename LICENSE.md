@@ -1,6 +1,8 @@
 # License
 
 Copyright (C) 2026 icanseesounds.
+FreeEQ8-derived portions: Copyright (C) 2026 Gary Doman (GareBear99) and
+contributors, GNU GPL version 3.
 
 Except where a source file or `THIRD_PARTY_NOTICES.md` says otherwise,
 `default_equalizer` is licensed under the GNU Affero General Public License,

@@ -24,14 +24,31 @@ public:
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseMove(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent&) override;
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
 
     // Spectrum analyzer data - call from the editor to push FFT magnitudes
-    void pushSpectrumData(const float* magnitudes, int numBins, double sampleRate);
+    void pushSpectrumData(const float* magnitudes, int numBins, double sampleRate, bool input);
 
     int getSelectedBand() const { return selectedBand; }
-    void setSelectedBand(int band) { selectedBand = band; repaint(); }
+    void setSelectedBand(int band);
     void setDarkMode(bool shouldBeDark) { darkMode = shouldBeDark; repaint(); }
+    void setAnalyzerVisible(bool shouldShow) { analyzerVisible = shouldShow; repaint(); }
+    void setAnalyzerSources(bool input, bool output) { showInputSpectrum = input; showOutputSpectrum = output; repaint(); }
+    void setSpectrumFrozen(bool frozen) { spectrumFrozen = frozen; }
+    void setAnalyzerSettings(float floorDb, float rangeDb, float speed, float averaging,
+                             int resolution, float tilt, bool holdPeaks, bool piano)
+    {
+        analyzerFloorDb = floorDb; analyzerRangeDb = rangeDb;
+        analyzerDecayDb = juce::jmap(speed, 0.0f, 100.0f, 0.15f, 4.0f);
+        analyzerAveraging = juce::jmap(averaging, 0.0f, 100.0f, 1.0f, 0.08f);
+        analyzerStride = resolution == 0 ? 4 : (resolution == 1 ? 2 : 1);
+        analyzerTiltDbPerOct = tilt; peakHold = holdPeaks; pianoVisible = piano;
+        if (!peakHold) { std::fill(std::begin(peakInputSpectrum), std::end(peakInputSpectrum), -120.0f);
+                         std::fill(std::begin(peakOutputSpectrum), std::end(peakOutputSpectrum), -120.0f); }
+        repaint();
+    }
 
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
@@ -46,8 +63,9 @@ private:
 
     // Spectrum analyzer display data
     static constexpr int maxSpectrumBins = 2048;
-    float spectrumMagnitudes[maxSpectrumBins] = {};
-    float smoothedSpectrum[maxSpectrumBins] = {};
+    float inputSpectrum[maxSpectrumBins] = {}, outputSpectrum[maxSpectrumBins] = {};
+    float smoothedInputSpectrum[maxSpectrumBins] = {}, smoothedOutputSpectrum[maxSpectrumBins] = {};
+    float peakInputSpectrum[maxSpectrumBins] = {}, peakOutputSpectrum[maxSpectrumBins] = {};
     int currentSpectrumSize = 0;
     double spectrumSampleRate = 44100.0;
 
@@ -55,12 +73,17 @@ private:
     int selectedBand = -1;   // Currently selected band (-1 = none)
     int hoveredBand = -1;    // Band under cursor
     bool dragging = false;
-    bool shiftDrag = false;  // Shift+drag adjusts Q
+    std::array<bool, kNumBands> selection {};
+    std::array<float, kNumBands> dragStartFreq {}, dragStartGain {};
+    std::array<juce::RangedAudioParameter*, kNumBands> dragFreqParams {}, dragGainParams {};
+    float groupAnchorFreq = 1000.0f, groupAnchorGain = 0.0f;
     bool darkMode = true;
-    float dragStartQ = 1.0f;
-    float dragStartY = 0.0f;
-    juce::RangedAudioParameter* dragParamA = nullptr;
-    juce::RangedAudioParameter* dragParamB = nullptr;
+    bool analyzerVisible = true;
+    bool showInputSpectrum = true, showOutputSpectrum = true, spectrumFrozen = false;
+    float analyzerFloorDb = -90.0f, analyzerRangeDb = 90.0f, analyzerDecayDb = 1.5f;
+    float analyzerAveraging = 0.35f, analyzerTiltDbPerOct = 0.0f;
+    int analyzerStride = 1;
+    bool peakHold = false, pianoVisible = false;
 
     // Coordinate mapping
     float freqToX(float freqHz) const;
@@ -77,16 +100,23 @@ private:
     // Paint helpers
     void paintGrid(juce::Graphics& g);
     void paintSpectrum(juce::Graphics& g);
+    void paintMatchPreview(juce::Graphics& g);
     void paintResponseCurve(juce::Graphics& g);
     void paintBandCurves(juce::Graphics& g);
     void paintNodes(juce::Graphics& g);
-#if PROEQ8
+    void paintHoverCard(juce::Graphics& g);
+#if DEFAULT_EQUALIZER_FULL
     void paintPianoRoll(juce::Graphics& g);
     void paintCollisionWarnings(juce::Graphics& g);
 #endif
 
     // Hit test for band nodes
     int hitTestNode(float x, float y) const;
+    void showNumericEditor(int band, const juce::String& suffix, float x, float y);
+    void commitNumericEditor();
+    juce::TextEditor numericEditor;
+    juce::RangedAudioParameter* numericParameter = nullptr;
+    juce::String numericSuffix;
 
     // Display range
     static constexpr float minFreq = 20.0f;

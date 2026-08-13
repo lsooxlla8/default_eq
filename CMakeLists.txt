@@ -40,7 +40,7 @@ juce_add_plugin(DefaultEqualizer
     PRODUCT_NAME "default_equalizer"
     BUNDLE_ID "com.icanseesounds.default-equalizer"
     COMPANY_URL "https://github.com/lsooxlla8/default_equalizer"
-    DESCRIPTION "24-band parametric dynamic equalizer"
+    DESCRIPTION "Eight-band parametric dynamic equalizer"
 )
 
 target_sources(DefaultEqualizer PRIVATE
@@ -51,25 +51,18 @@ target_sources(DefaultEqualizer PRIVATE
     Source/Config.h
     Source/DSP/Biquad.h
     Source/DSP/SvfBiquad.h
-    Source/DSP/SvfBandArray.h
-    Source/DSP/NaturalPhaseEngine.h
     Source/DSP/EQBand.h
     Source/DSP/SpectrumFIFO.h
     Source/DSP/LinearPhaseEngine.h
     Source/DSP/MatchEQ.h
     Source/DSP/GlobalBypass.h
-    Source/DSP/ResonanceDetector.h
-    Source/DSP/IntentMode.h
-    Source/DSP/FrequencyExplainer.h
     Source/UI/ResponseCurveComponent.h
     Source/UI/ResponseCurveComponent.cpp
     Source/UI/LevelMeter.h
-    Source/Presets/PresetManager.h
-    Source/Presets/PresetManager.cpp
 )
 
 target_compile_definitions(DefaultEqualizer PRIVATE
-    PROEQ8=1
+    DEFAULT_EQUALIZER_FULL=1
     DEFAULT_EQUALIZER_OPEN_SOURCE=1
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -120,6 +113,9 @@ if (DEFAULT_EQUALIZER_BUILD_TESTS)
     add_executable(DefaultEqualizer_LatencyProbe Tests/LatencyProbe.cpp)
     target_link_libraries(DefaultEqualizer_LatencyProbe PRIVATE juce::juce_dsp)
 
+    add_executable(DefaultEqualizer_DspIntegration Tests/DspIntegrationTest.cpp)
+    target_link_libraries(DefaultEqualizer_DspIntegration PRIVATE DefaultEqualizer juce::juce_audio_utils juce::juce_dsp)
+
     add_test(NAME biquad COMMAND DefaultEqualizer_Tests)
     add_test(NAME shelf_nan_sweep COMMAND DefaultEqualizer_ShelfNaNSweep)
     add_test(NAME shelf_response COMMAND DefaultEqualizer_ShelfResponse)
@@ -128,4 +124,5 @@ if (DEFAULT_EQUALIZER_BUILD_TESTS)
     add_test(NAME engine_isolation COMMAND DefaultEqualizer_EngineIsolation)
     add_test(NAME audit_regressions COMMAND DefaultEqualizer_AuditTests)
     add_test(NAME latency_probe COMMAND DefaultEqualizer_LatencyProbe)
+    add_test(NAME dsp_integration COMMAND DefaultEqualizer_DspIntegration)
 endif()

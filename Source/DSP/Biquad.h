@@ -1,6 +1,7 @@
 #pragma once
 #include <cmath>
 #include <algorithm>
+#include <array>
 
 // C++17 constant — replaces the fragile #ifndef M_PI / #define M_PI pattern.
 constexpr double kPi = 3.14159265358979323846;
@@ -33,6 +34,168 @@ struct Biquad
     }
 
     enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch };
+
+    // Matched/de-cramped second-order designs adapted from Dario Sanfilippo's
+    // MIT-licensed Faust vaeffects.lib implementation of Martin Vicanek's
+    // "Matched Second Order Digital Filters". Source revision:
+    // ccc6030e60806011ae73c9502d9bca85ff2b79fa (2026-08-12 checkout).
+    // Changes: C++ coefficient output, finite-domain guards, RBJ fallback for
+    // unsupported notch and pathological parameter combinations.
+    void setMatched(Type type, double sampleRate, double freqHz, double Q, double gainDb)
+    {
+        const auto fallback = [&] { set(type, sampleRate, freqHz, Q, gainDb); };
+        freqHz = std::clamp(freqHz, 10.0, sampleRate * 0.49);
+        Q = std::clamp(Q, 0.1, 24.0);
+        const double normalized = freqHz / sampleRate;
+        const double blendX = std::clamp((normalized - 0.12) / 0.12, 0.0, 1.0);
+        const double matchedBlend = blendX * blendX * (3.0 - 2.0 * blendX);
+        if (matchedBlend <= 0.0) { fallback(); return; }
+        Biquad rbjReference;
+        rbjReference.set(type, sampleRate, freqHz, Q, gainDb);
+        const auto blendWithRbj = [&]
+        {
+            b0 = rbjReference.b0 + matchedBlend * (b0 - rbjReference.b0);
+            b1 = rbjReference.b1 + matchedBlend * (b1 - rbjReference.b1);
+            b2 = rbjReference.b2 + matchedBlend * (b2 - rbjReference.b2);
+            a1 = rbjReference.a1 + matchedBlend * (a1 - rbjReference.a1);
+            a2 = rbjReference.a2 + matchedBlend * (a2 - rbjReference.a2);
+        };
+        if (type == Type::Notch) { fallback(); return; }
+        if ((type == Type::Bell || type == Type::LowShelf || type == Type::HighShelf)
+            && std::abs(gainDb) < 1.0e-7)
+        {
+            b0 = 1.0; b1 = b2 = a1 = a2 = 0.0; return;
+        }
+
+        const double w = 2.0 * kPi * freqHz / sampleRate;
+        const double q = 1.0 / (2.0 * Q);
+        const double root = q <= 1.0 ? std::sqrt(std::max(0.0, 1.0 - q * q))
+                                     : std::sqrt(std::max(0.0, q * q - 1.0));
+        const double ma1 = q <= 1.0 ? -2.0 * std::exp(-q * w) * std::cos(root * w)
+                                    : -2.0 * std::exp(-q * w) * std::cosh(root * w);
+        const double ma2 = std::exp(-2.0 * q * w);
+        const double phi1 = std::pow(std::sin(0.5 * w), 2.0);
+        const double phi0 = 1.0 - phi1;
+        const double phi2 = 4.0 * phi0 * phi1;
+        const double A0 = std::pow(1.0 + ma1 + ma2, 2.0);
+        const double A1 = std::pow(1.0 - ma1 + ma2, 2.0);
+        const double A2 = -4.0 * ma2;
+        double mb0 = 1.0, mb1 = 0.0, mb2 = 0.0;
+
+        if (type == Type::LowPass)
+        {
+            if (phi1 < 1.0e-12) { fallback(); return; }
+            const double R1 = (A0 * phi0 + A1 * phi1 + A2 * phi2) * Q * Q;
+            const double B0 = A0;
+            const double B1 = (R1 - B0 * phi0) / phi1;
+            if (B0 < 0.0 || B1 < 0.0) { fallback(); return; }
+            mb0 = 0.5 * (std::sqrt(B0) + std::sqrt(B1));
+            mb1 = std::sqrt(B0) - mb0;
+            mb2 = 0.0;
+        }
+        else if (type == Type::HighPass)
+        {
+            if (phi1 < 1.0e-12) { fallback(); return; }
+            mb0 = Q * std::sqrt(std::max(0.0, A0 * phi0 + A1 * phi1 + A2 * phi2)) / (4.0 * phi1);
+            mb1 = -2.0 * mb0; mb2 = mb0;
+        }
+        else if (type == Type::Bandpass)
+        {
+            if (phi1 < 1.0e-12) { fallback(); return; }
+            const double R1 = A0 * phi0 + A1 * phi1 + A2 * phi2;
+            const double R2 = -A0 + A1 + 4.0 * (phi0 - phi1) * A2;
+            const double B2 = (R1 - R2 * phi1) / (4.0 * phi1 * phi1);
+            const double B1 = R2 + 4.0 * (phi1 - phi0) * B2;
+            if (B1 < 0.0 || B2 < 0.0) { fallback(); return; }
+            mb1 = -0.5 * std::sqrt(B1);
+            mb0 = 0.5 * (std::sqrt(B2 + mb1 * mb1) - mb1);
+            mb2 = -(mb0 + mb1);
+        }
+        else if (type == Type::Bell)
+        {
+            if (phi1 < 1.0e-12) { fallback(); return; }
+            const double G = std::pow(10.0, gainDb / 20.0);
+            const double B0 = A0;
+            const double R1 = (A0 * phi0 + A1 * phi1 + A2 * phi2) * G * G;
+            const double R2 = (-A0 + A1 + 4.0 * (phi0 - phi1) * A2) * G * G;
+            const double B2 = (R1 - R2 * phi1 - B0) / (4.0 * phi1 * phi1);
+            const double B1 = R2 + B0 + 4.0 * (phi1 - phi0) * B2;
+            if (B0 < 0.0 || B1 < 0.0) { fallback(); return; }
+            const double W = 0.5 * (std::sqrt(B0) + std::sqrt(B1));
+            const double disc = W * W + B2;
+            if (disc < 0.0) { fallback(); return; }
+            mb0 = 0.5 * (W + std::sqrt(disc));
+            mb1 = 0.5 * (std::sqrt(B0) - std::sqrt(B1));
+            if (std::abs(mb0) < 1.0e-12) { fallback(); return; }
+            mb2 = -B2 / (4.0 * mb0);
+        }
+        else
+        {
+            // Vicanek 2024/2025 two-pole matched shelf fit, as implemented
+            // in the same MIT Faust source. It is intentionally independent
+            // from oversampling and remains a zero-latency biquad.
+            const double G = std::pow(10.0, gainDb / 20.0);
+            const bool low = type == Type::LowShelf;
+            const double safeG = G < 1.0 ? std::min(1.0 - 1.0e-9, G) : std::max(1.0 + 1.0e-9, G);
+            const double g = low ? 1.0 / safeG : safeG;
+            const double gInv = 1.0 / g;
+            const double f = std::clamp(freqHz / (sampleRate * 0.5), 1.0e-6, 0.98);
+            const double f4 = std::pow(f, 4.0);
+            const double hny = (f4 + g) / (f4 + gInv);
+            const auto point = [&](double c0, double c1)
+            {
+                const double fm = f / std::sqrt(c0 + c1 * f * f);
+                const double fm4 = std::pow(fm, 4.0);
+                const double hm = (f4 + fm4 * g) / (f4 + fm4 * gInv);
+                const double phi = std::pow(std::sin(0.5 * kPi * fm), 2.0);
+                return std::array<double, 2>{hm, phi};
+            };
+            const auto p1 = point(0.160, 1.543), p2 = point(0.947, 3.806);
+            const double d1 = (p1[0] - 1.0) * (1.0 - p1[1]);
+            const double d2 = (p2[0] - 1.0) * (1.0 - p2[1]);
+            const double c11 = -p1[1] * d1, c12 = p1[1] * p1[1] * (hny - p1[0]);
+            const double c21 = -p2[1] * d2, c22 = p2[1] * p2[1] * (hny - p2[0]);
+            const double denom = c11 * c22 - c12 * c21;
+            if (std::abs(denom) < 1.0e-14 || std::abs(c12) < 1.0e-14) { fallback(); return; }
+            const double alpha1 = (c22 * d1 - c12 * d2) / denom;
+            const double aa1 = (d1 - c11 * alpha1) / c12;
+            const double bb1 = hny * aa1;
+            const double aa2 = 0.25 * (alpha1 - aa1), bb2 = 0.25 * (alpha1 - bb1);
+            if (aa1 < 0.0 || bb1 < 0.0) { fallback(); return; }
+            const double v = 0.5 * (1.0 + std::sqrt(aa1));
+            const double ww = 0.5 * (1.0 + std::sqrt(bb1));
+            const double adisc = v * v + aa2, bdisc = ww * ww + bb2;
+            if (adisc < 0.0 || bdisc < 0.0) { fallback(); return; }
+            const double a0 = 0.5 * (v + std::sqrt(adisc));
+            const double invA0 = 1.0 / a0;
+            a1 = (1.0 - v) * invA0;
+            a2 = -0.25 * aa2 * invA0 * invA0;
+            const double b0temp = 0.5 * (ww + std::sqrt(bdisc)) * invA0;
+            if (std::abs(b0temp) < 1.0e-14) { fallback(); return; }
+            if (low)
+            {
+                mb0 = safeG * b0temp;
+                mb1 = safeG * (1.0 - ww) * invA0;
+                mb2 = safeG * (-0.25 * bb2 / b0temp) * invA0 * invA0;
+            }
+            else
+            {
+                mb0 = b0temp;
+                mb1 = (1.0 - ww) * invA0;
+                mb2 = (-0.25 * bb2 / mb0) * invA0 * invA0;
+            }
+            b0 = mb0; b1 = mb1; b2 = mb2;
+            if (!(std::isfinite(b0) && std::isfinite(b1) && std::isfinite(b2)
+                  && std::isfinite(a1) && std::isfinite(a2))) fallback();
+            else blendWithRbj();
+            return;
+        }
+
+        b0 = mb0; b1 = mb1; b2 = mb2; a1 = ma1; a2 = ma2;
+        if (!(std::isfinite(b0) && std::isfinite(b1) && std::isfinite(b2)
+              && std::isfinite(a1) && std::isfinite(a2))) fallback();
+        else blendWithRbj();
+    }
 
     // RBJ cookbook coefficients
     void set(Type type, double sampleRate, double freqHz, double Q, double gainDb)
@@ -102,7 +265,7 @@ struct Biquad
                 //     overshoot at any Q (measured 0.00 dB across Q 0.1-24).
                 //   * For Q <= 2 the result is identical to the previous behaviour,
                 //     which is the range where the old mapping was still valid, so
-                //     existing presets in that range are unchanged.
+                //     existing saved states in that range are unchanged.
                 //
                 // Note: because S saturates at Q = 2, Q values above 2 all produce
                 // the same (steepest monotonic) shelf. The old code varied S up to 4

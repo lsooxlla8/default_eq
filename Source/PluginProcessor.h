@@ -7,7 +7,6 @@
 #include "DSP/LinearPhaseEngine.h"
 #include "DSP/MatchEQ.h"
 #include "DSP/GlobalBypass.h"
-#include "Presets/PresetManager.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -33,7 +32,11 @@ public:
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override;
 
-    int getNumPrograms() override { return 1; }
+    // The default_* family deliberately has no factory-program/preset concept.
+    // Hosts still persist the complete versioned processor state via
+    // getStateInformation()/setStateInformation(). Returning zero prevents AU
+    // and VST3 wrappers from advertising a synthetic "Untitled" preset.
+    int getNumPrograms() override { return 0; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram(int) override {}
     const juce::String getProgramName(int) override { return {}; }
@@ -49,9 +52,6 @@ public:
     // Spectrum analyzer FIFO (post-EQ by default)
     SpectrumFIFO spectrumFifo;
     SpectrumFIFO preSpectrumFifo;
-
-    // Preset manager
-    std::unique_ptr<PresetManager> presetManager;
 
     // Output metering (read from UI thread)
     std::atomic<float> meterPeakL { 0.0f };
@@ -91,6 +91,24 @@ public:
 
     // ── Auto-gain bypass ───────────────────────────────────────────
     std::atomic<float> autoGainCompDb { 0.0f }; // smoothed compensation in dB
+    std::atomic<int> sidechainAuditionBand { -1 }; // transient UI action; never serialized
+    std::atomic<int> soloBand { -1 }; // transient UI action; never serialized
+    std::atomic<bool> smartAutoGainLocked { false };
+    float getBandDynamicGainDb(int index) const noexcept
+    {
+        return index >= 0 && index < kNumBands
+            ? bandDynamicGainDb[(size_t) index].load(std::memory_order_relaxed) : 0.0f;
+    }
+    static float calculateAdaptiveQ(float baseQ, float gainDb) noexcept
+    {
+        return std::clamp(baseQ * (1.0f + std::abs(gainDb) * 0.12f), 0.1f, 24.0f);
+    }
+    int currentLinearPhaseLatency() const noexcept
+    {
+        static constexpr int latencies[] { 512, 1024, 2048 };
+        const int quality = std::clamp((int)apvts.getRawParameterValue("linear_quality")->load(), 0, 2);
+        return latencies[quality];
+    }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParams();
@@ -99,6 +117,18 @@ private:
     GlobalBypass globalBypass;
     double sr = 44100.0;
     int maxBlockSize = 512;
+    static constexpr double lookaheadSeconds = 0.005;
+    juce::AudioBuffer<float> lookaheadDelayBuffer, detectorInputBuffer;
+    int lookaheadWritePosition = 0;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> lookaheadMix;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> latencyTransitionGain;
+    int processedLatency = 0;
+    bool latencyFadingOut = false;
+    std::array<std::atomic<float>, kNumBands> bandDynamicGainDb {};
+    double smartInputEnergy = 0.0, smartOutputEnergy = 0.0;
+    int64_t smartEnergySamples = 0;
+    void applyLookaheadDelay(juce::AudioBuffer<float>&, int delaySamples) noexcept;
+    int requestedLookaheadSamples() const noexcept;
 
     // ── Oversampling pool (A1) ────────────────────────────────────
     // All four orders (0=1x, 1=2x, 2=4x, 3=8x) are built in prepareToPlay;
@@ -117,7 +147,7 @@ private:
 
     // ── Linear-phase rebuild worker (A5) ──────────────────────────
     // buildLinearPhaseMagnitude + rebuildFromMagnitude used to run on the
-    // audio thread when linPhaseDirty was seen; at 24 bands it was a ~2k-bin
+    // audio thread when linPhaseDirty was seen; it is a ~2k-bin
     // magnitude evaluation plus an 8192-pt FFT per dirty block. Now a
     // dedicated background juce::Thread owns the rebuild, writes into the
     // engine's inactive kernel buffer, and atomically swaps activeKernelIdx.

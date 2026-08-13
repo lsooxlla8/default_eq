@@ -45,8 +45,7 @@ public:
     static constexpr int numSlots  = 3;
 
     SpectrumFIFO()
-        : fft(fftOrder),
-          window(fftSize, juce::dsp::WindowingFunction<float>::hann)
+        : fftLow(10), fftMedium(11), fftHigh(12)
     {
         for (auto& buf : slots)
             std::fill(buf.begin(), buf.end(), 0.0f);
@@ -119,16 +118,26 @@ public:
         // published; writer will take reader's old slot on its next flip.
         readSlot = midSlot.exchange(readSlot, std::memory_order_acquire);
 
+        const int resolution = resolutionIndex.load(std::memory_order_relaxed);
+        const int activeOrder = resolution == 0 ? 10 : (resolution == 1 ? 11 : 12);
+        const int activeSize = 1 << activeOrder;
+        currentBins = activeSize / 2;
         const auto& src = slots[(size_t)readSlot];
-        std::copy(src.begin(), src.end(), fftData.begin());
-        std::fill(fftData.begin() + fftSize, fftData.end(), 0.0f);
-
-        window.multiplyWithWindowingTable(fftData.data(), (size_t)fftSize);
-        fft.performFrequencyOnlyForwardTransform(fftData.data());
-
-        for (int i = 0; i < numBins; ++i)
+        std::fill(fftData.begin(), fftData.end(), 0.0f);
+        const int sourceOffset = fftSize - activeSize;
+        for (int i = 0; i < activeSize; ++i)
         {
-            const float mag = fftData[(size_t)i] / (float)fftSize;
+            const float phase = (float)i / (float)(activeSize - 1);
+            const float hann = 0.5f * (1.0f - std::cos(juce::MathConstants<float>::twoPi * phase));
+            fftData[(size_t)i] = src[(size_t)(sourceOffset + i)] * hann;
+        }
+        if (activeOrder == 10) fftLow.performFrequencyOnlyForwardTransform(fftData.data());
+        else if (activeOrder == 11) fftMedium.performFrequencyOnlyForwardTransform(fftData.data());
+        else fftHigh.performFrequencyOnlyForwardTransform(fftData.data());
+
+        for (int i = 0; i < currentBins; ++i)
+        {
+            const float mag = fftData[(size_t)i] / (float)activeSize;
             outputMagnitudes[(size_t)i] = 20.0f * std::log10(std::max(mag, 1e-7f));
         }
 
@@ -136,7 +145,8 @@ public:
     }
 
     const float* getMagnitudes() const { return outputMagnitudes.data(); }
-    int getNumBins() const { return numBins; }
+    int getNumBins() const { return currentBins; }
+    void setResolution(int index) noexcept { resolutionIndex.store(juce::jlimit(0, 2, index), std::memory_order_relaxed); }
 
 private:
     // Writer-only: publish the just-filled writeSlot and take the previous
@@ -147,8 +157,7 @@ private:
         fresh.store(true, std::memory_order_release);
     }
 
-    juce::dsp::FFT fft;
-    juce::dsp::WindowingFunction<float> window;
+    juce::dsp::FFT fftLow, fftMedium, fftHigh;
 
     std::array<std::array<float, fftSize>, numSlots> slots {};
     std::array<float, fftSize * 2>                   fftData {};
@@ -157,6 +166,8 @@ private:
     std::atomic<int>  fifoWriteIndex { 0 };
     std::atomic<int>  midSlot        { 1 };
     std::atomic<bool> fresh          { false };
+    std::atomic<int> resolutionIndex { 2 };
+    int currentBins = numBins;
 
     // Producer-local / consumer-local slot indices. Only touched by their
     // respective owning thread; never read from the other side.

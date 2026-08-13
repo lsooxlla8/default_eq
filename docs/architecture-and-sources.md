@@ -1,30 +1,38 @@
 # Architecture and source decision
 
-Decision fixed before code transfer: FreeEQ8 is the primary code base;
-ZLEqualizer is an audit reference; current `default_distortion` is authoritative
-for family UI and reusable author-owned infrastructure. The combined derivative
-is AGPL-3.0-only.
+Decision fixed before transfer: FreeEQ8 is the primary architectural and code
+base; current `default_distortion` supplies the family design system and
+author-owned reusable DSP/UI infrastructure; ZLEqualizer is an audit reference
+only. The combined derivative is AGPL-3.0-only.
 
-| Subsystem | Source | Revision | License | Why | Required changes | Risk |
+| Subsystem | Source | Exact revision | License | Reason | Changes in default_equalizer | Risk |
 |---|---|---|---|---|---|---|
-| JUCE processor, APVTS, 24-band topology | FreeEQ8 | `11376c1c496569c975e4d195c3fe5fd44b53d415` | GPLv3 | Closest working vertical slice | One open-source target; remove DRM/update code; version state | Medium |
-| Minimum-phase SVF/RBJ filters | FreeEQ8 | same | GPLv3 | Existing tested filter engine | Add notch; measure response; de-cramping remains incomplete | High near Nyquist |
-| Dynamic EQ | FreeEQ8 | same | GPLv3 | Per-band envelope and modulation already integrated | Add upward/range/lookahead/external per-band sidechain | High |
-| Linear phase | FreeEQ8 | same | GPLv3 | Background kernel rebuild and explicit latency | Quality choices, transitions, feature parity, validation | High |
-| Natural phase | FreeEQ8, audit only | same | GPLv3 | Candidate implementation exists | Do not enable before convolution/phase validation | Critical |
-| Match EQ | FreeEQ8 | same | GPLv3 | Capture and correction path already integrated | Target capture model, editable-band conversion, undo apply | High |
-| Analyzer FIFO | FreeEQ8 plus behavior from default_distortion | both revisions | GPLv3/AGPLv3 | FFT stays off audio thread | Dual pre/post overlay and full preferences still needed | Medium |
-| Global bypass | default_distortion | `d145fab57e943869939d6a987cc69f90d676a4ae` | AGPLv3-only | Proven ramp plus latency-aligned dry path | Adapt maximum latency and parameter ID | Low |
-| Family UI | default_distortion design system/current code | same | AGPLv3-only | User-owned source of visual truth | EQ-first surface, square nodes/controls, exact inversion | Medium |
-| Advanced EQ behavior comparison | ZLEqualizer | `26b0ed14cbbac254344e37d872235ce349b79c26` | AGPLv3 | Mature feature inventory | No code/assets copied; independently adapt later | Low license, high implementation |
+| JUCE processor, APVTS, filter/parameter topology | FreeEQ8 | `11376c1c496569c975e4d195c3fe5fd44b53d415` | GPL-3.0 | Closest complete vertical slice | Exactly 8 bands, sidechain bus, mono/stereo safety, versioned A/B state, no DRM/updater/presets | Medium |
+| Minimum-phase EQ and response model | FreeEQ8 + new work | same | GPL-3.0 / AGPL-3.0-only | Useful RBJ base | Seven types, continuous 0–48 dB/oct stages, exact fractional-stage UI response, per-band L/R/M/S, NaN guards | High near Nyquist |
+| De-cramping | Faust `vaeffects.lib`, Vicanek matched-filter implementation | `ccc6030e60806011ae73c9502d9bca85ff2b79fa` | MIT | Published matched second-order fit with inspectable coefficients | C++ port, finite guards, smooth RBJ-to-matched blend limited to the upper spectrum, independent of oversampling | Medium |
+| Dynamic EQ | FreeEQ8 + new work | FreeEQ8 revision above | GPL-3.0 / AGPL-3.0-only | Existing envelope/filter integration | Down/up, range, independent detector filters, external SC, transient audition, 5 ms lookahead, live GR | High |
+| Linear phase | FreeEQ8 + new work | same | GPL-3.0 | Triple-buffered background kernel rebuild | 1024/2048/4096 taps, 512/1024/2048 samples latency, routed-band fallback, transition guard | High |
+| Per-band drive | FreeEQ8 plus default_distortion | FreeEQ8 revision above; default_distortion `d145fab57e943869939d6a987cc69f90d676a4ae` | GPL-3.0 / AGPL-3.0-only | Reuse working nonlinear path and author-owned family algorithms | 8 algorithms, Mix, output compensation, DC blocker, per-band bypass, nonlinear-only 2x/4x/8x oversampling | Medium |
+| Analyzer transport | FreeEQ8 plus default_distortion behavior | both revisions above | GPL-3.0 / AGPL-3.0-only | Lock-free triple buffer and proven dual-spectrum presentation | Input/output/both, worker-side 1024/2048/4096 FFT, floor/range/speed/average/tilt/hold/freeze/piano, UI preferences | Low |
+| Match EQ | FreeEQ8 + new work | FreeEQ8 revision above | GPL-3.0 / AGPL-3.0-only | Existing capture concept | Analysis FFT moved off audio thread; Amount/Smoothing/range; result becomes 8 editable bands in one Undo transaction | Medium |
+| Global bypass | default_distortion | `d145fab57e943869939d6a987cc69f90d676a4ae` | AGPL-3.0-only | Proven latency-aligned ramp | Dynamic maximum latency and family parameter IDs | Low |
+| Family UI | default_distortion current code and design system | same | AGPL-3.0-only | User-owned visual source of truth | EQ-first graph, six compact contextual workspaces, hover values, square monochrome controls, exact inversion | Low |
+| Feature comparison only | ZLEqualizer | `26b0ed14cbbac254344e37d872235ce349b79c26` | AGPL-3.0 | Useful behavior inventory | No ZLEqualizer code, names, logos, or assets copied | Low |
+| Framework | JUCE | `91ad83ae34a81e0833b1a2b0866f54846370ae53` | JUCE upstream terms | AU/VST3/Standalone and DSP primitives | Universal macOS build | External dependency |
 
 ## Runtime map
 
-- Audio thread: parameter snapshots, preallocated SVF/biquad chains, optional
-  drive oversampler, dynamic envelopes, Match EQ convolution, meter writes, and
-  lock-free analyzer publication.
-- Background thread: linear-phase magnitude/kernel rebuild.
-- Message/UI thread: FFT consumption, response calculation, drawing, gestures,
-  preferences, presets, and undo/redo commands.
-- State: APVTS audio parameters plus versioned A/B snapshots; UI preferences are
-  held in a separate `PropertiesFile`; undo history is never serialized.
+- Audio thread: sanitized parameter snapshots, preallocated filter chains,
+  envelope followers, optional nonlinear oversampling, linear convolution,
+  meters, and lock-free sample publication. No allocation, locks, file I/O, or
+  analysis FFT.
+- Background threads: linear-phase kernel construction and Match EQ analysis.
+- Message/UI thread: analyzer FFT consumption, response calculation, drawing,
+  gestures, preferences, and undo/redo.
+- State: schema v3 contains two complete APVTS audio snapshots. Theme, window,
+  RTA, Match-analysis controls, and Reduced Motion use a separate preferences
+  file. Undo history, hover, drag, solo, audition, and FFT history are transient.
+
+Natural Phase is intentionally absent: the audited upstream prototype was not a
+validated convolution implementation. Minimum and selectable Linear Phase are
+the supported phase modes.

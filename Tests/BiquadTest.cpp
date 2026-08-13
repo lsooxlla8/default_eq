@@ -15,6 +15,7 @@
 #include <cassert>
 #include <array>
 #include <algorithm>
+#include <complex>
 
 // Include the struct under test (standalone, no JUCE dependency)
 #include "../Source/DSP/Biquad.h"
@@ -29,6 +30,16 @@ static int failures = 0;
 
 #define CHECK(cond, msg) \
     do { if (!(cond)) { std::printf("FAIL: %s\n", msg); ++failures; } } while (0)
+
+static double magnitudeDb(const Biquad& bq, double f, double sr)
+{
+    const double w = 2.0 * kPi * f / sr;
+    const auto z1 = std::complex<double>(std::cos(w), -std::sin(w));
+    const auto z2 = z1 * z1;
+    const auto h = (bq.b0 + bq.b1 * z1 + bq.b2 * z2)
+                 / (1.0 + bq.a1 * z1 + bq.a2 * z2);
+    return 20.0 * std::log10(std::max(1.0e-15, std::abs(h)));
+}
 
 // ── Reference RBJ coefficient generators (must exactly mirror Biquad::set) ──
 struct NormCoeffs { double b0, b1, b2, a1, a2; };
@@ -206,8 +217,53 @@ int main()
               "reset() clears all delay state");
     }
 
+    // ── Matched/de-cramped sweep: finite coefficients over the exposed domain ──
+    for (double sr : srs)
+        for (int type = 0; type <= 6; ++type)
+            for (double freq : { 20.0, 1000.0, sr * 0.2, sr * 0.45 })
+                for (double q : { 0.1, 0.707, 4.0, 24.0 })
+                    for (double gain : { -24.0, 0.0, 24.0 })
+                    {
+                        Biquad bq;
+                        bq.setMatched(static_cast<Biquad::Type>(type), sr, freq, q, gain);
+                        CHECK(std::isfinite(bq.b0) && std::isfinite(bq.b1) && std::isfinite(bq.b2)
+                              && std::isfinite(bq.a1) && std::isfinite(bq.a2),
+                              "matched coefficients remain finite");
+                    }
+
+    // At a high center frequency the matched bell must be closer to its analog
+    // prototype away from the center than the bilinear/RBJ design.
+    {
+        constexpr double sr = 48000.0, center = 16000.0, probe = 12000.0, q = 1.0, gainDb = 12.0;
+        Biquad rbj, matched;
+        rbj.set(Biquad::Type::Bell, sr, center, q, gainDb);
+        matched.setMatched(Biquad::Type::Bell, sr, center, q, gainDb);
+        const double G = std::pow(10.0, gainDb / 20.0);
+        const double x = probe / center;
+        const double real = 1.0 - x * x;
+        const double analog = 10.0 * std::log10((real * real + x * x * G / (q * q))
+                                               / (real * real + x * x / (G * q * q)));
+        const double rbjError = std::abs(magnitudeDb(rbj, probe, sr) - analog);
+        const double matchedError = std::abs(magnitudeDb(matched, probe, sr) - analog);
+        CHECK(matchedError < rbjError, "matched bell improves near-Nyquist analog response");
+        std::printf("decramp probe: RBJ error %.4f dB, matched error %.4f dB\n", rbjError, matchedError);
+    }
+
+    // De-cramping must not gratuitously reshape ordinary low/mid-frequency EQ.
+    {
+        Biquad rbj, matched;
+        rbj.set(Biquad::Type::Bell, 48000.0, 1000.0, 1.0, 9.0);
+        matched.setMatched(Biquad::Type::Bell, 48000.0, 1000.0, 1.0, 9.0);
+        double worstDifference = 0.0;
+        for (double probe : { 100.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0 })
+            worstDifference = std::max(worstDifference,
+                std::abs(magnitudeDb(rbj, probe, 48000.0) - magnitudeDb(matched, probe, 48000.0)));
+        CHECK(worstDifference < 0.12, "decramping leaves low-frequency bell shape materially unchanged");
+        std::printf("decramp low-frequency worst delta %.5f dB\n", worstDifference);
+    }
+
     if (failures == 0)
-        std::printf("ALL TESTS PASSED (7 filter types across 44.1/48/96 kHz + sanity)\n");
+        std::printf("ALL TESTS PASSED (RBJ + matched/de-cramped filters)\n");
     else
         std::printf("%d TEST(S) FAILED\n", failures);
 

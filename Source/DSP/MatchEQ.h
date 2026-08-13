@@ -11,7 +11,7 @@
 //   2. setMatchActive(true) → enters analysis phase, accumulates current spectrum
 //   3. After enough analysis frames, correction = reference - current is computed
 //   4. applyCorrection() applies per-bin gain via FFT with overlap-add
-class MatchEQ
+class MatchEQ : private juce::Thread
 {
 public:
     static constexpr int fftOrder = 12;              // 4096-point FFT
@@ -20,10 +20,18 @@ public:
     static constexpr int analysisFramesNeeded = 8;
 
     MatchEQ()
-        : fft(fftOrder),
+        : juce::Thread("default_equalizer_MatchAnalysis"), fft(fftOrder),
           window(fftSize, juce::dsp::WindowingFunction<float>::hann)
     {
         clear();
+        startThread(juce::Thread::Priority::low);
+    }
+
+    ~MatchEQ() override
+    {
+        signalThreadShouldExit();
+        notify();
+        stopThread(2000);
     }
 
     // Start capturing reference spectrum.
@@ -36,6 +44,8 @@ public:
         analyzing.store(false, std::memory_order_release);
 
         // Safe to reset now — audio thread will skip pushSamples
+        const juce::ScopedLock lock(analysisLock);
+        generation.fetch_add(1, std::memory_order_acq_rel);
         captureFrames.store(0, std::memory_order_relaxed);
         fifoIndex.store(0, std::memory_order_relaxed);
         std::fill(capturedSpectrum.begin(), capturedSpectrum.end(), 0.0f);
@@ -47,6 +57,7 @@ public:
     void stopCapture()
     {
         capturing.store(false, std::memory_order_release);
+        const juce::ScopedLock lock(analysisLock);
         const int frames = captureFrames.load(std::memory_order_acquire);
         if (frames > 0)
         {
@@ -65,6 +76,8 @@ public:
         matchActive.store(false, std::memory_order_release);
         analyzing.store(false, std::memory_order_release);
         hasCapturedData.store(false, std::memory_order_release);
+        const juce::ScopedLock lock(analysisLock);
+        generation.fetch_add(1, std::memory_order_acq_rel);
         captureFrames.store(0, std::memory_order_relaxed);
         analyzeFrames.store(0, std::memory_order_relaxed);
         fifoIndex.store(0, std::memory_order_relaxed);
@@ -91,10 +104,7 @@ public:
             if (idx >= fftSize)
             {
                 idx = 0;
-                if (cap)
-                    processReferenceFrame();
-                else if (ana)
-                    processAnalysisFrame();
+                enqueueFrame(cap ? 1 : 2);
             }
         }
         fifoIndex.store(idx, std::memory_order_relaxed);
@@ -120,9 +130,13 @@ public:
 
             // Disable analysis first, reset state, then re-enable
             analyzing.store(false, std::memory_order_release);
-            analyzeFrames.store(0, std::memory_order_relaxed);
-            std::fill(currentSpectrum.begin(), currentSpectrum.end(), 0.0f);
-            fifoIndex.store(0, std::memory_order_relaxed);
+            {
+                const juce::ScopedLock lock(analysisLock);
+                generation.fetch_add(1, std::memory_order_acq_rel);
+                analyzeFrames.store(0, std::memory_order_relaxed);
+                std::fill(currentSpectrum.begin(), currentSpectrum.end(), 0.0f);
+                fifoIndex.store(0, std::memory_order_relaxed);
+            }
             analyzing.store(true, std::memory_order_release);
         }
         else
@@ -136,6 +150,11 @@ public:
     bool hasCapture() const { return hasCapturedData.load(std::memory_order_acquire); }
     bool isCapturing() const { return capturing.load(std::memory_order_acquire); }
     bool isAnalyzing() const { return analyzing.load(std::memory_order_acquire); }
+    void setAnalysisSeconds(double seconds, double sampleRate) noexcept
+    {
+        const int frames = (int)std::ceil(std::clamp(seconds, 0.25, 5.0) * sampleRate / (double)fftSize);
+        requiredAnalysisFrames.store(std::clamp(frames, 2, 64), std::memory_order_relaxed);
+    }
 
     const float* getCorrectionDb() const { return correctionDb.data(); }
     const float* getCapturedSpectrum() const { return capturedSpectrum.data(); }
@@ -179,6 +198,7 @@ private:
 
     std::atomic<int> captureFrames { 0 };
     std::atomic<int> analyzeFrames { 0 };
+    std::atomic<int> requiredAnalysisFrames { analysisFramesNeeded };
 
     std::array<float, fftSize> fifoBuffer {};
     std::atomic<int> fifoIndex { 0 };
@@ -207,10 +227,53 @@ private:
     // (avoids 32 KB stack allocations on the audio thread)
     std::array<float, fftSize * 2> frameFftBuf {};
 
-    void processReferenceFrame()
+    static constexpr int queuedFrames = 4;
+    std::array<std::array<float, fftSize>, queuedFrames> frameQueue {};
+    std::array<int, queuedFrames> frameMode {};
+    std::array<unsigned int, queuedFrames> frameGeneration {};
+    std::atomic<int> queueWrite { 0 }, queueRead { 0 };
+    std::atomic<unsigned int> generation { 1 };
+    juce::CriticalSection analysisLock;
+
+    void enqueueFrame(int mode) noexcept
+    {
+        const int write = queueWrite.load(std::memory_order_relaxed);
+        const int next = (write + 1) % queuedFrames;
+        if (next == queueRead.load(std::memory_order_acquire)) return;
+        std::copy(fifoBuffer.begin(), fifoBuffer.end(), frameQueue[(size_t)write].begin());
+        frameMode[(size_t)write] = mode;
+        frameGeneration[(size_t)write] = generation.load(std::memory_order_acquire);
+        queueWrite.store(next, std::memory_order_release);
+        notify();
+    }
+
+    void run() override
+    {
+        while (!threadShouldExit())
+        {
+            int read = queueRead.load(std::memory_order_relaxed);
+            if (read == queueWrite.load(std::memory_order_acquire))
+            {
+                wait(250);
+                continue;
+            }
+            const int mode = frameMode[(size_t)read];
+            const unsigned int frameGen = frameGeneration[(size_t)read];
+            const auto* samples = frameQueue[(size_t)read].data();
+            if (frameGen == generation.load(std::memory_order_acquire))
+            {
+                const juce::ScopedLock lock(analysisLock);
+                if (mode == 1 && capturing.load(std::memory_order_acquire)) processReferenceFrame(samples);
+                if (mode == 2 && analyzing.load(std::memory_order_acquire)) processAnalysisFrame(samples);
+            }
+            queueRead.store((read + 1) % queuedFrames, std::memory_order_release);
+        }
+    }
+
+    void processReferenceFrame(const float* samples)
     {
         std::fill(frameFftBuf.begin(), frameFftBuf.end(), 0.0f);
-        std::copy(fifoBuffer.begin(), fifoBuffer.end(), frameFftBuf.begin());
+        std::copy(samples, samples + fftSize, frameFftBuf.begin());
 
         window.multiplyWithWindowingTable(frameFftBuf.data(), (size_t)fftSize);
         fft.performFrequencyOnlyForwardTransform(frameFftBuf.data());
@@ -225,10 +288,10 @@ private:
         captureFrames.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void processAnalysisFrame()
+    void processAnalysisFrame(const float* samples)
     {
         std::fill(frameFftBuf.begin(), frameFftBuf.end(), 0.0f);
-        std::copy(fifoBuffer.begin(), fifoBuffer.end(), frameFftBuf.begin());
+        std::copy(samples, samples + fftSize, frameFftBuf.begin());
 
         window.multiplyWithWindowingTable(frameFftBuf.data(), (size_t)fftSize);
         fft.performFrequencyOnlyForwardTransform(frameFftBuf.data());
@@ -241,7 +304,7 @@ private:
         }
 
         const int frames = analyzeFrames.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (frames >= analysisFramesNeeded)
+        if (frames >= requiredAnalysisFrames.load(std::memory_order_relaxed))
         {
             // Average the current spectrum
             const float inv = 1.0f / (float)frames;

@@ -13,7 +13,7 @@
 //
 // Threading (A5):
 //   rebuildFromMagnitude() is called from a background juce::Thread (owned
-//   by FreeEQ8AudioProcessor). It writes the result into a *writer-owned*
+//   by DefaultEqualizerAudioProcessor). It writes the result into a *writer-owned*
 //   kernel slot, then atomically swaps slot indices with processBlock()
 //   (audio thread) via the canonical swap-chain triple-buffer protocol.
 //   processBlock() only mutates its local readKernelSlot and reads it
@@ -59,8 +59,9 @@ public:
     // than the reader: the reader's readKernelSlot is never touched.
     // magnitudeDb: array of dB values at linearly-spaced frequency bins (0..sr/2).
     // numBins: number of magnitude bins (typically firLength/2 + 1 = 2049).
-    void rebuildFromMagnitude(const float* magnitudeDb, int numBins)
+    void rebuildFromMagnitude(const float* magnitudeDb, int numBins, int requestedFirLength = firLength)
     {
+        const int activeLength = std::clamp(requestedFirLength, 1024, firLength);
         auto& writeBuf = kernelSlots[(size_t)writeKernelSlot];
 
         // Build the frequency domain array for JUCE's real-only format.
@@ -95,16 +96,16 @@ public:
 
         // Circular shift: move the center of the impulse to the middle of the FIR
         std::array<float, firLength> fir {};
-        for (int i = 0; i < firLength; ++i)
+        for (int i = 0; i < activeLength; ++i)
         {
-            int srcIdx = (i - firLength / 2 + fftSize) % fftSize;
+            int srcIdx = (i - activeLength / 2 + fftSize) % fftSize;
             fir[(size_t)i] = rebuildFreqBuf[(size_t)srcIdx];
         }
 
         // Apply Hann window to the FIR
-        for (int i = 0; i < firLength; ++i)
+        for (int i = 0; i < activeLength; ++i)
         {
-            const float w = 0.5f * (1.0f - std::cos(2.0f * (float)kPi * (float)i / (float)(firLength - 1)));
+            const float w = 0.5f * (1.0f - std::cos(2.0f * (float)kPi * (float)i / (float)(activeLength - 1)));
             fir[(size_t)i] *= w;
         }
 
@@ -200,7 +201,7 @@ private:
     void processChunk(float* L, float* R, int n, const float* kernel)
     {
         processChannel(L, n, overlapL, kernel);
-        processChannel(R, n, overlapR, kernel);
+        if (R != L) processChannel(R, n, overlapR, kernel);
     }
 
     void processChannel(float* data, int n, std::array<float, fftSize>& overlap,
