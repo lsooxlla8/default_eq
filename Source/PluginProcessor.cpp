@@ -100,6 +100,7 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
         apvts.addParameterListener(bandId(i, "drive"), this);
         apvts.addParameterListener(bandId(i, "drive_on"), this);
         apvts.addParameterListener(bandId(i, "dyn_lookahead"), this);
+        apvts.addParameterListener(bandId(i, "dyn_thresh"), this);
     }
     apvts.addParameterListener("linear_phase", this);
     apvts.addParameterListener("linear_quality", this);
@@ -133,6 +134,7 @@ DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
         apvts.removeParameterListener(bandId(i, "drive"), this);
         apvts.removeParameterListener(bandId(i, "drive_on"), this);
         apvts.removeParameterListener(bandId(i, "dyn_lookahead"), this);
+        apvts.removeParameterListener(bandId(i, "dyn_thresh"), this);
         apvts.removeParameterListener(bandId(i, "type"),  this);
         apvts.removeParameterListener(bandId(i, "on"),    this);
         apvts.removeParameterListener(bandId(i, "q"),     this);
@@ -198,8 +200,9 @@ void DefaultEqualizerAudioProcessor::parameterChanged(const juce::String& parame
     }
 
     if (parameterID == "oversampling" || parameterID.endsWith("_drive")
-        || parameterID.endsWith("_drive_on")
-        || parameterID.endsWith("_dyn_lookahead"))
+        || parameterID.endsWith("_on")
+        || parameterID.endsWith("_dyn_lookahead")
+        || parameterID.endsWith("_dyn_thresh"))
     {
         updateReportedLatency();
         return;
@@ -325,7 +328,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
             bandId(i,"drive_secondary"), "Band " + juce::String(i) + " Drive Secondary",
             juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
         params.push_back(std::make_unique<juce::AudioParameterBool>(
-            bandId(i,"drive_auto_gain"), "Band " + juce::String(i) + " Drive Auto Gain", false));
+            bandId(i,"drive_auto_gain"), "Band " + juce::String(i) + " Drive Auto Gain", true));
 
 #if DEFAULT_EQUALIZER_FULL
         params.push_back(std::make_unique<juce::AudioParameterChoice>(
@@ -619,9 +622,9 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         b.driveSecondary = driveSecondary;
         b.driveAutoGainLinear = apvts.getRawParameterValue(bandId(i + 1, "drive_auto_gain"))->load() > 0.5f
             ? deq::drive_auto_gain_table::lookup(satIdx, driveDb) : 1.0f;
-        // Dynamic processing is structurally active for every band. Threshold
-        // 0 dB is the neutral default, so no separate enable parameter exists.
-        b.dynEnabled    = true;
+        // Threshold doubles as the dynamic enable control. Its stepped default
+        // of 0 dB is truly inactive; the first active value is -0.1 dB.
+        b.dynEnabled    = dynThr < -0.05f;
         b.dynUpward     = dynUpward;
         b.useExternalSidechain = externalSC && sidechainL != nullptr;
         b.dynRangeDb    = dynRange;
@@ -880,7 +883,9 @@ int DefaultEqualizerAudioProcessor::requestedLookaheadSamples() const noexcept
 {
     float maximumMs = 0.0f;
     for (int i = 1; i <= kNumBands; ++i)
-        if (apvts.getRawParameterValue(bandId(i, "dyn_lookahead"))->load() > 0.001f)
+        if (apvts.getRawParameterValue(bandId(i, "on"))->load() > 0.5f
+            && apvts.getRawParameterValue(bandId(i, "dyn_thresh"))->load() < -0.05f
+            && apvts.getRawParameterValue(bandId(i, "dyn_lookahead"))->load() > 0.001f)
             maximumMs = std::max(maximumMs,
                 apvts.getRawParameterValue(bandId(i, "dyn_lookahead"))->load());
     return juce::roundToInt(sr * maximumMs * 0.001);
@@ -890,12 +895,25 @@ void DefaultEqualizerAudioProcessor::applyLookaheadDelay(juce::AudioBuffer<float
                                                           int delaySamples) noexcept
 {
     const int ringSize = lookaheadDelayBuffer.getNumSamples();
-    if (ringSize <= delaySamples || delaySamples <= 0) return;
+    if (ringSize <= 0 || ringSize <= delaySamples) return;
     const int samples = buffer.getNumSamples();
     auto* left = buffer.getWritePointer(0);
     auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : left;
     auto* delayL = lookaheadDelayBuffer.getWritePointer(0);
     auto* delayR = buffer.getNumChannels() > 1 ? lookaheadDelayBuffer.getWritePointer(1) : delayL;
+    if (delaySamples <= 0)
+    {
+        // Keep the delay history warm while dynamic processing is inactive so
+        // re-enabling the first threshold step never exposes stale samples.
+        for (int i = 0; i < samples; ++i)
+        {
+            delayL[lookaheadWritePosition] = left[i];
+            delayR[lookaheadWritePosition] = right[i];
+            (void)lookaheadMix.getNextValue();
+            if (++lookaheadWritePosition >= ringSize) lookaheadWritePosition = 0;
+        }
+        return;
+    }
     for (int i = 0; i < samples; ++i)
     {
         int read = lookaheadWritePosition - delaySamples;

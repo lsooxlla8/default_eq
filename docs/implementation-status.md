@@ -14,6 +14,8 @@
   switchable to continuous M–S placement, global Adaptive Q,
   dynamic Down/Up, threshold/range/ratio/attack/release, internal/external
   sidechain, transient SC audition, live GR and continuous 0–5 ms lookahead.
+  Dynamic DSP and its lookahead latency are inactive at the 0 dB threshold
+  default and activate at the first -0.1 dB step.
 - Bypassed bands remain visible and selectable as outlined graph nodes; only
   explicit delete releases their numbered slot for clean recreation.
 - Zero-latency minimum phase, independently switchable de-cramping, Linear Phase
@@ -22,7 +24,8 @@
 - The first ten displayed `default_distortion` drive algorithms, spectrally
   isolated per band; Drive/algorithm-specific Character, compatible stored
   Secondary semantics without a dedicated face-panel control, Mix/Comp/bypass, deterministic per-band table
-  Auto Gain and DC blocking. Drive is enabled by default at a neutral 0 dB.
+  Auto Gain and DC blocking. Drive and its table Auto Gain are enabled by
+  default at a neutral 0 dB.
 - Global stepped Off/2x/4x/8x oversampling slider covering dynamic EQ and nonlinear drive.
 - Always-both RTA with overlapped 2048/4096/8192 FFT, coherent-gain
   normalisation, fractional-octave smoothing, range/floor/speed/average/tilt,

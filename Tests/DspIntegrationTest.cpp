@@ -355,7 +355,10 @@ int main()
         for (int b = 1; b <= kNumBands; ++b) setPlain(p, id(b, "drive"), 0.0f);
         p.prepareToPlay(48000.0, 256);
         CHECK(p.getLatencySamples() == 0, "clean minimum-phase reports zero samples");
-        setPlain(p, id(2, "dyn_lookahead"), 5.0f);
+        setPlain(p, id(1, "dyn_lookahead"), 5.0f);
+        CHECK(p.getLatencySamples() == 0,
+              "lookahead is inactive while dynamic threshold remains at 0 dB");
+        setPlain(p, id(1, "dyn_thresh"), -0.1f);
         CHECK(p.getLatencySamples() == 240, "5 ms lookahead reports 240 samples at 48 kHz");
         setPlain(p, "linear_phase", 1.0f);
         CHECK(p.getLatencySamples() == 2048 + 240,
@@ -386,6 +389,7 @@ int main()
         DefaultEqualizerAudioProcessor p;
         for (int b = 1; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(2, "on"), 1.0f);
+        setPlain(p, id(2, "dyn_thresh"), -0.1f);
         setPlain(p, id(2, "dyn_lookahead"), 5.0f);
         p.prepareToPlay(48000.0, 512);
         juce::AudioBuffer<float> impulse(2, 512); impulse.clear();
@@ -571,6 +575,8 @@ int main()
               "dynamic processing publishes no redundant enable parameter");
         CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive"))->load()) < 0.01f,
               "recreated band resets drive amount");
+        CHECK(p.apvts.getRawParameterValue(id(1, "drive_auto_gain"))->load() > 0.5f,
+              "recreated band enables drive auto gain by default");
         CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive_mix"))->load() - 100.0f) < 0.01f,
               "recreated band restores default drive mix");
         CHECK(p.apvts.getRawParameterValue(id(1, "placement_mode"))->load() < 0.5f

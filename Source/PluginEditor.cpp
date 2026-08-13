@@ -156,7 +156,7 @@ void FamilyLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int w,
 {
     const auto side = (float) juce::jmin(w, h);
     auto r = juce::Rectangle<float>((float)x + ((float)w - side) * 0.5f,
-                                    (float)y + ((float)h - side) * 0.5f, side, side).reduced(2.0f);
+                                    (float)y + ((float)h - side) * 0.5f, side, side);
     const auto fg = foreground().withMultipliedAlpha(slider.isEnabled() ? 1.0f : 0.35f);
     g.setColour(background()); g.fillRect(r);
     g.setColour(fg); g.drawRect(r, 2.0f);
@@ -185,7 +185,10 @@ void FamilyLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w,
         && slider.getName() != "PLACEMENT" && slider.getName() != "OVERSAMPLING")
         return juce::LookAndFeel_V4::drawLinearSlider(g, x, y, w, h, pos, min, max, style, slider);
     juce::ignoreUnused(min, max, style);
-    auto r = juce::Rectangle<float>((float)x, (float)y, (float)w, (float)h);
+    // JUCE reserves thumb travel inside the x/w arguments even when our
+    // rectangular sliders have no thumb. Draw against the component itself so
+    // stacked sliders exactly match the button above them.
+    auto r = slider.getLocalBounds().toFloat();
     g.setColour(background()); g.fillRect(r);
     g.setColour(foreground()); g.drawRect(r, 2.0f);
     const float proportion = (float)slider.valueToProportionOfLength(slider.getValue());

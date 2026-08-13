@@ -56,6 +56,9 @@ Values are additive when features are combined.
 
 Oversampling is a global quality mode covering dynamic EQ and drive, so its
 filter latency applies whenever a non-Off factor is selected.
+Per-band lookahead contributes no latency while its threshold is at the neutral
+0 dB default; the first -0.1 dB threshold step activates both dynamic DSP and
+the selected lookahead.
 
 ## Visual QA
 
