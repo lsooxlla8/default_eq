@@ -175,6 +175,7 @@ void DefaultEqualizerAudioProcessor::resetBandToDefaults(int zeroBasedBand, bool
     };
     if (frequency > 0.0f) setPlain("freq", frequency);
     setPlain("gain", gainDb);
+    setPlain("present", enable ? 1.0f : 0.0f);
     setPlain("on", enable ? 1.0f : 0.0f);
     if (soloBand.load(std::memory_order_acquire) == zeroBasedBand)
         soloBand.store(-1, std::memory_order_release);
@@ -256,6 +257,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
     auto typeChoices    = juce::StringArray { "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass", "Notch" };
     for (int i = 1; i <= kNumBands; ++i)
     {
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            bandId(i,"present"), "Band " + juce::String(i) + " Present", i == 1));
         params.push_back(std::make_unique<juce::AudioParameterBool>(bandId(i,"on"), "Band " + juce::String(i) + " On", i == 1));
         params.push_back(std::make_unique<juce::AudioParameterChoice>(bandId(i,"type"), "Band " + juce::String(i) + " Type", typeChoices, 0));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -912,7 +915,7 @@ void DefaultEqualizerAudioProcessor::applyLookaheadDelay(juce::AudioBuffer<float
 void DefaultEqualizerAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
-    root.setProperty("schemaVersion", 7, nullptr);
+    root.setProperty("schemaVersion", 8, nullptr);
     auto current = apvts.copyState();
     current.setProperty("stateRole", "current", nullptr);
     root.appendChild(current, nullptr);
@@ -976,6 +979,10 @@ void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int s
                     readStateParameter(current, bandId(i, "drive_secondary"), 0.0f) * 0.01f);
                 removeStateParameter(current, bandId(i, "drive_tone"));
             }
+        if (restoredSchema < 8)
+            for (int i = 1; i <= kNumBands; ++i)
+                writeStateParameter(current, bandId(i, "present"),
+                    readStateParameter(current, bandId(i, "on"), 0.0f));
         apvts.replaceState(current);
     }
     else if (restored.hasType(apvts.state.getType()))
@@ -1002,6 +1009,8 @@ void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int s
             writeStateParameter(current, bandId(i, "drive_secondary"),
                 readStateParameter(current, bandId(i, "drive_secondary"), 0.0f) * 0.01f);
             removeStateParameter(current, bandId(i, "drive_tone"));
+            writeStateParameter(current, bandId(i, "present"),
+                readStateParameter(current, bandId(i, "on"), 0.0f));
         }
         apvts.replaceState(current);
         restoredSchema = 0;

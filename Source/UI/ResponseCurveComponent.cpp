@@ -393,6 +393,8 @@ void ResponseCurveComponent::paintBandCurves(juce::Graphics& g)
     for (int b = 0; b < kNumBands; ++b)
     {
         const int idx = b + 1;
+        const bool present = proc.apvts.getRawParameterValue(bandId(idx, "present"))->load() > 0.5f;
+        if (!present) continue;
         const bool on = proc.apvts.getRawParameterValue(bandId(idx, "on"))->load() > 0.5f;
         if (!on) continue;
 
@@ -447,8 +449,9 @@ void ResponseCurveComponent::paintNodes(juce::Graphics& g)
     for (int b = 0; b < kNumBands; ++b)
     {
         const int idx = b + 1;
+        const bool present = proc.apvts.getRawParameterValue(bandId(idx, "present"))->load() > 0.5f;
+        if (!present) continue;
         const bool on = proc.apvts.getRawParameterValue(bandId(idx, "on"))->load() > 0.5f;
-        if (!on) continue;
 
         const float freq = proc.apvts.getRawParameterValue(bandId(idx, "freq"))->load();
         const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load()
@@ -475,14 +478,24 @@ void ResponseCurveComponent::paintNodes(juce::Graphics& g)
             }
         }
 
-        g.setColour(colour.withAlpha(isHovered || isSelected ? 1.0f : 0.7f));
-        g.fillRect(x - r, y - r, r * 2.0f, r * 2.0f);
-
-        g.setColour(darkMode ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6));
-        g.drawRect(x - r, y - r, r * 2.0f, r * 2.0f, 1.5f);
+        const auto inverse = darkMode ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6);
+        if (on)
+        {
+            g.setColour(colour.withAlpha(isHovered || isSelected ? 1.0f : 0.7f));
+            g.fillRect(x - r, y - r, r * 2.0f, r * 2.0f);
+            g.setColour(inverse);
+            g.drawRect(x - r, y - r, r * 2.0f, r * 2.0f, 1.5f);
+        }
+        else
+        {
+            g.setColour(inverse);
+            g.fillRect(x - r, y - r, r * 2.0f, r * 2.0f);
+            g.setColour(colour.withAlpha(isHovered || isSelected ? 0.85f : 0.45f));
+            g.drawRect(x - r, y - r, r * 2.0f, r * 2.0f, 2.0f);
+        }
 
         // Band number label
-        g.setColour(darkMode ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6));
+        g.setColour(on ? inverse : colour.withAlpha(isHovered || isSelected ? 0.85f : 0.45f));
         g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 10.0f, juce::Font::bold)));
         g.drawText(juce::String(idx), (int)(x - r), (int)(y - r), (int)(r * 2.0f), (int)(r * 2.0f),
                    juce::Justification::centred);
@@ -491,7 +504,7 @@ void ResponseCurveComponent::paintNodes(juce::Graphics& g)
         const float placement = proc.apvts.getRawParameterValue(bandId(idx, "placement"))->load();
         const auto label = std::abs(placement) < 1.0f ? (midSide ? "MS" : "LR")
                          : placement < 0.0f ? (midSide ? "M" : "L") : (midSide ? "S" : "R");
-        g.setColour(colour.withAlpha(0.9f));
+        g.setColour(colour.withAlpha(on ? 0.9f : 0.42f));
         g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold)));
         g.drawText(label, (int)(x - r), (int)(y + r + 1), (int)(r * 2.0f), 10,
                    juce::Justification::centred);
@@ -514,9 +527,9 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
     const float y = dbToY(gain * proc.apvts.getRawParameterValue("scale")->load());
 
     const int cardW = juce::jmin(236, getWidth() - 12);
-    const float dynNow = proc.getBandDynamicGainDb(band);
     const float threshold = proc.apvts.getRawParameterValue(bandId(idx, "dyn_thresh"))->load();
-    const float range = proc.apvts.getRawParameterValue(bandId(idx, "dyn_range"))->load();
+    const bool midSide = proc.apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load() > 0.5f;
+    const float placement = proc.apvts.getRawParameterValue(bandId(idx, "placement"))->load();
     const int cardH = 76;
     int cardX = juce::jlimit(6, getWidth() - cardW - 6, (int)x - cardW / 2);
     int cardY = (int)y - cardH - 20;
@@ -546,8 +559,12 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
                cardX + 9, cardY + 25, cardW - 18, 13, juce::Justification::centredLeft);
     g.drawText("DRIVE " + juce::String(drive, 1) + " dB  " + (driveOn ? "ON" : "OFF"),
                cardX + 9, cardY + 41, cardW - 18, 13, juce::Justification::centredLeft);
-    g.drawText("DYN  THR " + juce::String(threshold, 1) + "  RNG " + juce::String(range, 1)
-               + "  NOW " + juce::String(dynNow, 2) + " dB",
+    const auto placementText = std::abs(placement) < 0.05f
+        ? juce::String(midSide ? "M/S CENTER" : "L/R CENTER")
+        : juce::String(midSide ? "M/S " : "L/R ")
+            + (placement < 0.0f ? (midSide ? "M " : "L ") : (midSide ? "S " : "R "))
+            + juce::String(std::abs(placement), 0) + "%";
+    g.drawText("THR " + juce::String(threshold, 1) + " dB   " + placementText,
                cardX + 9, cardY + 56, cardW - 18, 13, juce::Justification::centredLeft);
 }
 
@@ -559,8 +576,8 @@ int ResponseCurveComponent::hitTestNode(float mx, float my) const
     for (int b = 0; b < kNumBands; ++b)
     {
         const int idx = b + 1;
-        const bool on = proc.apvts.getRawParameterValue(bandId(idx, "on"))->load() > 0.5f;
-        if (!on) continue;
+        const bool present = proc.apvts.getRawParameterValue(bandId(idx, "present"))->load() > 0.5f;
+        if (!present) continue;
 
         const float freq = proc.apvts.getRawParameterValue(bandId(idx, "freq"))->load();
         const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load()
@@ -879,7 +896,7 @@ void ResponseCurveComponent::mouseDoubleClick(const juce::MouseEvent& e)
 
     int freeBand = -1;
     for (int b = 0; b < kNumBands; ++b)
-        if (proc.apvts.getRawParameterValue(bandId(b + 1, "on"))->load() < 0.5f)
+        if (proc.apvts.getRawParameterValue(bandId(b + 1, "present"))->load() < 0.5f)
         {
             freeBand = b;
             break;
@@ -988,6 +1005,23 @@ void ResponseCurveComponent::mouseWheelMove(const juce::MouseEvent& e,
                     parameter->beginChangeGesture();
                     parameter->setValueNotifyingHost(parameter->convertTo0to1(
                         juce::jlimit(3.0f, 48.0f, slope + wheel.deltaY * 15.0f)));
+                    parameter->endChangeGesture();
+                }
+        repaint();
+        return;
+    }
+    if (e.mods.isShiftDown())
+    {
+        proc.undoManager.beginNewTransaction(std::count(selection.begin(), selection.end(), true) > 1
+            ? "Adjust selected band placement" : "Adjust band placement");
+        for (int b = 0; b < kNumBands; ++b)
+            if (selection[(size_t)b])
+                if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "placement")))
+                {
+                    const float placement = proc.apvts.getRawParameterValue(bandId(b + 1, "placement"))->load();
+                    parameter->beginChangeGesture();
+                    parameter->setValueNotifyingHost(parameter->convertTo0to1(
+                        juce::jlimit(-100.0f, 100.0f, placement + wheel.deltaY * 40.0f)));
                     parameter->endChangeGesture();
                 }
         repaint();

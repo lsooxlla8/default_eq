@@ -6,12 +6,14 @@
   continuous 3–48 dB/oct slope for every type.
 - Graph drag, position-aware double-click creation into an unused slot, Q wheel,
   Cmd-wheel slope, Cmd-click bypass, Cmd-drag drive, Shift-click multiselect,
-  Shift-drag threshold, embedded/context numeric input, relative group drag,
+  Shift-drag threshold, Shift-wheel L/R or M/S placement, embedded/context numeric input, relative group drag,
   group bypass/delete, and one Undo step per gesture.
 - Per-band bypass, band-pass solo audition, continuous centered L–R placement
   switchable to continuous M–S placement, Adaptive Q,
   dynamic Down/Up, threshold/range/ratio/attack/release, internal/external
   sidechain, transient SC audition, live GR and continuous 0–5 ms lookahead.
+- Bypassed bands remain visible and selectable as outlined graph nodes; only
+  explicit delete releases their numbered slot for clean recreation.
 - Zero-latency minimum phase, independently switchable de-cramping, Linear Phase
   1024/2048/4096 taps, exact host latency reporting, aligned ramped bypass and
   guarded live latency changes.
@@ -26,7 +28,7 @@
 - Match capture/analyse plus Amount/Smoothing/range and one-transaction
   conversion to eight ordinary editable bands. Analysis FFT is off audio thread.
 - Regular parameter-derived and Smart 500 ms measured Auto Gain with progress,
-  schema-v7 single-state recall and v3/v5/v6 migration, no published
+  schema-v8 single-state recall and v3/v5/v6/v7 migration, no published
   A/B/link-group/dynamic-enable parameters, corrupt-state rejection,
   mono/stereo, unit parsing, and paper/ink family UI with hidden Reduced Motion preference and unrestricted
   resize from 720 to 1200 px. The compact graph-only view is the default; one

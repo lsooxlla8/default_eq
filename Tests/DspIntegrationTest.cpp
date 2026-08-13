@@ -478,7 +478,7 @@ int main()
 
     // Schema-v5 discrete routes and percent-based drive controls migrate to
     // schema-v6 placement and algorithm-native normalized controls migrate
-    // into the current schema-v7 state.
+    // into the current schema-v8 state.
     {
         DefaultEqualizerAudioProcessor source;
         auto legacyCurrent = source.apvts.copyState();
@@ -562,7 +562,11 @@ int main()
         setPlain(p, id(1, "placement_mode"), 1.0f);
         setPlain(p, id(1, "placement"), 100.0f);
         p.resetBandToDefaults(0, false);
+        CHECK(p.apvts.getRawParameterValue(id(1, "present"))->load() < 0.5f,
+              "deleting a band releases its graph slot");
         p.resetBandToDefaults(0, true, 777.0f, -3.5f);
+        CHECK(p.apvts.getRawParameterValue(id(1, "present"))->load() > 0.5f,
+              "recreating a band restores its graph slot");
         CHECK(p.apvts.getParameter(id(1, "dyn_on")) == nullptr,
               "dynamic processing publishes no redundant enable parameter");
         CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive"))->load()) < 0.01f,
@@ -591,7 +595,19 @@ int main()
     CHECK(ResponseCurveComponent::defaultTypeForNewBand(1000.0f, -12.0f) == 0,
           "central double-click creates Bell");
 
-    // Schema-v3 A/B projects migrate the audible slot into schema-v7's single
+    // Bypass and deletion have separate state semantics: bypass preserves the
+    // node slot while deletion clears it.
+    {
+        DefaultEqualizerAudioProcessor p;
+        setPlain(p, id(1, "on"), 0.0f);
+        CHECK(p.apvts.getRawParameterValue(id(1, "present"))->load() > 0.5f,
+              "bypassed band remains present on the graph");
+        p.resetBandToDefaults(0, false);
+        CHECK(p.apvts.getRawParameterValue(id(1, "present"))->load() < 0.5f,
+              "deleted band no longer occupies a graph slot");
+    }
+
+    // Schema-v3 A/B projects migrate the audible slot into schema-v8's single
     // unambiguous audio state.
     {
         DefaultEqualizerAudioProcessor legacy;
