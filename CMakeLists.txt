@@ -121,9 +121,13 @@ if (DEFAULT_EQUALIZER_BUILD_TESTS)
 
     add_executable(DefaultEqualizer_LatencyProbe Tests/LatencyProbe.cpp)
     target_link_libraries(DefaultEqualizer_LatencyProbe PRIVATE juce::juce_dsp)
+    target_compile_definitions(DefaultEqualizer_LatencyProbe PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 
     add_executable(DefaultEqualizer_DspIntegration Tests/DspIntegrationTest.cpp)
     target_link_libraries(DefaultEqualizer_DspIntegration PRIVATE DefaultEqualizer juce::juce_audio_utils juce::juce_dsp)
+    target_compile_definitions(DefaultEqualizer_DspIntegration PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 
     add_test(NAME biquad COMMAND DefaultEqualizer_Tests)
     add_test(NAME shelf_nan_sweep COMMAND DefaultEqualizer_ShelfNaNSweep)

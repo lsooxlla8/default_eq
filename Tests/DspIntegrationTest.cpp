@@ -180,9 +180,13 @@ double renderCutLevel(float slope)
 
 int main()
 {
-    // Required on Windows before constructing JUCE processor/UI support;
-    // harmless on macOS/Linux and keeps the same integration binary portable.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::printf("DSP integration: initialise JUCE\n");
+    // Required on Windows before constructing JUCE processor/UI support.
+#if JUCE_WINDOWS
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
+#endif
+    std::printf("DSP integration: defaults\n");
     CHECK(kNumBands == 8, "product exposes exactly eight bands");
     {
         DefaultEqualizerAudioProcessor fresh;
@@ -196,6 +200,7 @@ int main()
     CHECK(std::abs(DefaultEqualizerAudioProcessor::calculateAdaptiveQ(1.25f, 8.0f) - 2.45f) < 1.0e-6f,
           "Adaptive Q follows the documented deterministic formula");
 
+    std::printf("DSP integration: routing and unity\n");
     // Neutral 8-band centered L/R and M/S placement must both be unity.
     for (bool midSide : { false, true })
     {
@@ -271,6 +276,7 @@ int main()
     CHECK(placedMid.first > placedSide.first * 1.8,
           "continuous M/S placement distinguishes mono Mid from empty Side");
 
+    std::printf("DSP integration: analyzer lifecycle\n");
     {
         DefaultEqualizerAudioProcessor p;
         activateBand(p);
@@ -289,6 +295,7 @@ int main()
         CHECK(!p.spectrumFifo.processIfReady(), "disabled analyzer stops publishing immediately");
     }
 
+    std::printf("DSP integration: dynamics and drive\n");
     const float quietSC = runDynamic(false);
     const float loudSC = runDynamic(true);
     CHECK(std::abs(loudSC - quietSC) > quietSC * 0.08f, "external sidechain changes selected dynamic band");
@@ -376,6 +383,7 @@ int main()
     CHECK(std::abs(highDriven - highClean) > highClean * 0.05,
           "high-band drive measurably changes in-band program");
 
+    std::printf("DSP integration: block size and latency\n");
     const double dyn64 = dynamicLevelForBlockSize(64);
     const double dyn257 = dynamicLevelForBlockSize(257);
     const double dyn1024 = dynamicLevelForBlockSize(1024);
@@ -509,6 +517,7 @@ int main()
               "linear phase quality impulse peak matches reported latency");
     }
 
+    std::printf("DSP integration: state and graph contracts\n");
     // Current state round-trip preserves continuous slope and per-band M/S placement.
     {
         DefaultEqualizerAudioProcessor source;
