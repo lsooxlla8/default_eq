@@ -59,6 +59,7 @@ public:
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
     static int defaultTypeForNewBand(float frequencyHz, float gainDb) noexcept;
+    static bool isCutType(int type) noexcept { return type == 3 || type == 4; }
 
 private:
     DefaultEqualizerAudioProcessor& proc;
@@ -84,6 +85,7 @@ private:
     bool thresholdDragging = false;
     bool commandGesturePending = false;
     bool shiftGesturePending = false;
+    bool momentarySoloActive = false;
     int modifierGestureBand = -1;
     std::array<bool, kNumBands> selection {};
     std::array<float, kNumBands> dragStartFreq {}, dragStartGain {};

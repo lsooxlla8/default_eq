@@ -594,6 +594,9 @@ int main()
           "lower high-frequency double-click creates high cut");
     CHECK(ResponseCurveComponent::defaultTypeForNewBand(1000.0f, -12.0f) == 0,
           "central double-click creates Bell");
+    CHECK(ResponseCurveComponent::isCutType(3) && ResponseCurveComponent::isCutType(4)
+              && !ResponseCurveComponent::isCutType(0),
+          "unmodified wheel routes only low/high cuts to slope");
 
     // Bypass and deletion have separate state semantics: bypass preserves the
     // node slot while deletion clears it.

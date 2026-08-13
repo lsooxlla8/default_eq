@@ -4,12 +4,14 @@
 
 - Exactly eight bands; Bell, low/high shelf, low/high cut, band-pass, notch;
   continuous 3–48 dB/oct slope for every type.
-- Graph drag, position-aware double-click creation into an unused slot, Q wheel,
-  Cmd-wheel slope, Cmd-click bypass, Cmd-drag drive, Shift-click multiselect,
-  Shift-drag threshold, Shift-wheel L/R or M/S placement, embedded/context numeric input, relative group drag,
+- Graph drag, position-aware double-click creation into an unused slot, Q wheel
+  (slope wheel on low/high cuts), Cmd-wheel slope, Cmd-click bypass,
+  Cmd-drag drive, Cmd-right-click slope reset, Shift-click placement reset,
+  Shift-drag threshold, Shift-wheel L/R or M/S placement, momentary Alt-click solo,
+  embedded/context numeric input, relative group drag,
   group bypass/delete, and one Undo step per gesture.
 - Per-band bypass, band-pass solo audition, continuous centered L–R placement
-  switchable to continuous M–S placement, Adaptive Q,
+  switchable to continuous M–S placement, global Adaptive Q,
   dynamic Down/Up, threshold/range/ratio/attack/release, internal/external
   sidechain, transient SC audition, live GR and continuous 0–5 ms lookahead.
 - Bypassed bands remain visible and selectable as outlined graph nodes; only
@@ -18,10 +20,10 @@
   1024/2048/4096 taps, exact host latency reporting, aligned ramped bypass and
   guarded live latency changes.
 - The first ten displayed `default_distortion` drive algorithms, spectrally
-  isolated per band; Drive/algorithm-specific Character, original vertical
-  Secondary where applicable, Mix/Comp/bypass, deterministic per-band table
+  isolated per band; Drive/algorithm-specific Character, compatible stored
+  Secondary semantics without a dedicated face-panel control, Mix/Comp/bypass, deterministic per-band table
   Auto Gain and DC blocking. Drive is enabled by default at a neutral 0 dB.
-- Global 2x/4x/8x FIR oversampling covering dynamic EQ and nonlinear drive.
+- Global stepped Off/2x/4x/8x oversampling slider covering dynamic EQ and nonlinear drive.
 - Always-both RTA with overlapped 2048/4096/8192 FFT, coherent-gain
   normalisation, fractional-octave smoothing, range/floor/speed/average/tilt,
   peak hold/freeze/show-hide and separate UI persistence.
@@ -31,8 +33,9 @@
   schema-v8 single-state recall and v3/v5/v6/v7 migration, no published
   A/B/link-group/dynamic-enable parameters, corrupt-state rejection,
   mono/stereo, unit parsing, and paper/ink family UI with hidden Reduced Motion preference and unrestricted
-  resize from 720 to 1200 px. The compact graph-only view is the default; one
-  family-style button expands the unified Band/Dynamic/RTA/Match workspace.
+  resize from 720 to 1200 px. Every editor opens at the family-standard 860 px
+  width with the compact graph-only view; the right-aligned Advanced button
+  expands the unified Band/Dynamic/RTA/Match workspace without resizing the graph.
 
 ## Deliberate boundary
 

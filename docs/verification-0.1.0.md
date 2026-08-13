@@ -63,7 +63,9 @@ The live Standalone window was inspected at 720, 860 and 1200 px using Computer
 Use. Combined Band/Drive, Dynamic, RTA and Match workspaces remain readable and within
 the window; the formerly separate sparse Global page was folded into the
 header. The 720 px Dynamic page is the densest verified layout. Dark and light
-screenshots confirm exact paper/ink role inversion.
+screenshots confirm exact paper/ink role inversion. The current 860 px compact
+and Advanced captures also verify that the graph retains its dimensions when
+the panel opens, and that no separate meter is overlaid on the RTA edge.
 
 - `docs/screenshots/default_equalizer-dark-final-720.jpeg`
 - `docs/screenshots/default_equalizer-dark-final-860.jpeg`
@@ -72,6 +74,8 @@ screenshots confirm exact paper/ink role inversion.
 - `docs/screenshots/default_equalizer-match-860.jpeg`
 - `docs/screenshots/default_equalizer-light-final-2026-08-13.jpeg`
 - `docs/screenshots/default_equalizer-light-band-drive-2026-08-13.png`
+- `docs/screenshots/default_equalizer-light-collapsed-2026-08-13.png`
+- `docs/screenshots/default_equalizer-light-compact-controls-2026-08-13.png`
 
 ## Known boundaries
 

@@ -34,9 +34,9 @@ juce::String cleanDb(double value, int digits = 2)
 
 int workspaceHeightForWidth(int width) noexcept
 {
-    if (width < 820) return 132;
-    if (width < 1080) return 148;
-    return 164;
+    if (width < 820) return 120;
+    if (width < 1080) return 132;
+    return 144;
 }
 }
 
@@ -182,11 +182,10 @@ void FamilyLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w,
                                          juce::Slider::SliderStyle style, juce::Slider& slider)
 {
     if (slider.getName() != "LOOKAHEAD" && slider.getName() != "OUTPUT_HDR"
-        && slider.getName() != "PLACEMENT")
+        && slider.getName() != "PLACEMENT" && slider.getName() != "OVERSAMPLING")
         return juce::LookAndFeel_V4::drawLinearSlider(g, x, y, w, h, pos, min, max, style, slider);
     juce::ignoreUnused(min, max, style);
-    auto r = juce::Rectangle<float>((float)x + 1.0f, (float)y + 1.0f,
-                                     (float)w - 2.0f, (float)h - 2.0f);
+    auto r = juce::Rectangle<float>((float)x, (float)y, (float)w, (float)h);
     g.setColour(background()); g.fillRect(r);
     g.setColour(foreground()); g.drawRect(r, 2.0f);
     const float proportion = (float)slider.valueToProportionOfLength(slider.getValue());
@@ -218,6 +217,9 @@ void FamilyLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int w,
         ? (std::abs(slider.getValue()) < 0.05 ? "CENTER"
            : slider.getValue() < 0.0 ? juce::String(midSidePlacement ? "M " : "L ") + juce::String(std::abs(slider.getValue()), 0)
                                      : juce::String(midSidePlacement ? "S " : "R ") + juce::String(slider.getValue(), 0))
+        : slider.getName() == "OVERSAMPLING"
+        ? juce::String("OS ") + std::array<const char*, 4> { "OFF", "2X", "4X", "8X" }
+            [(size_t)juce::jlimit(0, 3, juce::roundToInt(slider.getValue()))]
         : slider.getValue() <= 0.001 ? "LOOK OFF"
         : "LOOK " + juce::String(slider.getValue(), 2) + "ms";
     const auto textBounds = r.toNearestInt().reduced(4, 1);
@@ -254,52 +256,8 @@ void FamilyLookAndFeel::drawComboBox(juce::Graphics& g, int w, int h, bool,
     g.fillRect(w - marker - 8, (h - marker) / 2, marker, marker);
 }
 
-VerticalTextSlider::VerticalTextSlider()
-{
-    setSliderStyle(juce::Slider::LinearVertical);
-    setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    setMouseDragSensitivity(140);
-}
-
-void VerticalTextSlider::setDescriptor(juce::String text)
-{
-    descriptor = std::move(text);
-    setName(descriptor);
-    repaint();
-}
-
-void VerticalTextSlider::paint(juce::Graphics& g)
-{
-    auto* family = dynamic_cast<FamilyLookAndFeel*>(&getLookAndFeel());
-    const auto fg = family != nullptr ? family->foreground() : findColour(juce::Slider::textBoxTextColourId);
-    const auto bg = family != nullptr ? family->background() : findColour(juce::Slider::textBoxBackgroundColourId);
-    auto bounds = getLocalBounds().toFloat();
-    const float connector = 5.0f;
-    bounds.removeFromLeft(connector);
-    g.setColour(fg); g.fillRect(0.0f, bounds.getCentreY() - 1.0f, bounds.getX() + 2.0f, 2.0f);
-    g.setColour(bg); g.fillRect(bounds);
-    g.setColour(fg); g.drawRect(bounds, 2.0f);
-    const float progress = (float)getNormalisableRange().convertTo0to1(getValue());
-    const auto inner = bounds.reduced(3.0f);
-    const auto fill = inner.withTop(inner.getBottom() - inner.getHeight() * progress);
-    g.setColour(fg); g.fillRect(fill);
-    const auto drawText = [&](juce::Colour colour, juce::Rectangle<int> clip)
-    {
-        juce::Graphics::ScopedSaveState clipped(g); g.reduceClipRegion(clip); g.setColour(colour);
-        g.setFont(mono(9.0f, true));
-        juce::Graphics::ScopedSaveState rotated(g);
-        g.addTransform(juce::AffineTransform::rotation(-juce::MathConstants<float>::halfPi,
-                                                        bounds.getCentreX(), bounds.getCentreY()));
-        const auto textBounds = juce::Rectangle<float>(bounds.getCentreX() - bounds.getHeight() * 0.5f,
-            bounds.getCentreY() - bounds.getWidth() * 0.5f, bounds.getHeight(), bounds.getWidth());
-        g.drawFittedText(descriptor, textBounds.reduced(4.0f, 1.0f).toNearestInt(), juce::Justification::centred, 1);
-    };
-    drawText(fg, inner.toNearestInt()); drawText(bg, fill.toNearestInt());
-}
-
 DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(DefaultEqualizerAudioProcessor& p)
-    : juce::AudioProcessorEditor(&p), proc(p), responseCurve(p),
-      levelMeter(p.meterPeakL, p.meterPeakR, p.meterRmsL, p.meterRmsR)
+    : juce::AudioProcessorEditor(&p), proc(p), responseCurve(p)
 {
     juce::PropertiesFile::Options options;
     options.applicationName = "default_equalizer";
@@ -315,17 +273,18 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     setLookAndFeel(&familyLook);
     responseCurve.setDarkMode(darkTheme);
 
-    workspaceExpanded = uiPreferences->getBoolValue("workspaceExpanded", false);
-    expandedWindowHeight = juce::jlimit(492, 900, uiPreferences->getIntValue("windowHeight", 578));
+    // Compact is an editor default, not a global preference inherited by every
+    // new plug-in instance.
+    workspaceExpanded = false;
+    expandedWindowHeight = 486;
     setResizable(true, true);
     addMouseListener(this, true);
-    const int initialWidth = juce::jlimit(720, 1200, uiPreferences->getIntValue("windowWidth", 860));
-    setResizeLimits(720, workspaceExpanded ? 360 + workspaceHeightForWidth(initialWidth) : 360, 1200, 900);
-    const int collapsedHeight = juce::jlimit(360, 560, juce::roundToInt(initialWidth * 0.50f));
+    const int initialWidth = 860;
+    setResizeLimits(720, workspaceExpanded ? 296 + workspaceHeightForWidth(initialWidth) : 296, 1200, 900);
+    const int collapsedHeight = 354;
     setSize(initialWidth, workspaceExpanded ? expandedWindowHeight : collapsedHeight);
 
     addAndMakeVisible(responseCurve);
-    addAndMakeVisible(levelMeter);
 
     auto addButton = [this](auto& button) { addAndMakeVisible(button); };
     themeBtn.setName("wordmark");
@@ -345,11 +304,10 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     sidechainBox.addItemList({ "INT SC", "EXT SC" }, 1);
     saturationBox.addItemList({ "SOFT CLIP", "HARD CLIP", "DIODE CLIPPER", "TRIODE STAGE", "TRANSISTOR / FET",
                                 "TAPE HYSTERESIS", "HARMONIC MORPH", "PHASE DISTORTION", "SPECTRAL CLIP", "SINE EROSION" }, 1);
-    oversamplingBox.addItemList({ "OFF", "2X", "4X", "8X" }, 1);
     analyzerResolutionBox.addItemList({ "RTA: LOW", "RTA: MEDIUM", "RTA: HIGH" }, 1);
     phaseModeBox.addItemList({ "MIN PHASE", "LINEAR ECO", "LINEAR MED", "LINEAR HIGH" }, 1);
     addCombo(typeBox); addCombo(dynModeBox); addCombo(sidechainBox);
-    addCombo(saturationBox); addCombo(oversamplingBox); addCombo(analyzerResolutionBox); addCombo(phaseModeBox);
+    addCombo(saturationBox); addCombo(analyzerResolutionBox); addCombo(phaseModeBox);
     addAndMakeVisible(autoGainBtn);
 
     for (auto* slider : { &slopeSlider, &dynThreshold, &dynRange, &dynRatio, &dynAttack,
@@ -358,24 +316,31 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
                           &matchAmount, &matchSmoothing, &matchLow, &matchHigh, &matchTime,
                           &analyzerRange, &analyzerFloor, &analyzerSpeed, &analyzerAveraging, &analyzerTilt })
         initParameter(*slider, {});
-    addAndMakeVisible(driveSecondarySlider);
+    oversamplingSlider.setName("OVERSAMPLING");
+    oversamplingSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    oversamplingSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    oversamplingSlider.setRange(0.0, 3.0, 1.0);
+    oversamplingSlider.setDoubleClickReturnValue(true, 0.0);
+    addAndMakeVisible(oversamplingSlider);
     dynLookahead.setName("LOOKAHEAD");
     dynLookahead.setSliderStyle(juce::Slider::LinearHorizontal);
     dynLookahead.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    dynLookahead.setDoubleClickReturnValue(true, 0.0);
     addAndMakeVisible(dynLookahead);
     placementSlider.setName("PLACEMENT");
     placementSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     placementSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    placementSlider.setDoubleClickReturnValue(true, 0.0);
     addAndMakeVisible(placementSlider);
     slopeSlider.setName("SLOPE"); dynThreshold.setName("THRESHOLD"); dynRange.setName("RANGE");
     dynRatio.setName("RATIO"); dynAttack.setName("ATTACK"); dynRelease.setName("RELEASE");
     driveSlider.setName("DRIVE"); driveCharacterSlider.setName("CHARACTER");
-    driveSecondarySlider.setDescriptor("SECONDARY");
     driveMixSlider.setName("MIX"); driveOutputSlider.setName("COMP");
     outputSlider.setName("OUTPUT");
     outputSlider.setName("OUTPUT_HDR");
     outputSlider.setSliderStyle(juce::Slider::LinearBarVertical);
     outputSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    outputSlider.setDoubleClickReturnValue(true, 0.0);
     matchAmount.setName("AMOUNT"); matchSmoothing.setName("SMOOTHING");
     matchLow.setName("LOW LIMIT"); matchHigh.setName("HIGH LIMIT");
     matchTime.setName("ANALYSIS");
@@ -389,6 +354,11 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     analyzerSpeed.setValue(uiPreferences->getDoubleValue("analyzerSpeed", 35.0), juce::dontSendNotification);
     analyzerAveraging.setValue(uiPreferences->getDoubleValue("analyzerAveraging", 65.0), juce::dontSendNotification);
     analyzerTilt.setValue(uiPreferences->getDoubleValue("analyzerTilt", 0.0), juce::dontSendNotification);
+    analyzerRange.setDoubleClickReturnValue(true, 90.0);
+    analyzerFloor.setDoubleClickReturnValue(true, -90.0);
+    analyzerSpeed.setDoubleClickReturnValue(true, 35.0);
+    analyzerAveraging.setDoubleClickReturnValue(true, 65.0);
+    analyzerTilt.setDoubleClickReturnValue(true, 0.0);
     analyzerRange.textFromValueFunction = [](double v) { return juce::String(v, 0) + " dB"; };
     analyzerFloor.textFromValueFunction = [](double v) { return cleanDb(v, 0); };
     analyzerSpeed.textFromValueFunction = analyzerAveraging.textFromValueFunction = [](double v) { return juce::String(v, 0) + "%"; };
@@ -401,6 +371,11 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     matchLow.setValue(uiPreferences->getDoubleValue("matchLow", 20.0), juce::dontSendNotification);
     matchHigh.setValue(uiPreferences->getDoubleValue("matchHigh", 20000.0), juce::dontSendNotification);
     matchTime.setValue(uiPreferences->getDoubleValue("matchTime", 1.0), juce::dontSendNotification);
+    matchAmount.setDoubleClickReturnValue(true, 100.0);
+    matchSmoothing.setDoubleClickReturnValue(true, 35.0);
+    matchLow.setDoubleClickReturnValue(true, 20.0);
+    matchHigh.setDoubleClickReturnValue(true, 20000.0);
+    matchTime.setDoubleClickReturnValue(true, 1.0);
     matchAmount.textFromValueFunction = matchSmoothing.textFromValueFunction = [](double v) { return juce::String(v, 0) + "%"; };
     matchLow.textFromValueFunction = matchHigh.textFromValueFunction = [](double v) { return v >= 1000.0 ? juce::String(v / 1000.0, 2) + " kHz" : juce::String(v, 0) + " Hz"; };
     matchTime.textFromValueFunction = [](double v) { return juce::String(v, 2) + " s"; };
@@ -529,7 +504,7 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     adaptiveQAtt = std::make_unique<ButtonAttachment>(proc.apvts, "adaptive_q", adaptiveQBtn);
     linearPhaseAtt = std::make_unique<ButtonAttachment>(proc.apvts, "linear_phase", linearPhaseBtn);
     decrampAtt = std::make_unique<ButtonAttachment>(proc.apvts, "decramp", decrampBtn);
-    oversamplingAtt = std::make_unique<ComboAttachment>(proc.apvts, "oversampling", oversamplingBox);
+    oversamplingAtt = std::make_unique<SliderAttachment>(proc.apvts, "oversampling", oversamplingSlider);
     outputAtt = std::make_unique<SliderAttachment>(proc.apvts, "output_gain", outputSlider);
 
     setWantsKeyboardFocus(true);
@@ -549,11 +524,9 @@ DefaultEqualizerAudioProcessorEditor::~DefaultEqualizerAudioProcessorEditor()
     proc.soloBand.store(-1, std::memory_order_release);
     if (uiPreferences)
     {
-        uiPreferences->setValue("windowWidth", getWidth());
-        if (workspaceExpanded)
-            expandedWindowHeight = getHeight();
-        uiPreferences->setValue("windowHeight", expandedWindowHeight);
-        uiPreferences->setValue("workspaceExpanded", workspaceExpanded);
+        uiPreferences->removeValue("windowWidth");
+        uiPreferences->removeValue("windowHeight");
+        uiPreferences->removeValue("workspaceExpanded");
         uiPreferences->saveIfNeeded();
     }
     setLookAndFeel(nullptr);
@@ -582,10 +555,10 @@ void DefaultEqualizerAudioProcessorEditor::applySliderPalette()
     const auto bg = familyLook.background();
     for (auto* slider : { &slopeSlider, &placementSlider, &dynThreshold, &dynRange, &dynRatio, &dynAttack,
                           &dynRelease, &dynLookahead, &driveSlider, &driveCharacterSlider,
-                          static_cast<juce::Slider*>(&driveSecondarySlider), &driveMixSlider,
+                          &driveMixSlider,
                           &driveOutputSlider, &outputSlider, &matchAmount, &matchSmoothing,
                           &matchLow, &matchHigh, &matchTime, &analyzerRange, &analyzerFloor,
-                          &analyzerSpeed, &analyzerAveraging, &analyzerTilt })
+                          &analyzerSpeed, &analyzerAveraging, &analyzerTilt, &oversamplingSlider })
     {
         slider->setColour(juce::Slider::textBoxTextColourId, fg);
         slider->setColour(juce::Slider::textBoxBackgroundColourId, bg);
@@ -599,7 +572,7 @@ void DefaultEqualizerAudioProcessorEditor::rebindBandControls()
     bandOnAtt.reset(); typeAtt.reset(); placementModeAtt.reset(); placementAtt.reset(); slopeAtt.reset();
     dynLookaheadAtt.reset(); dynModeAtt.reset(); sidechainAtt.reset(); dynThresholdAtt.reset(); dynRangeAtt.reset();
     dynRatioAtt.reset(); dynAttackAtt.reset(); dynReleaseAtt.reset(); driveOnAtt.reset(); driveAtt.reset();
-    driveCharacterAtt.reset(); driveSecondaryAtt.reset(); driveMixAtt.reset();
+    driveCharacterAtt.reset(); driveMixAtt.reset();
     driveOutputAtt.reset(); driveAutoGainAtt.reset(); saturationAtt.reset();
     const int idx = selectedBand + 1;
     bandOnAtt = std::make_unique<ButtonAttachment>(proc.apvts, bandId(idx, "on"), bandOn);
@@ -618,7 +591,6 @@ void DefaultEqualizerAudioProcessorEditor::rebindBandControls()
     driveOnAtt = std::make_unique<ButtonAttachment>(proc.apvts, bandId(idx, "drive_on"), driveOn);
     driveAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive"), driveSlider);
     driveCharacterAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive_character"), driveCharacterSlider);
-    driveSecondaryAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive_secondary"), driveSecondarySlider);
     driveMixAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive_mix"), driveMixSlider);
     driveOutputAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive_output"), driveOutputSlider);
     driveAutoGainAtt = std::make_unique<ButtonAttachment>(proc.apvts, bandId(idx, "drive_auto_gain"), driveAutoGain);
@@ -659,9 +631,6 @@ void DefaultEqualizerAudioProcessorEditor::updateDriveControls(bool resetModeDef
     driveOutputSlider.updateText();
 
     const bool tape = mode == 5, sine = mode == 9;
-    driveSecondarySlider.setDescriptor(tape ? "BIAS" : sine ? "NOISE" : "SECONDARY");
-    driveSecondarySlider.setVisible(workspaceExpanded && workspacePage == WorkspacePage::Band && (tape || sine));
-    driveSecondarySlider.setEnabled(tape || sine);
 
     if (resetModeDefaults)
     {
@@ -707,7 +676,7 @@ void DefaultEqualizerAudioProcessorEditor::setWorkspacePage(WorkspacePage page)
     const bool dyn = workspaceExpanded && page == WorkspacePage::Dynamic;
     const bool analyzer = workspaceExpanded && page == WorkspacePage::Analyzer;
     const bool match = workspaceExpanded && page == WorkspacePage::Match;
-    const std::array<juce::Component*, 13> bandComponents { &bandOn, &bandSolo, &adaptiveQBtn,
+    const std::array<juce::Component*, 12> bandComponents { &bandOn, &bandSolo,
         &placementModeBtn, &placementSlider, &typeBox, &slopeSlider, &driveOn, &driveAutoGain,
         &driveSlider, &driveCharacterSlider, &driveMixSlider, &driveOutputSlider };
     const std::array<juce::Component*, 9> dynComponents { &dynLookahead, &sidechainAudition, &dynModeBox, &sidechainBox, &dynThreshold,
@@ -718,12 +687,11 @@ void DefaultEqualizerAudioProcessorEditor::setWorkspacePage(WorkspacePage page)
         &matchAmount, &matchSmoothing, &matchLow, &matchHigh, &matchTime };
     for (auto* component : bandComponents) component->setVisible(band);
     saturationBox.setVisible(band);
-    driveSecondarySlider.setVisible(band && (displayedDriveMode == 5 || displayedDriveMode == 9));
     for (auto* component : dynComponents) component->setVisible(dyn);
     for (auto* component : analyzerComponents) component->setVisible(analyzer);
     for (auto* component : { static_cast<juce::Component*>(&phaseModeBox), static_cast<juce::Component*>(&decrampBtn),
-                             static_cast<juce::Component*>(&oversamplingBox), static_cast<juce::Component*>(&outputSlider),
-                             static_cast<juce::Component*>(&levelMeter) })
+                             static_cast<juce::Component*>(&oversamplingSlider), static_cast<juce::Component*>(&outputSlider),
+                             static_cast<juce::Component*>(&adaptiveQBtn) })
         component->setVisible(true);
     for (auto* component : matchComponents) component->setVisible(match);
     for (auto* tab : { &bandPageBtn, &dynamicPageBtn, &analyzerPageBtn, &matchPageBtn })
@@ -738,16 +706,14 @@ void DefaultEqualizerAudioProcessorEditor::setWorkspaceExpanded(bool shouldExpan
         expandedWindowHeight = getHeight();
     const int currentHeight = getHeight();
     workspaceExpanded = shouldExpand;
-    workspaceToggleBtn.setButtonText(workspaceExpanded ? "HIDE CONTROLS" : "CONTROLS");
+    workspaceToggleBtn.setButtonText(workspaceExpanded ? "HIDE ADVANCED" : "ADVANCED");
     workspaceToggleBtn.setToggleState(workspaceExpanded, juce::dontSendNotification);
-    uiPreferences->setValue("workspaceExpanded", workspaceExpanded);
-
     if (resizeWindow)
     {
-        setResizeLimits(720, workspaceExpanded ? 360 + panelHeight : 360, 1200, 900);
+        setResizeLimits(720, workspaceExpanded ? 296 + panelHeight : 296, 1200, 900);
         const int target = workspaceExpanded
-            ? juce::jlimit(360 + panelHeight, 900, currentHeight + panelHeight)
-            : juce::jlimit(360, 900 - panelHeight, currentHeight - panelHeight);
+            ? juce::jlimit(296 + panelHeight, 900, currentHeight + panelHeight)
+            : juce::jlimit(296, 900 - panelHeight, currentHeight - panelHeight);
         setSize(getWidth(), target);
     }
     setWorkspacePage(workspacePage);
@@ -805,6 +771,8 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
         responseCurve.pushSpectrumData(proc.spectrumFifo.getMagnitudes(), proc.spectrumFifo.getNumBins(), sampleRate, false);
     const int curveSelection = responseCurve.getSelectedBand();
     if (curveSelection >= 0 && curveSelection != selectedBand) selectBand(curveSelection, false);
+    bandSolo.setToggleState(proc.soloBand.load(std::memory_order_acquire) == selectedBand,
+                            juce::dontSendNotification);
     const int autoMode = (int)proc.apvts.getRawParameterValue("auto_gain_mode")->load();
     const bool smartSelected = autoMode == 2;
     const bool smartLocked = proc.smartAutoGainLocked.load(std::memory_order_acquire);
@@ -906,21 +874,21 @@ void DefaultEqualizerAudioProcessorEditor::resized()
     const int globalGap = 4;
     const int availableGlobal = juce::jmax(190, globalEnd - globalStart);
     const int phaseW = availableGlobal < 230 ? 84 : 108;
-    const int osW = 60;
+    const int osW = availableGlobal < 230 ? 68 : 76;
     const int decrampW = availableGlobal < 230 ? 64 : 72;
     const int globalTotal = phaseW + osW + decrampW + globalGap * 2;
     int globalX = globalStart + juce::jmax(0, (availableGlobal - globalTotal) / 2);
     phaseModeBox.setBounds(globalX, actionY, phaseW, actionH); globalX += phaseW + globalGap;
-    oversamplingBox.setBounds(globalX, actionY, osW, actionH); globalX += osW + globalGap;
+    oversamplingSlider.setBounds(globalX, actionY, osW, actionH); globalX += osW + globalGap;
     decrampBtn.setBounds(globalX, actionY, decrampW, actionH);
 
     const int graphTop = headerH + 10;
     const int toggleH = 28;
     const int toggleY = h - workspaceH - toggleH - 8;
-    workspaceToggleBtn.setBounds((w - 176) / 2, toggleY, 176, toggleH);
+    adaptiveQBtn.setBounds(10, toggleY, 128, toggleH);
+    workspaceToggleBtn.setBounds(w - 186, toggleY, 176, toggleH);
     const int graphBottom = toggleY - 8;
     responseCurve.setBounds(10, graphTop, w - 20, juce::jmax(160, graphBottom - graphTop));
-    levelMeter.setBounds(w - 18, graphTop + 3, 6, juce::jmax(30, graphBottom - graphTop - 6));
 
     if (!workspaceExpanded)
         return;
@@ -953,30 +921,20 @@ void DefaultEqualizerAudioProcessorEditor::resized()
     if (workspacePage == WorkspacePage::Band)
     {
         const int onW = w < 820 ? 44 : w < 1080 ? 48 : 52;
-        const int typeW = w < 820 ? 76 : w < 1080 ? 88 : 100;
-        const int placeW = w < 820 ? 68 : w < 1080 ? 80 : 92;
-        const int driveButtonW = w < 820 ? 64 : w < 1080 ? 72 : 80;
-        const int satW = w < 820 ? 88 : w < 1080 ? 104 : 120;
-        const bool showSecondary = displayedDriveMode == 5 || displayedDriveMode == 9;
-        const int secondaryW = showSecondary ? (w < 820 ? 28 : w < 1080 ? 32 : 36) : 0;
-        const int fixed = onW + typeW + placeW + driveButtonW + satW + secondaryW;
-        const int fixedGaps = gap * (showSecondary ? 10 : 9);
+        const int selectorW = w < 820 ? 140 : w < 1080 ? 156 : 172;
+        const int placeW = w < 820 ? 72 : w < 1080 ? 84 : 96;
+        const int driveButtonW = w < 820 ? 68 : w < 1080 ? 76 : 84;
+        const int fixed = onW + selectorW + placeW + driveButtonW;
+        const int fixedGaps = gap * 8;
         const int total = fixed + knobSide * 5 + fixedGaps;
         int x = juce::jmax(10, (w - total) / 2);
         stack(bandOn, bandSolo, x, pairY, onW); x += onW + gap;
-        stack(typeBox, adaptiveQBtn, x, pairY, typeW); x += typeW + gap;
+        stack(typeBox, saturationBox, x, pairY, selectorW); x += selectorW + gap;
         stack(placementModeBtn, placementSlider, x, pairY, placeW); x += placeW + gap;
         stack(driveOn, driveAutoGain, x, pairY, driveButtonW); x += driveButtonW + gap;
-        saturationBox.setBounds(x, centreY - rowH / 2, satW, rowH); x += satW + gap;
         const int knobY = pairY;
         slopeSlider.setBounds(x, knobY, knobSide, knobComponentH); x += knobSide + gap;
-        driveSlider.setBounds(x, knobY, knobSide, knobComponentH); x += knobSide;
-        if (showSecondary)
-        {
-            driveSecondarySlider.setBounds(x, knobY, secondaryW, knobSide);
-            x += secondaryW + gap;
-        }
-        else x += gap;
+        driveSlider.setBounds(x, knobY, knobSide, knobComponentH); x += knobSide + gap;
         for (auto* slider : { &driveCharacterSlider, &driveMixSlider, &driveOutputSlider })
         { slider->setBounds(x, knobY, knobSide, knobComponentH); x += knobSide + gap; }
     }
