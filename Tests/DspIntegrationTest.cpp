@@ -182,10 +182,6 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("DSP integration: initialise JUCE\n");
-    // Required on Windows before constructing JUCE processor/UI support.
-#if JUCE_WINDOWS
-    juce::ScopedJuceInitialiser_GUI juceInitialiser;
-#endif
     std::printf("DSP integration: defaults\n");
     CHECK(kNumBands == 8, "product exposes exactly eight bands");
     {
