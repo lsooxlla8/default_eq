@@ -59,6 +59,7 @@ private:
     void selectBand(int, bool updateGraphSelection = true);
     void rebindBandControls();
     void setWorkspacePage(WorkspacePage);
+    void setWorkspaceExpanded(bool shouldExpand, bool resizeWindow);
     void updateHeaderText();
     void initParameter(juce::Slider&, const juce::String& name);
     void applySliderPalette();
@@ -79,11 +80,14 @@ private:
     int displayedDriveMode = -1;
     bool saturationMouseInteraction = false;
     bool driveFormatPending = false;
+    bool workspaceExpanded = false;
+    int expandedWindowHeight = 620;
 
     // Header: product identity, selected object, global actions and power.
     juce::TextButton themeBtn { "default_equalizer" };
-    juce::TextButton autoGainBtn { "AUTO OFF" };
+    juce::TextButton autoGainBtn { "AUTO GAIN: OFF" };
     juce::ToggleButton powerBtn { "ON" };
+    juce::TextButton workspaceToggleBtn { "CONTROLS" };
 
     // Workspace navigation. Only the selected layer is visible.
     juce::TextButton bandPageBtn { "BAND" }, dynamicPageBtn { "DYNAMIC" };
@@ -96,7 +100,7 @@ private:
     juce::Slider slopeSlider, placementSlider;
 
     // Dynamic page.
-    juce::ToggleButton dynOn { "DYN ON" }, sidechainAudition { "SC LISTEN" };
+    juce::ToggleButton sidechainAudition { "SC LISTEN" };
     juce::Slider dynLookahead, dynThreshold, dynRange, dynRatio, dynAttack, dynRelease;
     juce::ComboBox dynModeBox, sidechainBox;
 
@@ -122,7 +126,7 @@ private:
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     std::unique_ptr<ButtonAttachment> powerAtt, bandOnAtt, placementModeAtt,
-        adaptiveQAtt, dynOnAtt, driveOnAtt, driveAutoGainAtt, linearPhaseAtt, decrampAtt;
+        adaptiveQAtt, driveOnAtt, driveAutoGainAtt, linearPhaseAtt, decrampAtt;
     std::unique_ptr<ComboAttachment> typeAtt, dynModeAtt, sidechainAtt,
         saturationAtt, oversamplingAtt;
     std::unique_ptr<SliderAttachment> slopeAtt, placementAtt, dynLookaheadAtt, dynThresholdAtt, dynRangeAtt,

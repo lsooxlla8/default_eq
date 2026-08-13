@@ -99,7 +99,6 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
         apvts.addParameterListener(bandId(i, "slope"), this);
         apvts.addParameterListener(bandId(i, "drive"), this);
         apvts.addParameterListener(bandId(i, "drive_on"), this);
-        apvts.addParameterListener(bandId(i, "dyn_on"), this);
         apvts.addParameterListener(bandId(i, "dyn_lookahead"), this);
     }
     apvts.addParameterListener("linear_phase", this);
@@ -133,7 +132,6 @@ DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
         apvts.removeParameterListener(bandId(i, "slope"), this);
         apvts.removeParameterListener(bandId(i, "drive"), this);
         apvts.removeParameterListener(bandId(i, "drive_on"), this);
-        apvts.removeParameterListener(bandId(i, "dyn_on"), this);
         apvts.removeParameterListener(bandId(i, "dyn_lookahead"), this);
         apvts.removeParameterListener(bandId(i, "type"),  this);
         apvts.removeParameterListener(bandId(i, "on"),    this);
@@ -199,7 +197,7 @@ void DefaultEqualizerAudioProcessor::parameterChanged(const juce::String& parame
     }
 
     if (parameterID == "oversampling" || parameterID.endsWith("_drive")
-        || parameterID.endsWith("_drive_on") || parameterID.endsWith("_dyn_on")
+        || parameterID.endsWith("_drive_on")
         || parameterID.endsWith("_dyn_lookahead"))
     {
         updateReportedLatency();
@@ -334,7 +332,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
 #endif
 
         // Dynamic EQ per band
-        params.push_back(std::make_unique<juce::AudioParameterBool>(bandId(i,"dyn_on"), "Band " + juce::String(i) + " Dyn On", false));
         params.push_back(std::make_unique<juce::AudioParameterChoice>(
             bandId(i,"dyn_mode"), "Band " + juce::String(i) + " Dynamic Mode",
             juce::StringArray { "Downward", "Upward" }, 0));
@@ -348,7 +345,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"dyn_thresh"), "Band " + juce::String(i) + " Threshold",
             juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f, 1.0f),
-            -20.0f));
+            0.0f));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"dyn_range"), "Band " + juce::String(i) + " Range",
             juce::NormalisableRange<float>(0.0f, 24.0f, 0.1f), 6.0f,
@@ -604,7 +601,6 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             : std::clamp(driveCharacterRaw, 0.0f, 1.0f);
 
         // Dynamic EQ params
-        const bool dynOn     = apvts.getRawParameterValue(bandId(i + 1, "dyn_on"))->load() > 0.5f;
         const bool dynUpward = apvts.getRawParameterValue(bandId(i + 1, "dyn_mode"))->load() > 0.5f;
         const bool externalSC = apvts.getRawParameterValue(bandId(i + 1, "sc_source"))->load() > 0.5f;
         const float dynThr   = apvts.getRawParameterValue(bandId(i + 1, "dyn_thresh"))->load();
@@ -620,7 +616,9 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         b.driveSecondary = driveSecondary;
         b.driveAutoGainLinear = apvts.getRawParameterValue(bandId(i + 1, "drive_auto_gain"))->load() > 0.5f
             ? deq::drive_auto_gain_table::lookup(satIdx, driveDb) : 1.0f;
-        b.dynEnabled    = dynOn;
+        // Dynamic processing is structurally active for every band. Threshold
+        // 0 dB is the neutral default, so no separate enable parameter exists.
+        b.dynEnabled    = true;
         b.dynUpward     = dynUpward;
         b.useExternalSidechain = externalSC && sidechainL != nullptr;
         b.dynRangeDb    = dynRange;
@@ -650,7 +648,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     const bool autoGain = autoGainMode > 0;
     std::uint64_t smartSignature = (std::uint64_t)autoGainMode + 1469598103934665603ULL;
     for (int band = 1; band <= kNumBands; ++band)
-        for (auto* suffix : { "on", "type", "freq", "q", "gain", "dyn_on", "dyn_thresh",
+        for (auto* suffix : { "on", "type", "freq", "q", "gain", "dyn_thresh",
                               "dyn_range", "drive_on", "drive", "drive_mix", "sat_mode",
                               "drive_character", "drive_secondary", "drive_auto_gain" })
         {
@@ -879,8 +877,7 @@ int DefaultEqualizerAudioProcessor::requestedLookaheadSamples() const noexcept
 {
     float maximumMs = 0.0f;
     for (int i = 1; i <= kNumBands; ++i)
-        if (apvts.getRawParameterValue(bandId(i, "dyn_on"))->load() > 0.5f
-            && apvts.getRawParameterValue(bandId(i, "dyn_lookahead"))->load() > 0.001f)
+        if (apvts.getRawParameterValue(bandId(i, "dyn_lookahead"))->load() > 0.001f)
             maximumMs = std::max(maximumMs,
                 apvts.getRawParameterValue(bandId(i, "dyn_lookahead"))->load());
     return juce::roundToInt(sr * maximumMs * 0.001);
@@ -915,7 +912,7 @@ void DefaultEqualizerAudioProcessor::applyLookaheadDelay(juce::AudioBuffer<float
 void DefaultEqualizerAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
-    root.setProperty("schemaVersion", 6, nullptr);
+    root.setProperty("schemaVersion", 7, nullptr);
     auto current = apvts.copyState();
     current.setProperty("stateRole", "current", nullptr);
     root.appendChild(current, nullptr);
@@ -957,7 +954,10 @@ void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int s
         current.removeProperty("stateRole", nullptr);
         current.removeProperty("snapshotSlot", nullptr);
         for (int i = 1; i <= kNumBands; ++i)
+        {
             removeStateParameter(current, bandId(i, "link"));
+            removeStateParameter(current, bandId(i, "dyn_on"));
+        }
         if (restoredSchema < 6)
             for (int i = 1; i <= kNumBands; ++i)
             {
@@ -987,6 +987,7 @@ void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int s
         for (int i = 1; i <= kNumBands; ++i)
         {
             removeStateParameter(current, bandId(i, "link"));
+            removeStateParameter(current, bandId(i, "dyn_on"));
             const int route = (int)readStateParameter(current, bandId(i, "ch"), 0.0f);
             writeStateParameter(current, bandId(i, "placement_mode"), route >= 3 ? 1.0f : 0.0f);
             writeStateParameter(current, bandId(i, "placement"),

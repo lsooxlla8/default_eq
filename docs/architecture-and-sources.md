@@ -29,10 +29,10 @@ smoothing/normalisation reference. The combined derivative is AGPL-3.0-only.
 - Background threads: linear-phase kernel construction and Match EQ analysis.
 - Message/UI thread: analyzer FFT consumption, response calculation, drawing,
   gestures, preferences, and undo/redo.
-- State: schema v6 contains one unambiguous APVTS audio state, migrates the
+- State: schema v7 contains one unambiguous APVTS audio state, migrates the
   audible slot from legacy schema-v3 A/B projects, and discards obsolete hidden
-  link-group properties. Schema-v5 channel routes migrate to continuous
-  placement, and its 0–100 drive controls migrate to the current normalized
+  link-group and dynamic-enable properties. Schema-v5 channel routes migrate to
+  continuous placement, and its 0–100 drive controls migrate to the normalized
   algorithm semantics. Theme, window,
   RTA, Match-analysis controls, and Reduced Motion use a separate preferences
   file. Undo history, hover, drag, solo, audition, and FFT history are transient.

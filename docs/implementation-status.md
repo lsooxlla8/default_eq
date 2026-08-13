@@ -4,9 +4,10 @@
 
 - Exactly eight bands; Bell, low/high shelf, low/high cut, band-pass, notch;
   continuous 3–48 dB/oct slope for every type.
-- Graph drag, double-click creation into an unused slot, Q wheel, embedded and
-  context numeric input, Shift multiselect, relative group drag, group bypass
-  and delete, primary/secondary selection shapes, one Undo step per gesture.
+- Graph drag, position-aware double-click creation into an unused slot, Q wheel,
+  Cmd-wheel slope, Cmd-click bypass, Cmd-drag drive, Shift-click multiselect,
+  Shift-drag threshold, embedded/context numeric input, relative group drag,
+  group bypass/delete, and one Undo step per gesture.
 - Per-band bypass, band-pass solo audition, continuous centered L–R placement
   switchable to continuous M–S placement, Adaptive Q,
   dynamic Down/Up, threshold/range/ratio/attack/release, internal/external
@@ -25,10 +26,11 @@
 - Match capture/analyse plus Amount/Smoothing/range and one-transaction
   conversion to eight ordinary editable bands. Analysis FFT is off audio thread.
 - Regular parameter-derived and Smart 500 ms measured Auto Gain with progress,
-  schema-v6 single-state recall and v3/v5 migration, no published A/B/link-group
-  parameters, corrupt-state rejection,
+  schema-v7 single-state recall and v3/v5/v6 migration, no published
+  A/B/link-group/dynamic-enable parameters, corrupt-state rejection,
   mono/stereo, unit parsing, and paper/ink family UI with hidden Reduced Motion preference and unrestricted
-  resize from 720 to 1200 px.
+  resize from 720 to 1200 px. The compact graph-only view is the default; one
+  family-style button expands the unified Band/Dynamic/RTA/Match workspace.
 
 ## Deliberate boundary
 
