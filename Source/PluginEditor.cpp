@@ -466,6 +466,13 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
     const int curveSelection = responseCurve.getSelectedBand();
     if (curveSelection >= 0 && curveSelection != selectedBand) selectBand(curveSelection, false);
     undoBtn.setEnabled(proc.undoManager.canUndo()); redoBtn.setEnabled(proc.undoManager.canRedo());
+    const bool smartSelected = autoGainBox.getSelectedItemIndex() == 2;
+    const bool smartLocked = proc.smartAutoGainLocked.load(std::memory_order_acquire);
+    autoGainBox.changeItemText(3, smartSelected ? (smartLocked ? "LOCKED" : "ANALYSING")
+                                                : "AUTO: SMART");
+    if (smartSelected)
+        autoGainBox.setTooltip(smartLocked ? "Smart Auto Gain: locked"
+                                           : "Smart Auto Gain: analysing");
     updateHeaderText();
 }
 
