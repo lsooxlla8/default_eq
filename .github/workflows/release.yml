@@ -45,7 +45,7 @@ jobs:
             "$vst3/Contents/MacOS/default_equalizer" \
             "$au/Contents/MacOS/default_equalizer" \
             "$app/Contents/MacOS/default_equalizer"; do
-            lipo -verify_arch arm64 x86_64 "$binary"
+            lipo "$binary" -verify_arch arm64 x86_64
           done
 
       - name: Validate Audio Unit
@@ -101,7 +101,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake pkg-config xvfb unzip curl \
-            libasound2-dev libfreetype6-dev libx11-dev libxcomposite-dev \
+            libasound2-dev libfreetype6-dev libfontconfig1-dev libx11-dev libxcomposite-dev \
             libxcursor-dev libxext-dev libxfixes-dev libxinerama-dev \
             libxrandr-dev libxrender-dev libgl1-mesa-dev
 

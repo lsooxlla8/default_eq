@@ -180,6 +180,9 @@ double renderCutLevel(float slope)
 
 int main()
 {
+    // Required on Windows before constructing JUCE processor/UI support;
+    // harmless on macOS/Linux and keeps the same integration binary portable.
+    juce::ScopedJuceInitialiser_GUI juceInitialiser;
     CHECK(kNumBands == 8, "product exposes exactly eight bands");
     {
         DefaultEqualizerAudioProcessor fresh;

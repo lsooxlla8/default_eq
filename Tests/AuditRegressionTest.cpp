@@ -129,10 +129,10 @@ static void test_triplebuf_concurrent_no_tearing()
     // The producer deliberately outpaces the consumer (producer in a tight
     // push loop, consumer simulating FFT work via a short sleep) to stress
     // the case where 2-buffer ping-pong would fail.
-    constexpr int FFT = 128;
+    constexpr int fftSize = 128;
     constexpr int MOD = 1 << 14;   // 16384 — well under float's 2^24 limit
-    static_assert(MOD > FFT, "MOD must exceed FFT so at most one wrap per buffer");
-    TripleBuf<FFT> pp;
+    static_assert(MOD > fftSize, "MOD must exceed FFT so at most one wrap per buffer");
+    TripleBuf<fftSize> pp;
 
     std::atomic<bool> stop { false };
     std::atomic<long long> producedSamples { 0 };
@@ -153,10 +153,10 @@ static void test_triplebuf_concurrent_no_tearing()
     });
 
     std::thread consumer([&]{
-        std::array<float, FFT> snap {};
+        std::array<float, fftSize> snap {};
         auto verify = [&]{
             bool ok = true;
-            for (int i = 1; i < FFT; ++i)
+            for (int i = 1; i < fftSize; ++i)
             {
                 const float diff = snap[i] - snap[i - 1];
                 // Normal delta is +1. A wrap at MOD gives diff == -(MOD - 1).
