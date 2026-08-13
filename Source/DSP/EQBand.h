@@ -5,9 +5,6 @@
 #include <array>
 #include <vector>
 
-// Channel routing for Mid/Side and L/R independent processing.
-enum class ChannelRoute { Stereo = 0, Left = 1, Right = 2, Mid = 3, Side = 4 };
-
 // Saturation / waveshaper modes retained and expanded from the FreeEQ8 base.
 enum class SaturationType
 {
@@ -21,7 +18,8 @@ struct EQBand
 {
     bool enabled = true;
     Biquad::Type type = Biquad::Type::Bell;
-    ChannelRoute channelRoute = ChannelRoute::Stereo;
+    bool midSidePlacement = false;
+    float placement = 0.0f;
 
     float freqHz = 1000.0f;
     float Q = 1.0f;
@@ -39,7 +37,7 @@ struct EQBand
     SaturationType satType = SaturationType::SoftClip;
     float driveCharacter = 0.0f;
     float driveSecondary = 0.0f;
-    float driveTone = 0.0f;
+    float driveAutoGainLinear = 1.0f;
 
     // Dynamic EQ state
     bool dynEnabled = false;
@@ -96,7 +94,7 @@ struct EQBand
         envLevel = 0.0f;
         dynGainMod = 0.0f;
         intervalCounter = 0;
-        driveMemoryL = driveMemoryR = driveToneStateL = driveToneStateR = 0.0f;
+        driveMemoryL = driveMemoryR = 0.0f;
         drivePhaseL = drivePhaseR = 0.0;
         driveDelayPosL = driveDelayPosR = 0;
         const size_t maximumDelay = (size_t)std::ceil(sampleRate * 8.0 * 0.05) + 2u;
@@ -106,7 +104,8 @@ struct EQBand
 
     void beginBlock(double sampleRate, bool isEnabled, Biquad::Type newType,
                     float newFreqHz, float newQ, float newGainDb,
-                    float newSlopeDbPerOct = 12.0f, ChannelRoute newRoute = ChannelRoute::Stereo,
+                    float newSlopeDbPerOct = 12.0f, bool useMidSidePlacement = false,
+                    float newPlacement = 0.0f,
                     bool useDecramping = false)
     {
         enabled = isEnabled;
@@ -119,7 +118,8 @@ struct EQBand
         const float cutStageAmount = slopeDbPerOct / 6.0f;
         cutFullStages = std::clamp((int)std::floor(cutStageAmount), 0, maxCutStages);
         cutFractionalStage = cutStageAmount - (float)cutFullStages;
-        channelRoute = newRoute;
+        midSidePlacement = useMidSidePlacement;
+        placement = std::clamp(newPlacement, -1.0f, 1.0f);
         decrampEnabled = useDecramping;
 
         targetFreqHz = newFreqHz;
@@ -211,44 +211,23 @@ struct EQBand
     inline void process(float& l, float& r)
     {
         if (!enabled) return;
-
-        // Dynamic gain modulation is baked into filter coefficients via setAllStages(),
-        // so no separate pre-filter volume adjustment is needed here.
-
-        switch (channelRoute)
+        const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
+        const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
+        if (!midSidePlacement)
         {
-            case ChannelRoute::Stereo:
-                l = processLeft(l);
-                r = processRight(r);
-                break;
-
-            case ChannelRoute::Left:
-                l = processLeft(l);
-                break;
-
-            case ChannelRoute::Right:
-                r = processRight(r);
-                break;
-
-            case ChannelRoute::Mid:
-            {
-                constexpr float invSqrt2 = 0.7071067811865475f;
-                float mid = (l + r) * invSqrt2;
-                const float side = (l - r) * invSqrt2;
-                mid = processLeft(mid);
-                l = (mid + side) * invSqrt2;
-                r = (mid - side) * invSqrt2;
-            } break;
-
-            case ChannelRoute::Side:
-            {
-                constexpr float invSqrt2 = 0.7071067811865475f;
-                const float mid = (l + r) * invSqrt2;
-                float side = (l - r) * invSqrt2;
-                side = processRight(side);
-                l = (mid + side) * invSqrt2;
-                r = (mid - side) * invSqrt2;
-            } break;
+            const float dryL = l, dryR = r;
+            l += firstWeight * (processLeft(dryL) - dryL);
+            r += secondWeight * (processRight(dryR) - dryR);
+        }
+        else
+        {
+            constexpr float invSqrt2 = 0.7071067811865475f;
+            const float dryMid = (l + r) * invSqrt2;
+            const float drySide = (l - r) * invSqrt2;
+            const float mid = dryMid + firstWeight * (processLeft(dryMid) - dryMid);
+            const float side = drySide + secondWeight * (processRight(drySide) - drySide);
+            l = (mid + side) * invSqrt2;
+            r = (mid - side) * invSqrt2;
         }
 
         if (driveAmount > 0.001f)
@@ -259,31 +238,20 @@ struct EQBand
     // stages": it returns only the frequency window represented by this node.
     inline void processAudition(float& l, float& r)
     {
-        switch (channelRoute)
+        const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
+        const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
+        if (!midSidePlacement)
         {
-            case ChannelRoute::Stereo:
-                l = auditionBiquad.processL(l); r = auditionBiquad.processR(r); break;
-            case ChannelRoute::Left:
-                l = auditionBiquad.processL(l); r = 0.0f; break;
-            case ChannelRoute::Right:
-                r = auditionBiquad.processR(r); l = 0.0f; break;
-            case ChannelRoute::Mid:
-            case ChannelRoute::Side:
-            {
-                constexpr float invSqrt2 = 0.7071067811865475f;
-                float mid = (l + r) * invSqrt2;
-                float side = (l - r) * invSqrt2;
-                if (channelRoute == ChannelRoute::Mid)
-                {
-                    mid = auditionBiquad.processL(mid); side = 0.0f;
-                }
-                else
-                {
-                    side = auditionBiquad.processR(side); mid = 0.0f;
-                }
-                l = (mid + side) * invSqrt2;
-                r = (mid - side) * invSqrt2;
-            } break;
+            l = firstWeight * auditionBiquad.processL(l);
+            r = secondWeight * auditionBiquad.processR(r);
+        }
+        else
+        {
+            constexpr float invSqrt2 = 0.7071067811865475f;
+            const float mid = firstWeight * auditionBiquad.processL((l + r) * invSqrt2);
+            const float side = secondWeight * auditionBiquad.processR((l - r) * invSqrt2);
+            l = (mid + side) * invSqrt2;
+            r = (mid - side) * invSqrt2;
         }
     }
 
@@ -443,7 +411,6 @@ private:
     float cutFractionalStage = 0.0f;
     float dcXL = 0.0f, dcYL = 0.0f, dcXR = 0.0f, dcYR = 0.0f;
     float driveMemoryL = 0.0f, driveMemoryR = 0.0f;
-    float driveToneStateL = 0.0f, driveToneStateR = 0.0f;
     std::vector<float> driveDelayL, driveDelayR;
     int driveDelayPosL = 0, driveDelayPosR = 0;
     double drivePhaseL = 0.0, drivePhaseR = 0.0;
@@ -502,51 +469,27 @@ private:
         constexpr float invSqrt2 = 0.7071067811865475f;
         const auto driveOneBand = [this](float band, bool rightState)
         {
-            float& toneState = rightState ? driveToneStateR : driveToneStateL;
-            toneState += 0.025f * (band - toneState);
-            const float toned = band + driveTone * 0.9f * (band - toneState);
-            float wet = saturateOne(toned, rightState) * driveOutputGain;
+            float wet = saturateOne(band, rightState) * driveAutoGainLinear * driveOutputGain;
             wet = rightState ? dcBlock(wet, dcXR, dcYR) : dcBlock(wet, dcXL, dcYL);
             return driveMix * (wet - band);
         };
-
-        switch (channelRoute)
+        const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
+        const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
+        if (!midSidePlacement)
         {
-            case ChannelRoute::Stereo:
-            {
-                const float bandL = driveBandBiquad.processL(l);
-                const float bandR = driveBandBiquad.processR(r);
-                l += driveOneBand(bandL, false);
-                r += driveOneBand(bandR, true);
-            } break;
-            case ChannelRoute::Left:
-            {
-                const float band = driveBandBiquad.processL(l);
-                l += driveOneBand(band, false);
-            } break;
-            case ChannelRoute::Right:
-            {
-                const float band = driveBandBiquad.processR(r);
-                r += driveOneBand(band, true);
-            } break;
-            case ChannelRoute::Mid:
-            case ChannelRoute::Side:
-            {
-                float mid = (l + r) * invSqrt2;
-                float side = (l - r) * invSqrt2;
-                if (channelRoute == ChannelRoute::Mid)
-                {
-                    const float band = driveBandBiquad.processL(mid);
-                    mid += driveOneBand(band, false);
-                }
-                else
-                {
-                    const float band = driveBandBiquad.processR(side);
-                    side += driveOneBand(band, true);
-                }
-                l = (mid + side) * invSqrt2;
-                r = (mid - side) * invSqrt2;
-            } break;
+            const float bandL = driveBandBiquad.processL(l);
+            const float bandR = driveBandBiquad.processR(r);
+            l += firstWeight * driveOneBand(bandL, false);
+            r += secondWeight * driveOneBand(bandR, true);
+        }
+        else
+        {
+            float mid = (l + r) * invSqrt2;
+            float side = (l - r) * invSqrt2;
+            mid += firstWeight * driveOneBand(driveBandBiquad.processL(mid), false);
+            side += secondWeight * driveOneBand(driveBandBiquad.processR(side), true);
+            l = (mid + side) * invSqrt2;
+            r = (mid - side) * invSqrt2;
         }
     }
 

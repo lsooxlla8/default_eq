@@ -337,6 +337,7 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
         juce::Path peakPath;
         bool started = false;
         bool peakStarted = false;
+        float lastY = h, lastPeakY = h;
         for (int i = 1; i < currentSpectrumSize; i += analyzerStride)
         {
             const float target = source[i];
@@ -349,17 +350,21 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
             const float db = juce::jlimit(analyzerFloorDb, ceiling, tilted);
             const float x = freqToX(freq);
             const float y = dbToY(juce::jmap(db, analyzerFloorDb, ceiling, minDb, 0.0f));
-            if (!started) { outline.startNewSubPath(x, y); started = true; }
+            if (!started) { outline.startNewSubPath(0.0f, y); outline.lineTo(x, y); started = true; }
             else outline.lineTo(x, y);
+            lastY = y;
             if (peakHold)
             {
                 peaks[i] = std::max(peaks[i], tilted);
                 const float py = dbToY(juce::jmap(juce::jlimit(analyzerFloorDb, ceiling, peaks[i]), analyzerFloorDb, ceiling, minDb, 0.0f));
-                if (!peakStarted) { peakPath.startNewSubPath(x, py); peakStarted = true; }
+                if (!peakStarted) { peakPath.startNewSubPath(0.0f, py); peakPath.lineTo(x, py); peakStarted = true; }
                 else peakPath.lineTo(x, py);
+                lastPeakY = py;
             }
         }
         if (!started) return;
+        outline.lineTo(w, lastY);
+        if (peakStarted) peakPath.lineTo(w, lastPeakY);
         auto fill = outline;
         fill.lineTo(w, h); fill.lineTo(0.0f, h); fill.closeSubPath();
         const auto fg = darkMode ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
@@ -474,18 +479,14 @@ void ResponseCurveComponent::paintNodes(juce::Graphics& g)
         g.drawText(juce::String(idx), (int)(x - r), (int)(y - r), (int)(r * 2.0f), (int)(r * 2.0f),
                    juce::Justification::centred);
 
-        // Per-band channel placement, encoded with text as well as position.
-        const int chIdx = (int) proc.apvts.getRawParameterValue(bandId(idx, "ch"))->load();
-        if (chIdx >= 0)
-        {
-            const char* labels[] = { "ST", "L", "R", "M", "S" };
-            const char* label = labels[std::clamp(chIdx, 0, 4)];
-
-            g.setColour(colour.withAlpha(0.9f));
-            g.setFont(8.0f);
-            g.drawText(label, (int)(x - r), (int)(y + r + 1), (int)(r * 2.0f), 10,
-                       juce::Justification::centred);
-        }
+        const bool midSide = proc.apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load() > 0.5f;
+        const float placement = proc.apvts.getRawParameterValue(bandId(idx, "placement"))->load();
+        const auto label = std::abs(placement) < 1.0f ? (midSide ? "MS" : "LR")
+                         : placement < 0.0f ? (midSide ? "M" : "L") : (midSide ? "S" : "R");
+        g.setColour(colour.withAlpha(0.9f));
+        g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 8.0f, juce::Font::bold)));
+        g.drawText(label, (int)(x - r), (int)(y + r + 1), (int)(r * 2.0f), 10,
+                   juce::Justification::centred);
     }
 }
 
@@ -499,6 +500,8 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
     const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load();
     const float q = proc.apvts.getRawParameterValue(bandId(idx, "q"))->load();
     const float slope = proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load();
+    const float drive = proc.apvts.getRawParameterValue(bandId(idx, "drive"))->load();
+    const bool driveOn = proc.apvts.getRawParameterValue(bandId(idx, "drive_on"))->load() > 0.5f;
     const float x = freqToX(freq);
     const float y = dbToY(gain * proc.apvts.getRawParameterValue("scale")->load());
 
@@ -507,7 +510,7 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
     const float dynNow = proc.getBandDynamicGainDb(band);
     const float threshold = proc.apvts.getRawParameterValue(bandId(idx, "dyn_thresh"))->load();
     const float range = proc.apvts.getRawParameterValue(bandId(idx, "dyn_range"))->load();
-    const int cardH = dynamic ? 63 : 48;
+    const int cardH = dynamic ? 78 : 63;
     int cardX = juce::jlimit(6, getWidth() - cardW - 6, (int)x - cardW / 2);
     int cardY = (int)y - cardH - 20;
     if (cardY < 8) cardY = (int)y + 20;
@@ -532,12 +535,14 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
     const float actualQ = adaptive ? DefaultEqualizerAudioProcessor::calculateAdaptiveQ(q, gain) : q;
     const auto qText = adaptive ? "Q " + juce::String(q, 3) + " > " + juce::String(actualQ, 3)
                                 : "Q " + juce::String(q, 3);
-    g.drawText(qText + "   SLOPE " + juce::String(slope, 1) + " dB/oct   WHEEL: Q",
+    g.drawText(qText + "   SLOPE " + juce::String(slope, 1) + " dB/oct",
                cardX + 9, cardY + 25, cardW - 18, 13, juce::Justification::centredLeft);
+    g.drawText("DRIVE " + juce::String(drive, 1) + " dB  " + (driveOn ? "ON" : "OFF"),
+               cardX + 9, cardY + 41, cardW - 18, 13, juce::Justification::centredLeft);
     if (dynamic)
         g.drawText("DYN  THR " + juce::String(threshold, 1) + "  RNG " + juce::String(range, 1)
                    + "  NOW " + juce::String(dynNow, 2) + " dB",
-                   cardX + 9, cardY + 41, cardW - 18, 13, juce::Justification::centredLeft);
+                   cardX + 9, cardY + 56, cardW - 18, 13, juce::Justification::centredLeft);
 }
 
 // ── Hit-testing ────────────────────────────────────────────────────
@@ -598,6 +603,12 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
         menu.addItem(22, "Enter Q...");
         menu.addItem(23, "Enter slope...");
         menu.addSeparator();
+        menu.addItem(40, "Placement mode: L/R");
+        menu.addItem(41, "Placement mode: M/S");
+        menu.addItem(42, "Placement: first channel");
+        menu.addItem(43, "Placement: center");
+        menu.addItem(44, "Placement: second channel");
+        menu.addSeparator();
         menu.addItem(2, "Delete band");
         menu.addItem(3, "Reset band");
         const int selectedCount = (int) std::count(selection.begin(), selection.end(), true);
@@ -606,12 +617,6 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
             menu.addSeparator();
             menu.addItem(30, "Bypass selected (" + juce::String(selectedCount) + ")");
             menu.addItem(31, "Delete selected (" + juce::String(selectedCount) + ")");
-            menu.addSeparator();
-            menu.addItem(40, "Selected route: Stereo");
-            menu.addItem(41, "Selected route: Left");
-            menu.addItem(42, "Selected route: Right");
-            menu.addItem(43, "Selected route: Mid");
-            menu.addItem(44, "Selected route: Side");
         }
 
         menu.showMenuAsync(juce::PopupMenu::Options(), [this, idx, px = (float)e.x, py = (float)e.y](int result)
@@ -664,15 +669,22 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
             }
             else if (result >= 40 && result <= 44)
             {
-                proc.undoManager.beginNewTransaction("Set selected band routes");
+                proc.undoManager.beginNewTransaction("Set selected band placement");
                 for (int b = 0; b < kNumBands; ++b)
                     if (selection[(size_t)b])
-                        if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "ch")))
+                    {
+                        const bool modeChange = result <= 41;
+                        auto* parameter = proc.apvts.getParameter(bandId(b + 1,
+                            modeChange ? "placement_mode" : "placement"));
+                        if (parameter != nullptr)
                         {
                             parameter->beginChangeGesture();
-                            parameter->setValueNotifyingHost(parameter->convertTo0to1((float)(result - 40)));
+                            const float value = modeChange ? (result == 41 ? 1.0f : 0.0f)
+                                : result == 42 ? -100.0f : result == 44 ? 100.0f : 0.0f;
+                            parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
                             parameter->endChangeGesture();
                         }
+                    }
             }
         });
         return;
@@ -698,6 +710,23 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
     }
     if (hit < 0) return;
     selectedBand = hit;
+    if (e.mods.isCommandDown())
+    {
+        dragging = driveDragging = true;
+        proc.undoManager.beginNewTransaction(std::count(selection.begin(), selection.end(), true) > 1
+            ? "Adjust selected band drive" : "Adjust band drive");
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            dragDriveParams[(size_t)b] = nullptr;
+            if (!selection[(size_t)b]) continue;
+            dragStartDrive[(size_t)b] = proc.apvts.getRawParameterValue(bandId(b + 1, "drive"))->load();
+            dragDriveParams[(size_t)b] = proc.apvts.getParameter(bandId(b + 1, "drive"));
+            if (auto* driveEnabled = proc.apvts.getParameter(bandId(b + 1, "drive_on")))
+                driveEnabled->setValueNotifyingHost(1.0f);
+            if (dragDriveParams[(size_t)b]) dragDriveParams[(size_t)b]->beginChangeGesture();
+        }
+        return;
+    }
     if (hit >= 0)
     {
         dragging = true;
@@ -722,6 +751,19 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
 void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
 {
     if (!dragging || selectedBand < 0) return;
+
+    if (driveDragging)
+    {
+        const float delta = -(float)e.getDistanceFromDragStartY() * 0.18f;
+        for (int b = 0; b < kNumBands; ++b)
+            if (auto* parameter = dragDriveParams[(size_t)b])
+            {
+                const float value = juce::jlimit(0.0f, 36.0f, dragStartDrive[(size_t)b] + delta);
+                parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
+            }
+        repaint();
+        return;
+    }
 
     const int idx = selectedBand + 1;
 
@@ -748,8 +790,10 @@ void ResponseCurveComponent::mouseUp(const juce::MouseEvent&)
         if (dragFreqParams[(size_t)b]) dragFreqParams[(size_t)b]->endChangeGesture();
         if (dragGainParams[(size_t)b]) dragGainParams[(size_t)b]->endChangeGesture();
         dragFreqParams[(size_t)b] = dragGainParams[(size_t)b] = nullptr;
+        if (dragDriveParams[(size_t)b]) dragDriveParams[(size_t)b]->endChangeGesture();
+        dragDriveParams[(size_t)b] = nullptr;
     }
-    dragging = false;
+    dragging = driveDragging = false;
 }
 
 void ResponseCurveComponent::mouseDoubleClick(const juce::MouseEvent& e)

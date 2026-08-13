@@ -19,6 +19,8 @@ public:
     juce::Font getTextButtonFont(juce::TextButton&, int) override;
     juce::Font getComboBoxFont(juce::ComboBox&) override;
     juce::Font getLabelFont(juce::Label&) override;
+    juce::Font getPopupMenuFont() override;
+    void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
     void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour&, bool, bool) override;
     void drawButtonText(juce::Graphics&, juce::TextButton&, bool, bool) override;
     void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool, bool) override;
@@ -28,6 +30,16 @@ public:
     void drawComboBox(juce::Graphics&, int, int, bool, int, int, int, int, juce::ComboBox&) override;
 private:
     bool dark = true;
+};
+
+class VerticalTextSlider final : public juce::Slider
+{
+public:
+    VerticalTextSlider();
+    void setDescriptor(juce::String);
+    void paint(juce::Graphics&) override;
+private:
+    juce::String descriptor { "SECONDARY" };
 };
 
 class DefaultEqualizerAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -42,7 +54,7 @@ public:
     void mouseDown(const juce::MouseEvent&) override;
 
 private:
-    enum class WorkspacePage { Band, Dynamic, Drive, Analyzer, Match };
+    enum class WorkspacePage { Band, Dynamic, Analyzer, Match };
     void timerCallback() override;
     void selectBand(int, bool updateGraphSelection = true);
     void rebindBandControls();
@@ -50,6 +62,7 @@ private:
     void updateHeaderText();
     void initParameter(juce::Slider&, const juce::String& name);
     void applySliderPalette();
+    void updateDriveControls(bool resetModeDefaults = false);
     void applyMatchToBands();
     void updateAnalyzerSettings();
 
@@ -63,6 +76,9 @@ private:
     WorkspacePage workspacePage = WorkspacePage::Band;
     juce::Random brandRandom;
     double nextBrandGlitchTimeMs = 0.0;
+    int displayedDriveMode = -1;
+    bool saturationMouseInteraction = false;
+    bool driveFormatPending = false;
 
     // Header: product identity, selected object, global actions and power.
     juce::TextButton themeBtn { "default_equalizer" };
@@ -71,23 +87,23 @@ private:
 
     // Workspace navigation. Only the selected layer is visible.
     juce::TextButton bandPageBtn { "BAND" }, dynamicPageBtn { "DYNAMIC" };
-    juce::TextButton drivePageBtn { "DRIVE" }, analyzerPageBtn { "RTA" }, matchPageBtn { "MATCH" };
+    juce::TextButton analyzerPageBtn { "RTA" }, matchPageBtn { "MATCH" };
 
     // Band page. Frequency/gain/Q intentionally live on the graph only.
     juce::ToggleButton bandOn { "ON" }, bandSolo { "SOLO" }, adaptiveQBtn { "ADAPTIVE Q" };
-    juce::TextButton deleteBandBtn { "DELETE" };
-    juce::ComboBox typeBox, channelBox;
-    juce::Slider slopeSlider;
+    juce::ToggleButton placementModeBtn { "L/R" };
+    juce::ComboBox typeBox;
+    juce::Slider slopeSlider, placementSlider;
 
     // Dynamic page.
     juce::ToggleButton dynOn { "DYN ON" }, sidechainAudition { "SC LISTEN" };
     juce::Slider dynLookahead, dynThreshold, dynRange, dynRatio, dynAttack, dynRelease;
     juce::ComboBox dynModeBox, sidechainBox;
 
-    // Drive page.
-    juce::ToggleButton driveOn { "DRIVE ON" };
-    juce::Slider driveSlider, driveCharacterSlider, driveSecondarySlider, driveToneSlider,
-                 driveMixSlider, driveOutputSlider;
+    // Drive controls share the Band workspace.
+    juce::ToggleButton driveOn { "DRIVE ON" }, driveAutoGain { "DRIVE AUTO" };
+    juce::Slider driveSlider, driveCharacterSlider, driveMixSlider, driveOutputSlider;
+    VerticalTextSlider driveSecondarySlider;
     juce::ComboBox saturationBox, oversamplingBox;
 
     // Analyzer/global page.
@@ -105,13 +121,13 @@ private:
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<ButtonAttachment> powerAtt, bandOnAtt,
-        adaptiveQAtt, dynOnAtt, driveOnAtt, linearPhaseAtt, decrampAtt;
-    std::unique_ptr<ComboAttachment> typeAtt, channelAtt, dynModeAtt, sidechainAtt,
+    std::unique_ptr<ButtonAttachment> powerAtt, bandOnAtt, placementModeAtt,
+        adaptiveQAtt, dynOnAtt, driveOnAtt, driveAutoGainAtt, linearPhaseAtt, decrampAtt;
+    std::unique_ptr<ComboAttachment> typeAtt, dynModeAtt, sidechainAtt,
         saturationAtt, oversamplingAtt;
-    std::unique_ptr<SliderAttachment> slopeAtt, dynLookaheadAtt, dynThresholdAtt, dynRangeAtt,
+    std::unique_ptr<SliderAttachment> slopeAtt, placementAtt, dynLookaheadAtt, dynThresholdAtt, dynRangeAtt,
         dynRatioAtt, dynAttackAtt, dynReleaseAtt, driveAtt, driveCharacterAtt,
-        driveSecondaryAtt, driveToneAtt, driveMixAtt, driveOutputAtt, outputAtt;
+        driveSecondaryAtt, driveMixAtt, driveOutputAtt, outputAtt;
 
     juce::TooltipWindow tooltipWindow { this, 450 };
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DefaultEqualizerAudioProcessorEditor)

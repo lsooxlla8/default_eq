@@ -16,7 +16,9 @@ Verified locally on macOS on 2026-08-13 from a universal Release build.
 
 ## Measured DSP invariants
 
-- Neutral stereo, Mid/Side and mono: worst delta below `2e-5`.
+- Neutral centered L/R, centered M/S and mono: worst delta below `2e-5`.
+- Continuous placement reaches isolated L/R endpoints, stays symmetric at
+  center, and distinguishes mono Mid from an empty Side endpoint.
 - Serialized project-state audio recall: worst sample delta `0` in the
   deterministic render test.
 - External sidechain accumulated output: silent `615.826`, active `154.691`.
@@ -34,6 +36,8 @@ Verified locally on macOS on 2026-08-13 from a universal Release build.
   24, 36 and 48 dB/oct settings.
 - An 8 kHz band's solo path rejects a 100 Hz program tone by more than 20x;
   its hard-clip drive changes the in-band tone while leaving 100 Hz within 2%.
+- Per-band deterministic Drive Auto Gain moves an 18 dB Hard Clip render closer
+  to its clean RMS reference than the uncompensated render.
 
 ## Reported latency
 
@@ -56,7 +60,7 @@ filter latency applies whenever a non-Off factor is selected.
 ## Visual QA
 
 The live Standalone window was inspected at 720, 860 and 1200 px using Computer
-Use. Band, Dynamic, Drive, RTA and Match workspaces remain readable and within
+Use. Combined Band/Drive, Dynamic, RTA and Match workspaces remain readable and within
 the window; the formerly separate sparse Global page was folded into the
 header. The 720 px Dynamic page is the densest verified layout. Dark and light
 screenshots confirm exact paper/ink role inversion.
@@ -67,13 +71,14 @@ screenshots confirm exact paper/ink role inversion.
 - `docs/screenshots/default_equalizer-light-860.jpeg`
 - `docs/screenshots/default_equalizer-match-860.jpeg`
 - `docs/screenshots/default_equalizer-light-final-2026-08-13.jpeg`
+- `docs/screenshots/default_equalizer-light-band-drive-2026-08-13.png`
 
 ## Known boundaries
 
 - Natural Phase is not exposed. Minimum Phase and optional Linear Phase are the
   supported modes.
-- In Linear Phase, Stereo static bands are synthesized into the FIR. Per-band
-  Left/Right/Mid/Side filters remain minimum-phase post stages because one
-  shared stereo FIR cannot represent independent channel routing.
+- In Linear Phase, centered L/R static bands are synthesized into the FIR.
+  Continuously placed L/R or M/S filters remain minimum-phase post stages
+  because one shared stereo FIR cannot represent asymmetric placement.
 - Analyzer and Match FFT work is outside the audio thread. The optional Linear
   Phase convolution itself uses a preallocated real-time FFT path.

@@ -81,7 +81,7 @@ double measureDriveAlias(int oversamplingOrder)
     DefaultEqualizerAudioProcessor p;
     for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
     setPlain(p, id(1, "on"), 1.0f); setPlain(p, id(1, "gain"), 0.0f);
-    setPlain(p, id(1, "drive_on"), 1.0f); setPlain(p, id(1, "drive"), 100.0f);
+    setPlain(p, id(1, "drive_on"), 1.0f); setPlain(p, id(1, "drive"), 36.0f);
     setPlain(p, id(1, "drive_mix"), 100.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
     setPlain(p, "oversampling", (float)oversamplingOrder);
     p.prepareToPlay(sampleRate, 256);
@@ -173,15 +173,16 @@ int main()
     CHECK(std::abs(DefaultEqualizerAudioProcessor::calculateAdaptiveQ(1.25f, 8.0f) - 2.45f) < 1.0e-6f,
           "Adaptive Q follows the documented deterministic formula");
 
-    // Neutral 8-band Stereo and per-band Mid routing must both be unity.
-    for (int route : { 0, 3, 4 })
+    // Neutral 8-band centered L/R and M/S placement must both be unity.
+    for (bool midSide : { false, true })
     {
         DefaultEqualizerAudioProcessor p;
         for (int b = 1; b <= kNumBands; ++b)
         {
             setPlain(p, id(b, "gain"), 0.0f);
             setPlain(p, id(b, "drive"), 0.0f);
-            setPlain(p, id(b, "ch"), (float)route);
+            setPlain(p, id(b, "placement_mode"), midSide ? 1.0f : 0.0f);
+            setPlain(p, id(b, "placement"), 0.0f);
         }
         p.prepareToPlay(48000.0, 257);
         juce::AudioBuffer<float> buffer(2, 257), reference(2, 257);
@@ -195,8 +196,52 @@ int main()
         for (int c = 0; c < 2; ++c)
             for (int n = 0; n < 257; ++n)
                 worst = std::max(worst, std::abs(buffer.getSample(c, n) - reference.getSample(c, n)));
-        CHECK(worst < 2.0e-5f, route == 0 ? "neutral Stereo is unity" : "neutral Mid/Side route is unity");
+        CHECK(worst < 2.0e-5f, midSide ? "neutral centered M/S placement is unity" : "neutral centered L/R placement is unity");
     }
+
+    // Continuous placement must preserve center and smoothly select either
+    // component at its endpoints without changing the stored EQ settings.
+    const auto renderPlacement = [](float placement, bool midSide)
+    {
+        DefaultEqualizerAudioProcessor p;
+        for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
+        setPlain(p, id(1, "freq"), 1000.0f); setPlain(p, id(1, "gain"), 12.0f);
+        setPlain(p, id(1, "q"), 1.0f); setPlain(p, id(1, "drive"), 0.0f);
+        setPlain(p, id(1, "placement_mode"), midSide ? 1.0f : 0.0f);
+        setPlain(p, id(1, "placement"), placement);
+        p.prepareToPlay(48000.0, 128);
+        juce::AudioBuffer<float> block(2, 128); juce::MidiBuffer midi;
+        double phase = 0.0, leftEnergy = 0.0, rightEnergy = 0.0; int count = 0;
+        for (int bi = 0; bi < 80; ++bi)
+        {
+            for (int n = 0; n < block.getNumSamples(); ++n)
+            {
+                const float sample = 0.1f * std::sin((float)phase);
+                phase += juce::MathConstants<double>::twoPi * 1000.0 / 48000.0;
+                block.setSample(0, n, sample); block.setSample(1, n, sample);
+            }
+            p.processBlock(block, midi);
+            if (bi >= 40)
+                for (int n = 0; n < block.getNumSamples(); ++n)
+                {
+                    leftEnergy += (double)block.getSample(0, n) * block.getSample(0, n);
+                    rightEnergy += (double)block.getSample(1, n) * block.getSample(1, n);
+                    ++count;
+                }
+        }
+        return std::pair<double, double>{ std::sqrt(leftEnergy / count), std::sqrt(rightEnergy / count) };
+    };
+    const auto placedLeft = renderPlacement(-100.0f, false);
+    const auto placedCentre = renderPlacement(0.0f, false);
+    const auto placedRight = renderPlacement(100.0f, false);
+    CHECK(placedLeft.first > placedLeft.second * 1.8 && placedRight.second > placedRight.first * 1.8,
+          "continuous L/R placement reaches the correct endpoints");
+    CHECK(std::abs(placedCentre.first - placedCentre.second) < 1.0e-5,
+          "continuous L/R placement is symmetric at center");
+    const auto placedMid = renderPlacement(-100.0f, true);
+    const auto placedSide = renderPlacement(100.0f, true);
+    CHECK(placedMid.first > placedSide.first * 1.8,
+          "continuous M/S placement distinguishes mono Mid from empty Side");
 
     const float quietSC = runDynamic(false);
     const float loudSC = runDynamic(true);
@@ -209,6 +254,39 @@ int main()
     std::printf("drive alias energy: off %.6g, 8x %.6g (%.2f%%)\n",
                 aliasOff, alias8x, 100.0 * alias8x / aliasOff);
 
+    const auto renderDriveLevel = [](bool enabled, bool compensated)
+    {
+        DefaultEqualizerAudioProcessor p;
+        for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
+        setPlain(p, id(1, "freq"), 1000.0f); setPlain(p, id(1, "q"), 1.4f);
+        setPlain(p, id(1, "gain"), 0.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
+        setPlain(p, id(1, "drive_on"), enabled ? 1.0f : 0.0f);
+        setPlain(p, id(1, "drive"), enabled ? 18.0f : 0.0f);
+        setPlain(p, id(1, "drive_mix"), 100.0f);
+        setPlain(p, id(1, "drive_auto_gain"), compensated ? 1.0f : 0.0f);
+        p.prepareToPlay(48000.0, 128);
+        juce::AudioBuffer<float> block(2, 128); juce::MidiBuffer midi;
+        double phase = 0.0, energy = 0.0; int count = 0;
+        for (int bi = 0; bi < 80; ++bi)
+        {
+            for (int n = 0; n < 128; ++n)
+            {
+                const float sample = 0.35f * std::sin((float)phase);
+                phase += juce::MathConstants<double>::twoPi * 1000.0 / 48000.0;
+                block.setSample(0, n, sample); block.setSample(1, n, sample);
+            }
+            p.processBlock(block, midi);
+            if (bi >= 40)
+                for (int n = 0; n < 128; ++n) { const double x = block.getSample(0, n); energy += x * x; ++count; }
+        }
+        return std::sqrt(energy / count);
+    };
+    const double driveCleanLevel = renderDriveLevel(false, false);
+    const double driveRawLevel = renderDriveLevel(true, false);
+    const double driveCompLevel = renderDriveLevel(true, true);
+    CHECK(std::abs(driveCompLevel - driveCleanLevel) < std::abs(driveRawLevel - driveCleanLevel),
+          "per-band table Auto Gain moves driven level toward the clean reference");
+
     // Solo is a frequency-window audition, and per-band drive only returns
     // nonlinear energy from that same window instead of saturating broadband.
     const auto renderBandTone = [](double frequency, bool drive, bool solo)
@@ -217,7 +295,7 @@ int main()
         for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(1, "freq"), 8000.0f); setPlain(p, id(1, "q"), 4.0f);
         setPlain(p, id(1, "drive_on"), drive ? 1.0f : 0.0f);
-        setPlain(p, id(1, "drive"), drive ? 100.0f : 0.0f);
+        setPlain(p, id(1, "drive"), drive ? 36.0f : 0.0f);
         setPlain(p, id(1, "sat_mode"), 1.0f);
         if (solo) p.soloBand.store(0);
         p.prepareToPlay(48000.0, 128);
@@ -299,7 +377,7 @@ int main()
         const int globalOsLatency = p.getLatencySamples();
         CHECK(globalOsLatency > 0, "global 8x oversampling reports anti-alias filter latency");
         setPlain(p, id(1, "drive_on"), 1.0f);
-        setPlain(p, id(1, "drive"), 50.0f);
+        setPlain(p, id(1, "drive"), 18.0f);
         CHECK(p.getLatencySamples() == globalOsLatency,
               "drive activation does not change global oversampling latency");
     }
@@ -375,11 +453,12 @@ int main()
               "linear phase quality impulse peak matches reported latency");
     }
 
-    // v2 state round-trip preserves continuous slope and per-band Side mode.
+    // Current state round-trip preserves continuous slope and per-band M/S placement.
     {
         DefaultEqualizerAudioProcessor source;
         setPlain(source, id(3, "slope"), 37.3f);
-        setPlain(source, id(3, "ch"), 4.0f);
+        setPlain(source, id(3, "placement_mode"), 1.0f);
+        setPlain(source, id(3, "placement"), 73.5f);
         setPlain(source, id(3, "drive_mix"), 42.5f);
         setPlain(source, id(3, "dyn_lookahead"), 5.0f);
         juce::MemoryBlock state;
@@ -388,12 +467,49 @@ int main()
         restored.setStateInformation(state.getData(), (int)state.getSize());
         CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "slope"))->load() - 37.3f) < 0.02f,
               "continuous slope survives state round-trip");
-        CHECK((int)restored.apvts.getRawParameterValue(id(3, "ch"))->load() == 4,
-              "per-band Side routing survives state round-trip");
+        CHECK(restored.apvts.getRawParameterValue(id(3, "placement_mode"))->load() > 0.5f
+              && std::abs(restored.apvts.getRawParameterValue(id(3, "placement"))->load() - 73.5f) < 0.02f,
+              "per-band continuous M/S placement survives state round-trip");
         CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "drive_mix"))->load() - 42.5f) < 0.02f,
               "drive Mix survives state round-trip");
         CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "dyn_lookahead"))->load() - 5.0f) < 0.01f,
               "per-band lookahead survives state round-trip");
+    }
+
+    // Schema-v5 discrete routes and percent-based drive controls migrate to
+    // schema-v6 placement and algorithm-native normalized controls.
+    {
+        DefaultEqualizerAudioProcessor source;
+        auto legacyCurrent = source.apvts.copyState();
+        legacyCurrent.setProperty("stateRole", "current", nullptr);
+        const auto setLegacyValue = [](juce::ValueTree state, const juce::String& paramId, float value)
+        {
+            for (auto child : state)
+                if (child.getProperty("id").toString() == paramId)
+                { child.setProperty("value", value, nullptr); return; }
+            juce::ValueTree child("PARAM"); child.setProperty("id", paramId, nullptr);
+            child.setProperty("value", value, nullptr); state.appendChild(child, nullptr);
+        };
+        setLegacyValue(legacyCurrent, id(2, "ch"), 4.0f);
+        setLegacyValue(legacyCurrent, id(2, "drive"), 50.0f);
+        setLegacyValue(legacyCurrent, id(2, "drive_character"), 75.0f);
+        setLegacyValue(legacyCurrent, id(2, "drive_secondary"), 25.0f);
+        setLegacyValue(legacyCurrent, id(2, "drive_tone"), 80.0f);
+        setLegacyValue(legacyCurrent, id(2, "sat_mode"), 4.0f);
+        juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
+        root.setProperty("schemaVersion", 5, nullptr);
+        root.appendChild(legacyCurrent, nullptr);
+        auto xml = root.createXml(); juce::MemoryBlock encoded;
+        juce::AudioProcessor::copyXmlToBinary(*xml, encoded);
+        DefaultEqualizerAudioProcessor migrated;
+        migrated.setStateInformation(encoded.getData(), (int)encoded.getSize());
+        CHECK(migrated.apvts.getRawParameterValue(id(2, "placement_mode"))->load() > 0.5f
+              && std::abs(migrated.apvts.getRawParameterValue(id(2, "placement"))->load() - 100.0f) < 0.01f,
+              "schema-v5 Side route migrates to the M/S endpoint");
+        CHECK(std::abs(migrated.apvts.getRawParameterValue(id(2, "drive"))->load() - 18.0f) < 0.01f
+              && std::abs(migrated.apvts.getRawParameterValue(id(2, "drive_character"))->load() - 0.5f) < 0.01f
+              && std::abs(migrated.apvts.getRawParameterValue(id(2, "drive_secondary"))->load() - 0.25f) < 0.01f,
+              "schema-v5 drive values migrate without resurrecting Tone");
     }
 
     // A saved project state must reproduce the same rendered audio after both
@@ -406,7 +522,7 @@ int main()
         setPlain(source, id(1, "q"), 1.7f);
         setPlain(source, id(1, "slope"), 31.5f);
         setPlain(source, id(1, "drive_on"), 1.0f);
-        setPlain(source, id(1, "drive"), 37.0f);
+        setPlain(source, id(1, "drive"), 24.0f);
         setPlain(source, id(1, "drive_mix"), 23.0f);
         setPlain(source, id(1, "sat_mode"), 4.0f);
         juce::MemoryBlock state;
@@ -441,9 +557,10 @@ int main()
         DefaultEqualizerAudioProcessor p;
         setPlain(p, id(1, "dyn_on"), 1.0f);
         setPlain(p, id(1, "dyn_thresh"), -41.0f);
-        setPlain(p, id(1, "drive"), 83.0f);
+        setPlain(p, id(1, "drive"), 31.0f);
         setPlain(p, id(1, "drive_mix"), 27.0f);
-        setPlain(p, id(1, "ch"), 4.0f);
+        setPlain(p, id(1, "placement_mode"), 1.0f);
+        setPlain(p, id(1, "placement"), 100.0f);
         p.resetBandToDefaults(0, false);
         p.resetBandToDefaults(0, true, 777.0f, -3.5f);
         CHECK(p.apvts.getRawParameterValue(id(1, "dyn_on"))->load() < 0.5f,
@@ -452,13 +569,14 @@ int main()
               "recreated band resets drive amount");
         CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive_mix"))->load() - 100.0f) < 0.01f,
               "recreated band restores default drive mix");
-        CHECK(p.apvts.getRawParameterValue(id(1, "ch"))->load() < 0.5f,
-              "recreated band restores Stereo routing");
+        CHECK(p.apvts.getRawParameterValue(id(1, "placement_mode"))->load() < 0.5f
+              && std::abs(p.apvts.getRawParameterValue(id(1, "placement"))->load()) < 0.01f,
+              "recreated band restores centered L/R placement");
         CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "freq"))->load() - 777.0f) < 0.1f,
               "recreated band applies requested graph frequency");
     }
 
-    // Schema-v3 A/B projects migrate the audible slot into schema-v5's single
+    // Schema-v3 A/B projects migrate the audible slot into schema-v6's single
     // unambiguous audio state.
     {
         DefaultEqualizerAudioProcessor legacy;

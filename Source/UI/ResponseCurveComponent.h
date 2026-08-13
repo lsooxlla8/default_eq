@@ -79,9 +79,12 @@ private:
     int selectedBand = -1;   // Currently selected band (-1 = none)
     int hoveredBand = -1;    // Band under cursor
     bool dragging = false;
+    bool driveDragging = false;
     std::array<bool, kNumBands> selection {};
     std::array<float, kNumBands> dragStartFreq {}, dragStartGain {};
+    std::array<float, kNumBands> dragStartDrive {};
     std::array<juce::RangedAudioParameter*, kNumBands> dragFreqParams {}, dragGainParams {};
+    std::array<juce::RangedAudioParameter*, kNumBands> dragDriveParams {};
     float groupAnchorFreq = 1000.0f, groupAnchorGain = 0.0f;
     bool darkMode = true;
     bool analyzerVisible = true;

@@ -52,6 +52,7 @@ target_sources(DefaultEqualizer PRIVATE
     Source/DSP/Biquad.h
     Source/DSP/SvfBiquad.h
     Source/DSP/EQBand.h
+    Source/DSP/DriveAutoGainTable.h
     Source/DSP/SpectrumFIFO.h
     Source/DSP/LinearPhaseEngine.h
     Source/DSP/MatchEQ.h

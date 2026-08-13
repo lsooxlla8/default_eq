@@ -1,10 +1,50 @@
 #include "PluginProcessor.h"
+#include "DSP/DriveAutoGainTable.h"
 #include "PluginEditor.h"
 #include <complex>
 
 static juce::String bandId(int idx, const char* suffix)
 {
     return "b" + juce::String(idx) + "_" + suffix;
+}
+
+namespace
+{
+juce::ValueTree findStateParameter(juce::ValueTree state, const juce::String& id)
+{
+    for (auto child : state)
+        if (child.getProperty("id").toString() == id)
+            return child;
+    return {};
+}
+
+float readStateParameter(juce::ValueTree state, const juce::String& id, float fallback)
+{
+    if (auto child = findStateParameter(state, id); child.isValid())
+        return (float)child.getProperty("value", fallback);
+    return (float)state.getProperty(id, fallback);
+}
+
+void writeStateParameter(juce::ValueTree state, const juce::String& id, float value)
+{
+    if (auto child = findStateParameter(state, id); child.isValid())
+        child.setProperty("value", value, nullptr);
+    else
+    {
+        juce::ValueTree parameter("PARAM");
+        parameter.setProperty("id", id, nullptr);
+        parameter.setProperty("value", value, nullptr);
+        state.appendChild(parameter, nullptr);
+    }
+    state.removeProperty(id, nullptr);
+}
+
+void removeStateParameter(juce::ValueTree state, const juce::String& id)
+{
+    state.removeProperty(id, nullptr);
+    if (auto child = findStateParameter(state, id); child.isValid())
+        state.removeChild(child, nullptr);
+}
 }
 
 // ── A5: background rebuild worker for the linear-phase FIR ──────────────
@@ -216,8 +256,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
         "decramp", "De-cramping", false));
 
     auto typeChoices    = juce::StringArray { "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass", "Notch" };
-    auto channelChoices = juce::StringArray { "Stereo", "Left", "Right", "Mid", "Side" };
-
     for (int i = 1; i <= kNumBands; ++i)
     {
         params.push_back(std::make_unique<juce::AudioParameterBool>(bandId(i,"on"), "Band " + juce::String(i) + " On", i == 1));
@@ -226,7 +264,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
             bandId(i,"slope"), "Band " + juce::String(i) + " Slope",
             juce::NormalisableRange<float>(3.0f, 48.0f, 0.1f, 1.0f), 12.0f,
             juce::AudioParameterFloatAttributes{}.withLabel("dB/oct")));
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(bandId(i,"ch"), "Band " + juce::String(i) + " Channel", channelChoices, 0));
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            bandId(i,"placement_mode"), "Band " + juce::String(i) + " Placement Mode", false));
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            bandId(i,"placement"), "Band " + juce::String(i) + " Placement",
+            juce::NormalisableRange<float>(-100.0f, 100.0f, 0.1f), 0.0f,
+            juce::AudioParameterFloatAttributes{}.withLabel("%")));
 
         // Default frequencies spread logarithmically across the spectrum
         // First 8 use classic fixed defaults; additional Pro bands use log spacing
@@ -257,8 +300,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
         // Drive / saturation per band
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"drive"), "Band " + juce::String(i) + " Drive",
-            juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f, 1.0f),
-            0.0f));
+            juce::NormalisableRange<float>(0.0f, 36.0f, 0.01f, 1.0f), 0.0f,
+            juce::AudioParameterFloatAttributes{}.withLabel("dB")
+                .withStringFromValueFunction([](float value, int)
+                { return juce::String(std::abs(value) < 0.005f ? 0.0f : value, 1) + " dB"; })));
         params.push_back(std::make_unique<juce::AudioParameterBool>(
             bandId(i,"drive_on"), "Band " + juce::String(i) + " Drive On", true));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -274,13 +319,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
                 })));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"drive_character"), "Band " + juce::String(i) + " Drive Character",
-            juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f), 0.0f));
+            juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f), 0.0f));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"drive_secondary"), "Band " + juce::String(i) + " Drive Secondary",
-            juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f), 0.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"drive_tone"), "Band " + juce::String(i) + " Drive Tone",
-            juce::NormalisableRange<float>(-100.0f, 100.0f, 0.1f), 0.0f));
+            juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+        params.push_back(std::make_unique<juce::AudioParameterBool>(
+            bandId(i,"drive_auto_gain"), "Band " + juce::String(i) + " Drive Auto Gain", false));
 
 #if DEFAULT_EQUALIZER_FULL
         params.push_back(std::make_unique<juce::AudioParameterChoice>(
@@ -518,7 +562,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     // Check if any band is soloed
     const int soloedBand = soloBand.load(std::memory_order_relaxed);
 
-    // Read per-band slope and channel route, then set up beginBlock
+    // Read per-band slope and continuous stereo placement, then set up beginBlock.
     const double effectiveSR = (activeOS != nullptr)
         ? sr * std::pow(2.0, currentOversamplingOrder)
         : sr;
@@ -537,23 +581,27 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
         const float slope = apvts.getRawParameterValue(bandId(i + 1, "slope"))->load();
 
-        // Channel routing
-        const int chIdx = (int) apvts.getRawParameterValue(bandId(i + 1, "ch"))->load();
-        const ChannelRoute route = mainChannels == 1 ? ChannelRoute::Stereo
-            : static_cast<ChannelRoute>(std::clamp(chIdx, 0, 4));
+        const bool placementMS = mainChannels > 1
+            && apvts.getRawParameterValue(bandId(i + 1, "placement_mode"))->load() > 0.5f;
+        const float placement = mainChannels > 1
+            ? apvts.getRawParameterValue(bandId(i + 1, "placement"))->load() * 0.01f : 0.0f;
 
         // Drive
-        const float drive = apvts.getRawParameterValue(bandId(i + 1, "drive"))->load() / 100.0f;
+        const float driveDb = apvts.getRawParameterValue(bandId(i + 1, "drive"))->load();
+        const float drive = driveDb / 36.0f;
         const bool driveOn = apvts.getRawParameterValue(bandId(i + 1, "drive_on"))->load() > 0.5f;
         const float driveMix = apvts.getRawParameterValue(bandId(i + 1, "drive_mix"))->load() / 100.0f;
         const float driveOutputDb = apvts.getRawParameterValue(bandId(i + 1, "drive_output"))->load();
-        const float driveCharacter = apvts.getRawParameterValue(bandId(i + 1, "drive_character"))->load() * 0.01f;
-        const float driveSecondary = apvts.getRawParameterValue(bandId(i + 1, "drive_secondary"))->load() * 0.01f;
-        const float driveTone = apvts.getRawParameterValue(bandId(i + 1, "drive_tone"))->load() * 0.01f;
-#if DEFAULT_EQUALIZER_FULL
+        const float driveCharacterRaw = apvts.getRawParameterValue(bandId(i + 1, "drive_character"))->load();
+        const float driveSecondary = apvts.getRawParameterValue(bandId(i + 1, "drive_secondary"))->load();
         const int satIdx = (int) apvts.getRawParameterValue(bandId(i + 1, "sat_mode"))->load();
+#if DEFAULT_EQUALIZER_FULL
         b.satType = static_cast<SaturationType>(std::clamp(satIdx, 0, 9));
 #endif
+        const bool bipolarCharacter = satIdx == 3 || satIdx == 4 || satIdx == 6;
+        const float driveCharacter = bipolarCharacter
+            ? 0.5f * (std::clamp(driveCharacterRaw, -1.0f, 1.0f) + 1.0f)
+            : std::clamp(driveCharacterRaw, 0.0f, 1.0f);
 
         // Dynamic EQ params
         const bool dynOn     = apvts.getRawParameterValue(bandId(i + 1, "dyn_on"))->load() > 0.5f;
@@ -570,7 +618,8 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         b.driveOutputGain = std::pow(10.0f, driveOutputDb / 20.0f);
         b.driveCharacter = driveCharacter;
         b.driveSecondary = driveSecondary;
-        b.driveTone = driveTone;
+        b.driveAutoGainLinear = apvts.getRawParameterValue(bandId(i + 1, "drive_auto_gain"))->load() > 0.5f
+            ? deq::drive_auto_gain_table::lookup(satIdx, driveDb) : 1.0f;
         b.dynEnabled    = dynOn;
         b.dynUpward     = dynUpward;
         b.useExternalSidechain = externalSC && sidechainL != nullptr;
@@ -582,13 +631,13 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
         // Stereo static magnitude is handled by the FIR in linear mode. The
         // post stage remains a neutral Bell so dynamic modulation and per-band
-        // drive still work. L/R/M/S bands retain their routed minimum-phase
+        // drive still work. Asymmetrically placed bands retain their minimum-phase
         // filter because a single stereo FIR cannot represent that routing.
-        const bool linearStereo = linearPhase && route == ChannelRoute::Stereo;
+        const bool linearStereo = linearPhase && !placementMS && std::abs(placement) < 0.0001f;
         b.beginBlock(linearStereo ? sr : effectiveSR, effectiveEnabled,
                      linearStereo ? Biquad::Type::Bell : b.type,
                      b.targetFreqHz, effectiveQ, linearStereo ? 0.0f : scaledGain,
-                     linearStereo ? 12.0f : slope, route, decramp);
+                     linearStereo ? 12.0f : slope, placementMS, placement, decramp);
     }
 
     auto* L = mainBuffer.getWritePointer(0);
@@ -603,7 +652,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     for (int band = 1; band <= kNumBands; ++band)
         for (auto* suffix : { "on", "type", "freq", "q", "gain", "dyn_on", "dyn_thresh",
                               "dyn_range", "drive_on", "drive", "drive_mix", "sat_mode",
-                              "drive_character", "drive_secondary", "drive_tone" })
+                              "drive_character", "drive_secondary", "drive_auto_gain" })
         {
             const auto value = apvts.getRawParameterValue(bandId(band, suffix))->load();
             smartSignature = (smartSignature ^ (std::uint64_t)std::llround(value * 1000.0f)) * 1099511628211ULL;
@@ -866,7 +915,7 @@ void DefaultEqualizerAudioProcessor::applyLookaheadDelay(juce::AudioBuffer<float
 void DefaultEqualizerAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
-    root.setProperty("schemaVersion", 5, nullptr);
+    root.setProperty("schemaVersion", 6, nullptr);
     auto current = apvts.copyState();
     current.setProperty("stateRole", "current", nullptr);
     root.appendChild(current, nullptr);
@@ -908,7 +957,25 @@ void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int s
         current.removeProperty("stateRole", nullptr);
         current.removeProperty("snapshotSlot", nullptr);
         for (int i = 1; i <= kNumBands; ++i)
-            current.removeProperty(bandId(i, "link"), nullptr);
+            removeStateParameter(current, bandId(i, "link"));
+        if (restoredSchema < 6)
+            for (int i = 1; i <= kNumBands; ++i)
+            {
+                const int route = (int)readStateParameter(current, bandId(i, "ch"), 0.0f);
+                writeStateParameter(current, bandId(i, "placement_mode"), route >= 3 ? 1.0f : 0.0f);
+                writeStateParameter(current, bandId(i, "placement"),
+                    route == 1 || route == 3 ? -100.0f : route == 2 || route == 4 ? 100.0f : 0.0f);
+                removeStateParameter(current, bandId(i, "ch"));
+                const int mode = (int)readStateParameter(current, bandId(i, "sat_mode"), 0.0f);
+                const float legacyDrive = readStateParameter(current, bandId(i, "drive"), 0.0f);
+                const float legacyCharacter = readStateParameter(current, bandId(i, "drive_character"), 0.0f) * 0.01f;
+                writeStateParameter(current, bandId(i, "drive"), legacyDrive * 0.36f);
+                writeStateParameter(current, bandId(i, "drive_character"),
+                    mode == 3 || mode == 4 || mode == 6 ? 2.0f * legacyCharacter - 1.0f : legacyCharacter);
+                writeStateParameter(current, bandId(i, "drive_secondary"),
+                    readStateParameter(current, bandId(i, "drive_secondary"), 0.0f) * 0.01f);
+                removeStateParameter(current, bandId(i, "drive_tone"));
+            }
         apvts.replaceState(current);
     }
     else if (restored.hasType(apvts.state.getType()))
@@ -918,7 +985,23 @@ void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int s
         // and write the current single-state schema on the next save.
         auto current = restored.createCopy();
         for (int i = 1; i <= kNumBands; ++i)
-            current.removeProperty(bandId(i, "link"), nullptr);
+        {
+            removeStateParameter(current, bandId(i, "link"));
+            const int route = (int)readStateParameter(current, bandId(i, "ch"), 0.0f);
+            writeStateParameter(current, bandId(i, "placement_mode"), route >= 3 ? 1.0f : 0.0f);
+            writeStateParameter(current, bandId(i, "placement"),
+                route == 1 || route == 3 ? -100.0f : route == 2 || route == 4 ? 100.0f : 0.0f);
+            removeStateParameter(current, bandId(i, "ch"));
+            const int mode = (int)readStateParameter(current, bandId(i, "sat_mode"), 0.0f);
+            const float legacyDrive = readStateParameter(current, bandId(i, "drive"), 0.0f);
+            const float legacyCharacter = readStateParameter(current, bandId(i, "drive_character"), 0.0f) * 0.01f;
+            writeStateParameter(current, bandId(i, "drive"), legacyDrive * 0.36f);
+            writeStateParameter(current, bandId(i, "drive_character"),
+                mode == 3 || mode == 4 || mode == 6 ? 2.0f * legacyCharacter - 1.0f : legacyCharacter);
+            writeStateParameter(current, bandId(i, "drive_secondary"),
+                readStateParameter(current, bandId(i, "drive_secondary"), 0.0f) * 0.01f);
+            removeStateParameter(current, bandId(i, "drive_tone"));
+        }
         apvts.replaceState(current);
         restoredSchema = 0;
     }
@@ -994,7 +1077,8 @@ void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
 {
     // Build composite magnitude response for the linear phase FIR.
     // Use the same logic as ResponseCurveComponent but at FFT resolution.
-    // Stereo static bands are synthesized into this FIR. Routed L/R/M/S bands,
+    // Centered L/R static bands are synthesized into this FIR. Asymmetrically
+    // placed L/R or M/S bands,
     // dynamic modulation, and per-band drive remain in the post-FIR stage.
     const int numBins = LinearPhaseEngine::firLength / 2 + 1;
 
@@ -1009,8 +1093,9 @@ void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
         const int idx = b + 1;
         const bool on = apvts.getRawParameterValue(bandId(idx, "on"))->load() > 0.5f;
         if (!on) continue;
-        const int route = (int)apvts.getRawParameterValue(bandId(idx, "ch"))->load();
-        if (route != 0) continue; // routed bands use their minimum-phase post stage
+        const bool routed = apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load() > 0.5f
+            || std::abs(apvts.getRawParameterValue(bandId(idx, "placement"))->load()) > 0.001f;
+        if (routed) continue; // routed bands use their minimum-phase post stage
 
         const int t = (int)apvts.getRawParameterValue(bandId(idx, "type"))->load();
         Biquad::Type tp = Biquad::Type::Bell;
