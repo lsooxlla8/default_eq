@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(default_equalizer VERSION 0.1.0)
+project(default_eq8 VERSION 0.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -36,14 +36,14 @@ juce_add_plugin(DefaultEqualizer
     IS_MIDI_EFFECT FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
     PLUGIN_MANUFACTURER_CODE Icss
-    PLUGIN_CODE Deq1
+    PLUGIN_CODE Deq8
     FORMATS ${DEFAULT_EQUALIZER_FORMATS}
     # juce_vst3_helper.exe loads the built plugin to emit moduleinfo.json and
     # has been observed hanging indefinitely on Windows CI. The manifest is
     # optional metadata, so skip generating it during the build.
     VST3_AUTO_MANIFEST FALSE
-    PRODUCT_NAME "default_equalizer"
-    BUNDLE_ID "com.icanseesounds.default-equalizer"
+    PRODUCT_NAME "default_eq8"
+    BUNDLE_ID "com.icanseesounds.default-eq8"
     COMPANY_URL "https://github.com/lsooxlla8/default_equalizer"
     DESCRIPTION "Eight-band parametric dynamic equalizer"
 )
@@ -133,6 +133,12 @@ if (DEFAULT_EQUALIZER_BUILD_TESTS)
         # hosts instantiate it on the heap, while this integration runner uses
         # scoped instances and therefore needs more than Windows' 1 MiB default.
         target_link_options(DefaultEqualizer_DspIntegration PRIVATE "/STACK:33554432")
+    elseif (APPLE)
+        # The same scoped-instance test pattern needs an explicit stack reserve
+        # in an unoptimised macOS build. Hosts still create the processor on the
+        # heap; this affects only the integration-test executable.
+        target_link_options(DefaultEqualizer_DspIntegration PRIVATE
+            "LINKER:-stack_size,0x4000000")
     endif()
 
     add_test(NAME biquad COMMAND DefaultEqualizer_Tests)

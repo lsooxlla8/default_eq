@@ -65,6 +65,7 @@ public:
 
     // Match EQ (public for UI capture/match control)
     MatchEQ matchEQ;
+    std::atomic<bool> matchUseSidechain { false }; // transient editor choice; never serialized
 
     // ── Auto-gain bypass ───────────────────────────────────────────
     std::atomic<float> autoGainCompDb { 0.0f }; // smoothed compensation in dB
@@ -72,6 +73,7 @@ public:
     std::atomic<int> soloBand { -1 }; // transient UI action; never serialized
     std::atomic<bool> smartAutoGainLocked { false };
     std::atomic<float> smartAutoGainProgress { 0.0f };
+    std::atomic<std::uint64_t> transportStartGeneration { 0 };
     // Restores every parameter owned by one band. New graph nodes always call
     // this before assigning frequency/gain, so a recycled slot cannot inherit
     // deleted dynamic, routing or drive settings.
@@ -102,10 +104,9 @@ private:
         std::atomic<float>* type = nullptr; std::atomic<float>* slope = nullptr;
         std::atomic<float>* placementMode = nullptr; std::atomic<float>* placement = nullptr;
         std::atomic<float>* freq = nullptr; std::atomic<float>* q = nullptr; std::atomic<float>* gain = nullptr;
-        std::atomic<float>* drive = nullptr; std::atomic<float>* driveOn = nullptr;
-        std::atomic<float>* driveMix = nullptr; std::atomic<float>* driveOutput = nullptr;
+        std::atomic<float>* drive = nullptr;
         std::atomic<float>* driveCharacter = nullptr; std::atomic<float>* driveSecondary = nullptr;
-        std::atomic<float>* driveAutoGain = nullptr; std::atomic<float>* satMode = nullptr;
+        std::atomic<float>* satMode = nullptr;
         std::atomic<float>* dynMode = nullptr; std::atomic<float>* scSource = nullptr;
         std::atomic<float>* dynLookahead = nullptr; std::atomic<float>* dynThresh = nullptr;
         std::atomic<float>* dynRange = nullptr; std::atomic<float>* dynRatio = nullptr;
@@ -113,9 +114,8 @@ private:
     };
     std::array<BandParameterPointers, kNumBands> bandParams {};
     std::atomic<float>* outputGainParam = nullptr;
-    std::atomic<float>* scaleParam = nullptr;
+    std::atomic<float>* amountParam = nullptr;
     std::atomic<float>* adaptiveQParam = nullptr;
-    std::atomic<float>* decrampParam = nullptr;
     std::atomic<float>* linearPhaseParam = nullptr;
     std::atomic<float>* linearQualityParam = nullptr;
     std::atomic<float>* oversamplingParam = nullptr;
@@ -123,6 +123,7 @@ private:
     std::atomic<float>* pluginEnabledParam = nullptr;
     void cacheParameterPointers();
     std::atomic<bool> analyzerEnabled { false };
+    bool transportWasPlaying = false; // audio-thread owned
 
     std::array<EQBand, kNumBands> bands;
     GlobalBypass globalBypass;

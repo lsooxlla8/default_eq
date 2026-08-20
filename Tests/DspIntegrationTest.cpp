@@ -90,8 +90,7 @@ double measureDriveAlias(int oversamplingOrder)
     activateBand(p);
     for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
     setPlain(p, id(1, "on"), 1.0f); setPlain(p, id(1, "gain"), 0.0f);
-    setPlain(p, id(1, "drive_on"), 1.0f); setPlain(p, id(1, "drive"), 36.0f);
-    setPlain(p, id(1, "drive_mix"), 100.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
+    setPlain(p, id(1, "drive"), 36.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
     setPlain(p, "oversampling", (float)oversamplingOrder);
     p.prepareToPlay(sampleRate, 256);
     juce::AudioBuffer<float> block(2, 256); juce::MidiBuffer midi;
@@ -176,6 +175,40 @@ double renderCutLevel(float slope)
     }
     return std::sqrt(energy / std::max(1, count));
 }
+
+double renderStaticBandLevel(int type, float q, float slope, float gainDb, double probeHz,
+                             float amount = 1.0f)
+{
+    DefaultEqualizerAudioProcessor p;
+    activateBand(p);
+    for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
+    setPlain(p, id(1, "type"), (float)type);
+    setPlain(p, id(1, "freq"), 1000.0f);
+    setPlain(p, id(1, "q"), q);
+    setPlain(p, id(1, "slope"), slope);
+    setPlain(p, id(1, "gain"), gainDb);
+    setPlain(p, "scale", amount);
+    p.prepareToPlay(48000.0, 127);
+    juce::AudioBuffer<float> block(2, 127); juce::MidiBuffer midi;
+    double phase = 0.0, energy = 0.0; int count = 0;
+    for (int bi = 0; bi < 180; ++bi)
+    {
+        for (int n = 0; n < 127; ++n)
+        {
+            const float x = 0.1f * std::sin((float)phase);
+            phase += juce::MathConstants<double>::twoPi * probeHz / 48000.0;
+            block.setSample(0, n, x); block.setSample(1, n, x);
+        }
+        p.processBlock(block, midi);
+        if (bi > 140)
+            for (int n = 0; n < 127; ++n)
+            {
+                const double x = block.getSample(0, n);
+                energy += x * x; ++count;
+            }
+    }
+    return std::sqrt(energy / std::max(1, count));
+}
 }
 
 int main()
@@ -188,6 +221,11 @@ int main()
         DefaultEqualizerAudioProcessor fresh;
         CHECK(std::abs(fresh.apvts.getRawParameterValue("auto_gain_mode")->load() - 1.0f) < 0.01f,
               "Regular Auto Gain is the new-instance default");
+        CHECK(std::abs(fresh.apvts.getRawParameterValue("scale")->load() - 1.0f) < 0.01f,
+              "global Amount defaults to 100 percent");
+        const auto amountRange = fresh.apvts.getParameterRange("scale");
+        CHECK(std::abs(amountRange.start + 2.0f) < 0.01f && std::abs(amountRange.end - 2.0f) < 0.01f,
+              "global Amount exposes the full -200 to 200 percent range");
         for (int band = 1; band <= kNumBands; ++band)
             CHECK(fresh.apvts.getRawParameterValue(id(band, "present"))->load() < 0.5f
                       && fresh.apvts.getRawParameterValue(id(band, "on"))->load() < 0.5f,
@@ -303,17 +341,14 @@ int main()
     std::printf("drive alias energy: off %.6g, 8x %.6g (%.2f%%)\n",
                 aliasOff, alias8x, 100.0 * alias8x / aliasOff);
 
-    const auto renderDriveLevel = [](bool enabled, bool compensated)
+    const auto renderDriveLevel = [](bool enabled)
     {
         DefaultEqualizerAudioProcessor p;
         activateBand(p);
         for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(1, "freq"), 1000.0f); setPlain(p, id(1, "q"), 1.4f);
         setPlain(p, id(1, "gain"), 0.0f); setPlain(p, id(1, "sat_mode"), 1.0f);
-        setPlain(p, id(1, "drive_on"), enabled ? 1.0f : 0.0f);
         setPlain(p, id(1, "drive"), enabled ? 18.0f : 0.0f);
-        setPlain(p, id(1, "drive_mix"), 100.0f);
-        setPlain(p, id(1, "drive_auto_gain"), compensated ? 1.0f : 0.0f);
         p.prepareToPlay(48000.0, 128);
         juce::AudioBuffer<float> block(2, 128); juce::MidiBuffer midi;
         double phase = 0.0, energy = 0.0; int count = 0;
@@ -331,11 +366,11 @@ int main()
         }
         return std::sqrt(energy / count);
     };
-    const double driveCleanLevel = renderDriveLevel(false, false);
-    const double driveRawLevel = renderDriveLevel(true, false);
-    const double driveCompLevel = renderDriveLevel(true, true);
-    CHECK(std::abs(driveCompLevel - driveCleanLevel) < std::abs(driveRawLevel - driveCleanLevel),
-          "per-band table Auto Gain moves driven level toward the clean reference");
+    const double driveCleanLevel = renderDriveLevel(false);
+    const double driveCompLevel = renderDriveLevel(true);
+    CHECK(std::isfinite(driveCompLevel) && driveCompLevel > 0.0
+          && std::abs(driveCompLevel - driveCleanLevel) < driveCleanLevel,
+          "always-on per-band table Auto Gain keeps driven level bounded");
 
     // Solo is a frequency-window audition, and per-band drive only returns
     // nonlinear energy from that same window instead of saturating broadband.
@@ -346,7 +381,6 @@ int main()
         activateBand(p);
         for (int b = 2; b <= kNumBands; ++b) setPlain(p, id(b, "on"), 0.0f);
         setPlain(p, id(1, "freq"), 8000.0f); setPlain(p, id(1, "q"), 4.0f);
-        setPlain(p, id(1, "drive_on"), drive ? 1.0f : 0.0f);
         setPlain(p, id(1, "drive"), drive ? 36.0f : 0.0f);
         setPlain(p, id(1, "sat_mode"), 1.0f);
         if (solo) p.soloBand.store(0);
@@ -395,9 +429,79 @@ int main()
         for (float slope : { 3.0f, 6.0f, 9.0f, 12.0f, 18.0f, 24.0f, 36.0f, 48.0f })
         {
             const double level = renderCutLevel(slope);
-            CHECK(level <= previous * 1.01, "variable low-cut slope increases rejection monotonically");
+            std::printf("cut slope %.1f dB/oct: %.9f RMS\n", slope, level);
+            CHECK(previous < 2.0e-6 ? level < 2.0e-6 : level <= previous * 1.01,
+                  "variable low-cut slope increases rejection monotonically until the numerical floor");
             previous = level;
         }
+    }
+
+
+    // Verify the processor output itself: cut resonance is real and non-cut
+    // slope settings must produce externally measurable transfer changes.
+    {
+        const double neutralCut = renderStaticBandLevel(4, 1.0f, 24.0f, 0.0f, 1000.0);
+        const double resonantCut = renderStaticBandLevel(4, 2.0f, 24.0f, 0.0f, 1000.0);
+        CHECK(resonantCut > neutralCut * 1.8,
+              "low-pass Q produces audible cutoff resonance in the processor path");
+        const double bellCenterSoft = renderStaticBandLevel(0, 1.0f, 3.0f, 24.0f, 1000.0);
+        const double bellCenterSteep = renderStaticBandLevel(0, 1.0f, 48.0f, 24.0f, 1000.0);
+        const double bellShoulderSoft = renderStaticBandLevel(0, 1.0f, 3.0f, 24.0f, 800.0);
+        const double bellShoulderSteep = renderStaticBandLevel(0, 1.0f, 48.0f, 24.0f, 800.0);
+        CHECK(std::abs(bellCenterSoft - bellCenterSteep) / bellCenterSoft < 0.015,
+              "Bell variable slope preserves processor-path center gain");
+        CHECK(std::abs(bellShoulderSteep - bellShoulderSoft) > bellShoulderSoft * 0.12,
+              "Bell slope materially changes the processor-path shoulder");
+
+        for (int type : { 0, 1, 2, 7 })
+        {
+            double maximumRelativeDelta = 0.0;
+            for (double probe : { 500.0, 800.0, 1250.0, 2000.0 })
+            {
+                const double soft = renderStaticBandLevel(type, 1.0f, 3.0f, 6.0f, probe);
+                const double steep = renderStaticBandLevel(type, 1.0f, 48.0f, 6.0f, probe);
+                maximumRelativeDelta = std::max(maximumRelativeDelta,
+                    std::abs(steep - soft) / std::max(1.0e-9, std::max(soft, steep)));
+            }
+            CHECK(maximumRelativeDelta > 0.025,
+                  "every gain-bearing filter has an audible variable-slope response");
+        }
+
+        const double unity = 0.1 / std::sqrt(2.0);
+        const double cutAtZeroAmount = renderStaticBandLevel(4, 1.0f, 48.0f, 0.0f, 1000.0, 0.0f);
+        const double bellAtZeroAmount = renderStaticBandLevel(0, 1.0f, 48.0f, 12.0f, 1000.0, 0.0f);
+        const double bellAtMinus25 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, -0.25f);
+        const double bellAtMinus50 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, -0.50f);
+        const double bellAtMinus100 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, -1.0f);
+        const double bellAtMinus200 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, -2.0f);
+        const double bellAtPlus25 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, 0.25f);
+        const double bellAtPlus50 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, 0.50f);
+        const double bellAtPlus100 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, 1.0f);
+        const double bellAtPlus200 = renderStaticBandLevel(0, 1.0f, 12.0f, 12.0f, 1000.0, 2.0f);
+        const double cutAtMinus100 = renderStaticBandLevel(4, 1.0f, 48.0f, 0.0f, 1000.0, -1.0f);
+        const double cutAtPlus25 = renderStaticBandLevel(4, 1.0f, 24.0f, 0.0f, 4000.0, 0.25f);
+        const double cutAtPlus50 = renderStaticBandLevel(4, 1.0f, 24.0f, 0.0f, 4000.0, 0.50f);
+        const double cutAtPlus100 = renderStaticBandLevel(4, 1.0f, 24.0f, 0.0f, 4000.0, 1.0f);
+        const double cutAtPlus200 = renderStaticBandLevel(4, 1.0f, 24.0f, 0.0f, 4000.0, 2.0f);
+        const double notchAtPlus100 = renderStaticBandLevel(6, 2.0f, 12.0f, 0.0f, 1000.0, 1.0f);
+        const double notchAtPlus200 = renderStaticBandLevel(6, 2.0f, 12.0f, 0.0f, 1000.0, 2.0f);
+        CHECK(std::abs(cutAtZeroAmount - unity) < unity * 0.01,
+              "Amount 0 percent bypasses cut filters on the audio path");
+        CHECK(std::abs(bellAtZeroAmount - unity) < unity * 0.01,
+              "Amount 0 percent bypasses gain filters on the audio path");
+        CHECK(bellAtMinus25 < unity && bellAtMinus50 < bellAtMinus25
+                  && bellAtMinus100 < bellAtMinus50 && bellAtMinus200 < bellAtMinus100,
+              "negative Amount scales gain-bearing EQ monotonically without polarity turnaround");
+        CHECK(bellAtPlus25 > unity && bellAtPlus50 > bellAtPlus25
+                  && bellAtPlus100 > bellAtPlus50 && bellAtPlus200 > bellAtPlus100,
+              "positive Amount scales gain-bearing EQ monotonically without phase turnaround");
+        CHECK(std::abs(cutAtMinus100 - unity) < unity * 0.01,
+              "negative Amount keeps non-invertible cut filters at stable unity");
+        CHECK(cutAtPlus25 > cutAtPlus50 && cutAtPlus50 > cutAtPlus100
+                  && cutAtPlus100 > cutAtPlus200,
+              "positive Amount strengthens cut filtering monotonically without wet/dry reversal");
+        CHECK(std::abs(notchAtPlus200 - notchAtPlus100) < unity * 0.01,
+              "gainless filter Amount cannot extrapolate past its null and reverse polarity");
     }
 
     // Latency contract: clean minimum-phase is exactly zero; a band's 5 ms
@@ -433,11 +537,10 @@ int main()
         p.prepareToPlay(48000.0, 256);
         setPlain(p, "oversampling", 3.0f);
         CHECK(p.getLatencySamples() == 0, "clean EQ ignores nonlinear oversampling latency");
-        setPlain(p, id(1, "drive_on"), 1.0f);
-        setPlain(p, id(1, "drive"), 18.0f);
-        CHECK(p.getLatencySamples() > 0, "active drive reports oversampling filter latency");
+        setPlain(p, id(1, "drive"), 0.01f);
+        CHECK(p.getLatencySamples() > 0, "the first positive drive step activates nonlinear processing");
         setPlain(p, id(1, "drive"), 0.0f);
-        CHECK(p.getLatencySamples() == 0, "disabling nonlinear drive removes oversampling latency");
+        CHECK(p.getLatencySamples() == 0, "zero drive fully disables nonlinear processing and oversampling latency");
     }
 
     {
@@ -521,7 +624,6 @@ int main()
         setPlain(source, id(3, "slope"), 37.3f);
         setPlain(source, id(3, "placement_mode"), 1.0f);
         setPlain(source, id(3, "placement"), 73.5f);
-        setPlain(source, id(3, "drive_mix"), 42.5f);
         setPlain(source, id(3, "dyn_lookahead"), 5.0f);
         juce::MemoryBlock state;
         source.getStateInformation(state);
@@ -532,8 +634,6 @@ int main()
         CHECK(restored.apvts.getRawParameterValue(id(3, "placement_mode"))->load() > 0.5f
               && std::abs(restored.apvts.getRawParameterValue(id(3, "placement"))->load() - 73.5f) < 0.02f,
               "per-band continuous M/S placement survives state round-trip");
-        CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "drive_mix"))->load() - 42.5f) < 0.02f,
-              "drive Mix survives state round-trip");
         CHECK(std::abs(restored.apvts.getRawParameterValue(id(3, "dyn_lookahead"))->load() - 5.0f) < 0.01f,
               "per-band lookahead survives state round-trip");
     }
@@ -585,9 +685,7 @@ int main()
         setPlain(source, id(1, "gain"), 8.5f);
         setPlain(source, id(1, "q"), 1.7f);
         setPlain(source, id(1, "slope"), 31.5f);
-        setPlain(source, id(1, "drive_on"), 1.0f);
         setPlain(source, id(1, "drive"), 24.0f);
-        setPlain(source, id(1, "drive_mix"), 23.0f);
         setPlain(source, id(1, "sat_mode"), 4.0f);
         juce::MemoryBlock state;
         source.getStateInformation(state);
@@ -621,7 +719,6 @@ int main()
         DefaultEqualizerAudioProcessor p;
         setPlain(p, id(1, "dyn_thresh"), -41.0f);
         setPlain(p, id(1, "drive"), 31.0f);
-        setPlain(p, id(1, "drive_mix"), 27.0f);
         setPlain(p, id(1, "placement_mode"), 1.0f);
         setPlain(p, id(1, "placement"), 100.0f);
         p.resetBandToDefaults(0, false);
@@ -634,10 +731,11 @@ int main()
               "dynamic processing publishes no redundant enable parameter");
         CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive"))->load()) < 0.01f,
               "recreated band resets drive amount");
-        CHECK(p.apvts.getRawParameterValue(id(1, "drive_auto_gain"))->load() > 0.5f,
-              "recreated band enables drive auto gain by default");
-        CHECK(std::abs(p.apvts.getRawParameterValue(id(1, "drive_mix"))->load() - 100.0f) < 0.01f,
-              "recreated band restores default drive mix");
+        CHECK(p.apvts.getParameter(id(1, "drive_on")) == nullptr
+              && p.apvts.getParameter(id(1, "drive_mix")) == nullptr
+              && p.apvts.getParameter(id(1, "drive_output")) == nullptr
+              && p.apvts.getParameter(id(1, "drive_auto_gain")) == nullptr,
+              "removed drive controls are not published to the host");
         CHECK(p.apvts.getRawParameterValue(id(1, "placement_mode"))->load() < 0.5f
               && std::abs(p.apvts.getRawParameterValue(id(1, "placement"))->load()) < 0.01f,
               "recreated band restores centered L/R placement");
@@ -662,12 +760,28 @@ int main()
     CHECK(ResponseCurveComponent::isCutType(3) && ResponseCurveComponent::isCutType(4)
               && !ResponseCurveComponent::isCutType(0),
           "unmodified wheel routes only low/high cuts to slope");
+    CHECK(ResponseCurveComponent::usesQVerticalDrag(3)
+              && ResponseCurveComponent::usesQVerticalDrag(4)
+              && ResponseCurveComponent::usesQVerticalDrag(5)
+              && ResponseCurveComponent::usesQVerticalDrag(6)
+              && !ResponseCurveComponent::usesQVerticalDrag(0),
+          "cut, band-pass and notch nodes use vertical drag for Q");
+    CHECK(ResponseCurveComponent::typeDefaultsToMidSide(1)
+              && ResponseCurveComponent::typeDefaultsToMidSide(2)
+              && ResponseCurveComponent::typeDefaultsToMidSide(3)
+              && ResponseCurveComponent::typeDefaultsToMidSide(4)
+              && !ResponseCurveComponent::typeDefaultsToMidSide(0)
+              && !ResponseCurveComponent::typeDefaultsToMidSide(7),
+          "shelf and cut filters default to M/S while Bell and Tilt do not");
     CHECK(ResponseCurveComponent::cutQFromVerticalDrag(1.0f, -80.0f) > 1.99f
               && ResponseCurveComponent::cutQFromVerticalDrag(1.0f, 80.0f) < 0.51f,
           "vertical cut drag edits Q logarithmically in both directions");
     CHECK(ResponseCurveComponent::cutQFromVerticalDrag(24.0f, -1000.0f) == 24.0f
               && ResponseCurveComponent::cutQFromVerticalDrag(0.1f, 1000.0f) == 0.1f,
           "vertical cut drag clamps Q to the published parameter range");
+    CHECK(std::abs(ResponseCurveComponent::analyzerLevelToY(-90.0f, -90.0f, 90.0f, 400.0f) - 400.0f) < 0.001f
+              && std::abs(ResponseCurveComponent::analyzerLevelToY(0.0f, -90.0f, 90.0f, 400.0f)) < 0.001f,
+          "RTA floor and fixed 0 dB ceiling occupy the full graph height");
 
     // Bypass and deletion have separate state semantics: bypass preserves the
     // node slot while deletion clears it.

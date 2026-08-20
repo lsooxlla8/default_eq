@@ -1,26 +1,74 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
 #include "Biquad.h"
+#include "VariableSlope.h"
 #include "../Config.h"
 #include <array>
+#include <memory>
+#include <limits>
 #include <vector>
 
-// Saturation / waveshaper modes retained and expanded from the FreeEQ8 base.
+// Saturation / waveshaper modes retained and expanded from the FreeEQ8 base
+// and default_distortion. The latter has nested Vital and CHOW/BYOD lineage;
+// this file uses modified replacements rather than Vital's rational tanh or
+// the CHOW/BYOD Jiles-Atherton model. See THIRD_PARTY_NOTICES.md.
 enum class SaturationType
 {
     SoftClip = 0, HardClip, DiodeClipper, TriodeStage, TransistorFET,
     TapeHysteresis, HarmonicMorph, PhaseDistortion, SpectralClip, SineErosion
 };
 
-// EQBand with lightweight parameter smoothing and cascaded biquads.
-// Supports 1/2/4 cascaded stages for 12/24/48 dB/oct slopes.
+// EQBand with lightweight parameter smoothing and continuously morphed
+// variable-order responses.
 struct EQBand
 {
+    struct FirstOrderCut
+    {
+        float b0 = 1.0f, b1 = 0.0f, a1 = 0.0f;
+        float x1L = 0.0f, y1L = 0.0f, x1R = 0.0f, y1R = 0.0f;
+        void reset() { x1L = y1L = x1R = y1R = 0.0f; }
+        void set(bool highPass, double sampleRate, float frequency)
+        {
+            const float k = std::tan(juce::MathConstants<float>::pi
+                                      * std::clamp(frequency, 5.0f, (float)sampleRate * 0.49f)
+                                      / (float)sampleRate);
+            const float norm = 1.0f / (1.0f + k);
+            if (highPass) { b0 = norm; b1 = -norm; }
+            else          { b0 = k * norm; b1 = b0; }
+            a1 = (k - 1.0f) * norm;
+        }
+        float process(float x, bool right)
+        {
+            auto& x1 = right ? x1R : x1L;
+            auto& y1 = right ? y1R : y1L;
+            const float y = b0 * x + b1 * x1 - a1 * y1;
+            x1 = x; y1 = y;
+            return y;
+        }
+    };
+
+    struct CutOrderPath
+    {
+        FirstOrderCut firstOrder;
+        std::array<Biquad, 4> pairs;
+        int pairCount = 0;
+        bool hasFirstOrder = false;
+
+        void reset()
+        {
+            firstOrder.reset();
+            for (auto& pair : pairs) pair.reset();
+        }
+    };
+
     bool enabled = true;
     Biquad::Type type = Biquad::Type::Bell;
     Biquad::Type parameterType = Biquad::Type::Bell;
     bool midSidePlacement = false;
     float placement = 0.0f;
+    float globalAmount = 1.0f;
+    float gainScale = 1.0f;
+    float driveGlobalAmount = 1.0f;
 
     float freqHz = 1000.0f;
     float Q = 1.0f;
@@ -33,8 +81,6 @@ struct EQBand
 
     // Drive / saturation (0 = off, 1 = full)
     float driveAmount = 0.0f;
-    float driveMix = 1.0f;
-    float driveOutputGain = 1.0f;
     SaturationType satType = SaturationType::SoftClip;
     float driveCharacter = 0.0f;
     float driveSecondary = 0.0f;
@@ -59,19 +105,31 @@ struct EQBand
     float cachedDynReleaseMs = -1.0f;
     double cachedDynSampleRate = 0.0;
 
-    // Cascaded biquad stages: 1 = 12 dB/oct, 2 = 24 dB/oct, 4 = 48 dB/oct
-    int numStages = 1;
-    int fullStages = 1;
-    float fractionalStage = 0.0f;
+    // Four complete order paths stay live so slope morphing never activates a
+    // cold filter state or redistributes gain at an order boundary.
     float slopeDbPerOct = 12.0f;
     bool decrampEnabled = false;
-    static constexpr int maxStages = 4;
-    std::array<Biquad, maxStages> biquads;
+    using OrderPaths = std::array<std::array<Biquad, variable_slope::maxOrder>, variable_slope::maxOrder>;
+    std::unique_ptr<OrderPaths> orderPaths { std::make_unique<OrderPaths>() };
+    std::array<CutOrderPath, 8> cutOrderPaths;
+    std::array<CutOrderPath, variable_slope::maxOrder> shapeLowerPaths;
+    std::array<CutOrderPath, variable_slope::maxOrder> shapeUpperPaths;
+    std::array<CutOrderPath, variable_slope::maxOrder> shapeLowerPaths2;
+    std::array<CutOrderPath, variable_slope::maxOrder> shapeUpperPaths2;
+    Biquad cutResonance;
+    Biquad shapeResonance;
+    float shapeGainLinear = 1.0f;
+    float shapeLowLinear = 1.0f;
+    float shapeHighLinear = 1.0f;
 
     // Smoothers
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> freqSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> qSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> gainSm;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> slopeShapeSm;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> cutAmountSm;
+    float currentSlopeShape = 1.0f;
+    float currentCutAmount = 2.0f;
 
     // Coefficient update interval while smoothing (in samples)
     int coeffUpdateInterval = 16;
@@ -81,20 +139,33 @@ struct EQBand
 
     void reset(double sampleRate)
     {
-        for (auto& bq : biquads)
-            bq.reset();
+        for (auto& path : *orderPaths)
+            for (auto& bq : path)
+                bq.reset();
+        cutResonance.reset();
         scBiquad.reset();
         auditionBiquad.reset();
         driveBandBiquad.reset();
-        for (auto& cut : cutStages) cut.reset();
+        for (auto& cut : cutOrderPaths) cut.reset();
+        for (auto& path : shapeLowerPaths) path.reset();
+        for (auto& path : shapeUpperPaths) path.reset();
+        for (auto& path : shapeLowerPaths2) path.reset();
+        for (auto& path : shapeUpperPaths2) path.reset();
+        shapeResonance.reset();
 
         freqSm.reset(sampleRate, 0.02);   // 20ms
         qSm.reset(sampleRate, 0.02);
         gainSm.reset(sampleRate, 0.02);
+        slopeShapeSm.reset(sampleRate, 0.02);
+        cutAmountSm.reset(sampleRate, 0.02);
 
         freqSm.setCurrentAndTargetValue(freqHz);
         qSm.setCurrentAndTargetValue(Q);
         gainSm.setCurrentAndTargetValue(gainDb);
+        currentSlopeShape = variable_slope::shapePosition(slopeDbPerOct);
+        currentCutAmount = variable_slope::cutStageAmount(slopeDbPerOct);
+        slopeShapeSm.setCurrentAndTargetValue(currentSlopeShape);
+        cutAmountSm.setCurrentAndTargetValue(currentCutAmount);
 
         targetFreqHz = freqHz;
         targetQ = Q;
@@ -130,13 +201,8 @@ struct EQBand
         enabled = isEnabled;
         type = newType;
         slopeDbPerOct = clampedSlope;
-        const float stageAmount = slopeDbPerOct / 12.0f;
-        fullStages = std::clamp((int) std::floor(stageAmount), 0, maxStages);
-        fractionalStage = stageAmount - (float) fullStages;
-        numStages = std::clamp(fullStages + (fractionalStage > 0.0001f ? 1 : 0), 0, maxStages);
-        const float cutStageAmount = slopeDbPerOct / 6.0f;
-        cutFullStages = std::clamp((int)std::floor(cutStageAmount), 0, maxCutStages);
-        cutFractionalStage = cutStageAmount - (float)cutFullStages;
+        slopeShapeSm.setTargetValue(variable_slope::shapePosition(slopeDbPerOct));
+        cutAmountSm.setTargetValue(variable_slope::cutStageAmount(slopeDbPerOct));
         midSidePlacement = useMidSidePlacement;
         placement = clampedPlacement;
         decrampEnabled = useDecramping;
@@ -252,21 +318,23 @@ struct EQBand
     inline void processEqualizer(float& l, float& r)
     {
         if (!enabled) return;
+        currentSlopeShape = slopeShapeSm.getNextValue();
+        currentCutAmount = cutAmountSm.getNextValue();
         const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
         const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
         if (!midSidePlacement)
         {
             const float dryL = l, dryR = r;
-            l += firstWeight * (processLeft(dryL) - dryL);
-            r += secondWeight * (processRight(dryR) - dryR);
+            l += globalAmount * firstWeight * (processLeft(dryL) - dryL);
+            r += globalAmount * secondWeight * (processRight(dryR) - dryR);
         }
         else
         {
             constexpr float invSqrt2 = 0.7071067811865475f;
             const float dryMid = (l + r) * invSqrt2;
             const float drySide = (l - r) * invSqrt2;
-            const float mid = dryMid + firstWeight * (processLeft(dryMid) - dryMid);
-            const float side = drySide + secondWeight * (processRight(drySide) - drySide);
+            const float mid = dryMid + globalAmount * firstWeight * (processLeft(dryMid) - dryMid);
+            const float side = drySide + globalAmount * secondWeight * (processRight(drySide) - drySide);
             l = (mid + side) * invSqrt2;
             r = (mid - side) * invSqrt2;
         }
@@ -274,11 +342,11 @@ struct EQBand
 
     inline void processDrive(float& l, float& r)
     {
-        if (enabled && driveAmount > 0.001f)
+        if (enabled && driveAmount > 0.0f)
             applySpectralDrive(l, r);
     }
 
-    bool driveActive() const noexcept { return enabled && driveAmount > 0.001f; }
+    bool driveActive() const noexcept { return enabled && driveAmount > 0.0f; }
 
     void prepareDriveRate(double sampleRate)
     {
@@ -317,30 +385,46 @@ struct EQBand
     {
         if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
             return processCut(x, false);
-        for (int s = 0; s < fullStages; ++s)
-            x = biquads[(size_t)s].processL(x);
-        if (fractionalStage > 0.0001f && fullStages < maxStages)
+        if (type == Biquad::Type::LowShelf || type == Biquad::Type::HighShelf
+            || type == Biquad::Type::Tilt)
+            return processShape(x, false);
+        const int low = std::clamp((int)std::floor(currentSlopeShape), 1, variable_slope::maxOrder);
+        const int high = std::min(variable_slope::maxOrder, low + 1);
+        const float mix = high == low ? 0.0f : currentSlopeShape - (float)low;
+        const auto processPath = [this, x](int order)
         {
-            const float dry = x;
-            const float wet = biquads[(size_t)fullStages].processL(x);
-            x = dry + fractionalStage * (wet - dry);
-        }
-        return x;
+            float path = x;
+            for (int stage = 0; stage < order; ++stage)
+                path = (*orderPaths)[(size_t)(order - 1)][(size_t)stage].processL(path);
+            return path;
+        };
+        const float lowOutput = processPath(low);
+        if (mix <= 0.0001f) return lowOutput;
+        const float highOutput = processPath(high);
+        return lowOutput + mix * (highOutput - lowOutput);
     }
 
     inline float processRight(float x)
     {
         if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
             return processCut(x, true);
-        for (int s = 0; s < fullStages; ++s)
-            x = biquads[(size_t)s].processR(x);
-        if (fractionalStage > 0.0001f && fullStages < maxStages)
+        if (type == Biquad::Type::LowShelf || type == Biquad::Type::HighShelf
+            || type == Biquad::Type::Tilt)
+            return processShape(x, true);
+        const int low = std::clamp((int)std::floor(currentSlopeShape), 1, variable_slope::maxOrder);
+        const int high = std::min(variable_slope::maxOrder, low + 1);
+        const float mix = high == low ? 0.0f : currentSlopeShape - (float)low;
+        const auto processPath = [this, x](int order)
         {
-            const float dry = x;
-            const float wet = biquads[(size_t)fullStages].processR(x);
-            x = dry + fractionalStage * (wet - dry);
-        }
-        return x;
+            float path = x;
+            for (int stage = 0; stage < order; ++stage)
+                path = (*orderPaths)[(size_t)(order - 1)][(size_t)stage].processR(path);
+            return path;
+        };
+        const float lowOutput = processPath(low);
+        if (mix <= 0.0001f) return lowOutput;
+        const float highOutput = processPath(high);
+        return lowOutput + mix * (highOutput - lowOutput);
     }
 
     inline float saturateOne(float x, bool rightState = false)
@@ -439,34 +523,6 @@ private:
     Biquad scBiquad;
     Biquad auditionBiquad;
     Biquad driveBandBiquad;
-    struct FirstOrderCut
-    {
-        float b0 = 1.0f, b1 = 0.0f, a1 = 0.0f;
-        float x1L = 0.0f, y1L = 0.0f, x1R = 0.0f, y1R = 0.0f;
-        void reset() { x1L = y1L = x1R = y1R = 0.0f; }
-        void set(bool highPass, double sampleRate, float frequency)
-        {
-            const float k = std::tan(juce::MathConstants<float>::pi
-                                      * std::clamp(frequency, 5.0f, (float)sampleRate * 0.49f)
-                                      / (float)sampleRate);
-            const float norm = 1.0f / (1.0f + k);
-            if (highPass) { b0 = norm; b1 = -norm; }
-            else          { b0 = k * norm; b1 = b0; }
-            a1 = (k - 1.0f) * norm;
-        }
-        float process(float x, bool right)
-        {
-            auto& x1 = right ? x1R : x1L;
-            auto& y1 = right ? y1R : y1L;
-            const float y = b0 * x + b1 * x1 - a1 * y1;
-            x1 = x; y1 = y;
-            return y;
-        }
-    };
-    static constexpr int maxCutStages = 8;
-    std::array<FirstOrderCut, maxCutStages> cutStages;
-    int cutFullStages = 2;
-    float cutFractionalStage = 0.0f;
     float dcXL = 0.0f, dcYL = 0.0f, dcXR = 0.0f, dcYR = 0.0f;
     float driveMemoryL = 0.0f, driveMemoryR = 0.0f;
     std::vector<float> driveDelayL, driveDelayR;
@@ -506,14 +562,79 @@ private:
 
     inline float processCut(float x, bool right)
     {
-        for (int stage = 0; stage < cutFullStages; ++stage)
-            x = cutStages[(size_t)stage].process(x, right);
-        if (cutFractionalStage > 0.0001f && cutFullStages < maxCutStages)
+        const int lowOrder = std::clamp((int)std::floor(currentCutAmount), 1, 8);
+        const int highOrder = std::min(8, lowOrder + 1);
+        const float mix = highOrder == lowOrder ? 0.0f : currentCutAmount - (float)lowOrder;
+        const auto processPath = [this, x, right](int order)
         {
-            const float wet = cutStages[(size_t)cutFullStages].process(x, right);
-            x += cutFractionalStage * (wet - x);
+            auto& path = cutOrderPaths[(size_t)(order - 1)];
+            float y = path.hasFirstOrder ? path.firstOrder.process(x, right) : x;
+            for (int pair = 0; pair < path.pairCount; ++pair)
+                y = right ? path.pairs[(size_t)pair].processR(y)
+                          : path.pairs[(size_t)pair].processL(y);
+            return y;
+        };
+        const float low = processPath(lowOrder);
+        const float base = mix > 0.0001f
+            ? low + mix * (processPath(highOrder) - low) : low;
+        return right ? cutResonance.processR(base) : cutResonance.processL(base);
+    }
+
+    inline float processShapePath(CutOrderPath& path, float x, bool right)
+    {
+        float y = path.hasFirstOrder ? path.firstOrder.process(x, right) : x;
+        for (int pair = 0; pair < path.pairCount; ++pair)
+            y = right ? path.pairs[(size_t)pair].processR(y)
+                      : path.pairs[(size_t)pair].processL(y);
+        return y;
+    }
+
+    inline float processShape(float x, bool right)
+    {
+        const int lowOrder = std::clamp((int)std::lround(currentSlopeShape), 1,
+                                        variable_slope::maxOrder);
+        const int highOrder = lowOrder;
+        constexpr float mix = 0.0f;
+        const auto lrForOrder = [this, x, right](int order)
+        {
+            const size_t index = (size_t)(order - 1);
+            const float lowA = processShapePath(shapeLowerPaths[index], x, right);
+            const float low = processShapePath(shapeLowerPaths2[index], lowA, right);
+            const float highA = processShapePath(shapeUpperPaths[index], x, right);
+            float high = processShapePath(shapeUpperPaths2[index], highA, right);
+            if ((order & 1) != 0) high = -high;
+            return std::array<float, 2> { low, high };
+        };
+        const auto lowPair = lrForOrder(lowOrder);
+        auto low = lowPair[0], high = lowPair[1];
+        if (mix > 0.0001f)
+        {
+            const auto highPair = lrForOrder(highOrder);
+            low += mix * (highPair[0] - low);
+            high += mix * (highPair[1] - high);
         }
-        return x;
+        if ((type == Biquad::Type::Tilt
+                && std::abs(shapeLowLinear - 1.0f) < 1.0e-7f
+                && std::abs(shapeHighLinear - 1.0f) < 1.0e-7f)
+            || (type != Biquad::Type::Tilt && std::abs(shapeGainLinear - 1.0f) < 1.0e-7f))
+            return x;
+
+        float y;
+        switch (type)
+        {
+            case Biquad::Type::LowShelf:
+                y = shapeGainLinear * low + high;
+                break;
+            case Biquad::Type::HighShelf:
+                y = low + shapeGainLinear * high;
+                break;
+            case Biquad::Type::Tilt:
+                y = shapeLowLinear * low + shapeHighLinear * high;
+                break;
+            default: return x;
+        }
+        y = right ? shapeResonance.processR(y) : shapeResonance.processL(y);
+        return y;
     }
 
     static inline float dcBlock(float x, float& previousX, float& previousY)
@@ -529,9 +650,9 @@ private:
         constexpr float invSqrt2 = 0.7071067811865475f;
         const auto driveOneBand = [this](float band, bool rightState)
         {
-            float wet = saturateOne(band, rightState) * driveAutoGainLinear * driveOutputGain;
+            float wet = saturateOne(band, rightState) * driveAutoGainLinear;
             wet = rightState ? dcBlock(wet, dcXR, dcYR) : dcBlock(wet, dcXL, dcYL);
-            return driveMix * (wet - band);
+            return wet - band;
         };
         const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
         const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
@@ -539,15 +660,15 @@ private:
         {
             const float bandL = driveBandBiquad.processL(l);
             const float bandR = driveBandBiquad.processR(r);
-            l += firstWeight * driveOneBand(bandL, false);
-            r += secondWeight * driveOneBand(bandR, true);
+            l += driveGlobalAmount * firstWeight * driveOneBand(bandL, false);
+            r += driveGlobalAmount * secondWeight * driveOneBand(bandR, true);
         }
         else
         {
             float mid = (l + r) * invSqrt2;
             float side = (l - r) * invSqrt2;
-            mid += firstWeight * driveOneBand(driveBandBiquad.processL(mid), false);
-            side += secondWeight * driveOneBand(driveBandBiquad.processR(side), true);
+            mid += driveGlobalAmount * firstWeight * driveOneBand(driveBandBiquad.processL(mid), false);
+            side += driveGlobalAmount * secondWeight * driveOneBand(driveBandBiquad.processR(side), true);
             l = (mid + side) * invSqrt2;
             r = (mid - side) * invSqrt2;
         }
@@ -571,21 +692,102 @@ private:
     {
         processSampleRate = sampleRate;
         // Incorporate dynamic gain modulation into the filter coefficients
-        const float effectiveStages = std::max(1.0f, slopeDbPerOct / 12.0f);
-        const float effectiveGainDb = (gainDb + dynGainMod) / effectiveStages;
+        const float totalGainDb = (gainDb + dynGainMod) * gainScale;
+        for (int order = 1; order <= variable_slope::maxOrder; ++order)
+        {
+            const double bellGain = type == Biquad::Type::Bell && order > 1
+                ? variable_slope::bellStageGain(sampleRate, freqHz, Q, totalGainDb,
+                                                order, decrampEnabled)
+                : std::numeric_limits<double>::quiet_NaN();
+            for (int stage = 0; stage < order; ++stage)
+                variable_slope::configureStage(
+                    (*orderPaths)[(size_t)(order - 1)][(size_t)stage], type,
+                    sampleRate, freqHz, Q, totalGainDb, order, stage,
+                    slopeDbPerOct, decrampEnabled, bellGain);
+        }
 
-        for (int s = 0; s < numStages; ++s)
-            if (decrampEnabled)
-                biquads[(size_t)s].setMatched(type, sampleRate, freqHz, Q, effectiveGainDb);
-            else
-                biquads[(size_t)s].set(type, sampleRate, freqHz, Q, effectiveGainDb);
+        const auto configureCrossoverPath = [sampleRate, this](CutOrderPath& path,
+                                                                int order, float cutoff,
+                                                                bool highPass)
+        {
+            path.hasFirstOrder = (order & 1) != 0;
+            path.pairCount = order / 2;
+            if (path.hasFirstOrder)
+                path.firstOrder.set(highPass, sampleRate, cutoff);
+            for (int pair = 0; pair < path.pairCount; ++pair)
+            {
+                const double sectionQ = 1.0 / (2.0 * std::sin(
+                    (2.0 * pair + 1.0) * juce::MathConstants<double>::pi
+                    / (2.0 * order)));
+                if (decrampEnabled)
+                    path.pairs[(size_t)pair].setMatched(highPass ? Biquad::Type::HighPass
+                                                                 : Biquad::Type::LowPass,
+                                                        sampleRate, cutoff, sectionQ, 0.0);
+                else
+                    path.pairs[(size_t)pair].set(highPass ? Biquad::Type::HighPass
+                                                          : Biquad::Type::LowPass,
+                                                 sampleRate, cutoff, sectionQ, 0.0);
+            }
+        };
+
+        shapeGainLinear = juce::Decibels::decibelsToGain(totalGainDb);
+        shapeLowLinear = juce::Decibels::decibelsToGain(-totalGainDb);
+        shapeHighLinear = juce::Decibels::decibelsToGain(totalGainDb);
+        for (int order = 1; order <= variable_slope::maxOrder; ++order)
+        {
+            const float cutoff = std::clamp(freqHz, 10.0f, (float)sampleRate * 0.45f);
+            configureCrossoverPath(shapeLowerPaths[(size_t)(order - 1)], order,
+                                   cutoff, false);
+            configureCrossoverPath(shapeLowerPaths2[(size_t)(order - 1)], order,
+                                   cutoff, false);
+            configureCrossoverPath(shapeUpperPaths[(size_t)(order - 1)], order,
+                                   cutoff, true);
+            configureCrossoverPath(shapeUpperPaths2[(size_t)(order - 1)], order,
+                                   cutoff, true);
+        }
+        const double midpointLinear = type == Biquad::Type::Tilt
+            ? 0.5 * ((double)shapeLowLinear + (double)shapeHighLinear)
+            : 0.5 * (1.0 + (double)shapeGainLinear);
+        const double midpointTargetDb = type == Biquad::Type::Tilt ? 0.0 : 0.5 * totalGainDb;
+        const double pivotCorrectionDb = midpointTargetDb
+            - juce::Decibels::gainToDecibels(midpointLinear, -120.0);
+        const double shapeResonanceGain = std::clamp(
+            pivotCorrectionDb + 6.0 * std::log2(std::max(0.1f, Q)), -12.0, 12.0);
+        if (decrampEnabled)
+            shapeResonance.setMatched(Biquad::Type::Bell, sampleRate, freqHz, 0.7,
+                                      shapeResonanceGain);
+        else
+            shapeResonance.set(Biquad::Type::Bell, sampleRate, freqHz, 0.7,
+                               shapeResonanceGain);
+        variable_slope::configureCutResonance(
+            cutResonance, sampleRate, freqHz, Q, slopeDbPerOct, decrampEnabled);
 
         if (updateAuxiliary)
         {
             const bool highPass = type == Biquad::Type::HighPass;
             if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
-                for (auto& stage : cutStages)
-                    stage.set(highPass, sampleRate, freqHz);
+            {
+                for (int order = 1; order <= 8; ++order)
+                {
+                    auto& path = cutOrderPaths[(size_t)(order - 1)];
+                    path.hasFirstOrder = (order & 1) != 0;
+                    path.pairCount = order / 2;
+                    if (path.hasFirstOrder)
+                        path.firstOrder.set(highPass, sampleRate, freqHz);
+                    for (int pair = 0; pair < path.pairCount; ++pair)
+                    {
+                        const double sectionQ = 1.0 / (2.0 * std::sin(
+                            (2.0 * pair + 1.0) * juce::MathConstants<double>::pi
+                            / (2.0 * order)));
+                        if (decrampEnabled)
+                            path.pairs[(size_t)pair].setMatched(type, sampleRate, freqHz,
+                                                               sectionQ, 0.0);
+                        else
+                            path.pairs[(size_t)pair].set(type, sampleRate, freqHz,
+                                                        sectionQ, 0.0);
+                    }
+                }
+            }
 
             scBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, 2.0, 0.0);
             const float auditionQ = std::clamp(Q, 0.2f, 12.0f);

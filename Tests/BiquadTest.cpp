@@ -19,6 +19,7 @@
 
 // Include the struct under test (standalone, no JUCE dependency)
 #include "../Source/DSP/Biquad.h"
+#include "../Source/DSP/VariableSlope.h"
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -217,9 +218,21 @@ int main()
               "reset() clears all delay state");
     }
 
+    // Tilt gain is symmetric around its pivot: +6 dB means -6 dB in the
+    // low band and +6 dB in the high band.
+    {
+        Biquad tilt;
+        tilt.set(Biquad::Type::Tilt, 48000.0, 1000.0, 1.0, 6.0);
+        const double low = magnitudeDb(tilt, 40.0, 48000.0);
+        const double high = magnitudeDb(tilt, 16000.0, 48000.0);
+        CHECK(std::abs(low + 6.0) < 0.35, "tilt reaches -6 dB below its pivot");
+        CHECK(std::abs(high - 6.0) < 0.35, "tilt reaches +6 dB above its pivot");
+        CHECK(std::abs(low + high) < 0.35, "tilt endpoints remain symmetric");
+    }
+
     // ── Matched/de-cramped sweep: finite coefficients over the exposed domain ──
     for (double sr : srs)
-        for (int type = 0; type <= 6; ++type)
+        for (int type = 0; type <= 7; ++type)
             for (double freq : { 20.0, 1000.0, sr * 0.2, sr * 0.45 })
                 for (double q : { 0.1, 0.707, 4.0, 24.0 })
                     for (double gain : { -36.0, 0.0, 36.0 })
@@ -260,6 +273,95 @@ int main()
                 std::abs(magnitudeDb(rbj, probe, 48000.0) - magnitudeDb(matched, probe, 48000.0)));
         CHECK(worstDifference < 0.12, "decramping leaves low-frequency bell shape materially unchanged");
         std::printf("decramp low-frequency worst delta %.5f dB\n", worstDifference);
+    }
+
+    // Variable slope keeps the requested center gain and makes a material,
+    // externally measurable change at normal EQ gains.
+    {
+        constexpr double sr = 48000.0, center = 1000.0, q = 1.0, gain = 24.0;
+        const auto db = [](std::complex<double> h)
+        {
+            return 20.0 * std::log10(std::max(std::abs(h), 1.0e-15));
+        };
+        for (double slope : { 3.0, 12.0, 24.0, 48.0 })
+            CHECK(std::abs(db(variable_slope::response(Biquad::Type::Bell, sr, center,
+                q, gain, slope, false, center)) - gain) < 0.02,
+                "bell variable slope preserves center gain");
+        const double softShoulder = db(variable_slope::response(Biquad::Type::Bell,
+            sr, center, q, gain, 3.0, false, center * 0.8));
+        const double steepShoulder = db(variable_slope::response(Biquad::Type::Bell,
+            sr, center, q, gain, 48.0, false, center * 0.8));
+        const double softSkirt = db(variable_slope::response(Biquad::Type::Bell,
+            sr, center, q, gain, 3.0, false, center * 0.25));
+        const double steepSkirt = db(variable_slope::response(Biquad::Type::Bell,
+            sr, center, q, gain, 48.0, false, center * 0.25));
+        CHECK(steepShoulder > softShoulder + 1.0,
+              "high bell shape creates a flatter top shoulder");
+        CHECK(steepSkirt < softSkirt - 1.0,
+              "high bell shape steepens the outer skirt");
+        const double narrowShoulder = db(variable_slope::response(Biquad::Type::Bell,
+            sr, center, 2.0, gain, 3.0, false, center * 0.8));
+        CHECK(steepShoulder > softShoulder && narrowShoulder < softShoulder,
+              "Bell slope squares the shoulder while Q independently narrows it");
+
+        const double shelfSoftLowSide = db(variable_slope::response(Biquad::Type::LowShelf,
+            sr, center, q, 6.0, 3.0, false, center * 0.7));
+        const double shelfSteepLowSide = db(variable_slope::response(Biquad::Type::LowShelf,
+            sr, center, q, 6.0, 48.0, false, center * 0.7));
+        const double shelfSoftHighSide = db(variable_slope::response(Biquad::Type::LowShelf,
+            sr, center, q, 6.0, 3.0, false, center * 1.4));
+        const double shelfSteepHighSide = db(variable_slope::response(Biquad::Type::LowShelf,
+            sr, center, q, 6.0, 48.0, false, center * 1.4));
+        CHECK(shelfSteepLowSide > shelfSoftLowSide + 0.8
+                  && shelfSteepHighSide < shelfSoftHighSide - 0.8,
+              "Shelf slope steepens opposite sides of the transition instead of acting as Q");
+
+        for (auto type : { Biquad::Type::Bell, Biquad::Type::LowShelf,
+                           Biquad::Type::HighShelf, Biquad::Type::Tilt })
+        {
+            double maximumDelta = 0.0;
+            for (double probe : { 250.0, 500.0, 800.0, 1250.0, 2000.0, 4000.0 })
+                maximumDelta = std::max(maximumDelta, std::abs(
+                    db(variable_slope::response(type, sr, center, q, 6.0, 3.0, false, probe))
+                    - db(variable_slope::response(type, sr, center, q, 6.0, 48.0, false, probe))));
+            CHECK(maximumDelta > 0.5,
+                  "gain-bearing filter slope is visible to an external response analyser");
+        }
+    }
+
+    // Cut Q now has audible, normalized resonance while the independent cut
+    // cascade still controls the asymptotic dB/oct slope.
+    {
+        constexpr double sr = 48000.0, center = 1000.0;
+        const auto db = [](std::complex<double> h)
+        {
+            return 20.0 * std::log10(std::max(std::abs(h), 1.0e-15));
+        };
+        double qOnePeak = -300.0;
+        for (int index = 0; index < 2048; ++index)
+        {
+            const double probe = 20.0 * std::pow(1000.0, (double)index / 2047.0);
+            qOnePeak = std::max(qOnePeak, db(variable_slope::response(Biquad::Type::LowPass,
+                sr, center, 1.0, 0.0, 12.0, false, probe)));
+        }
+        CHECK(qOnePeak < 0.05,
+              "cut Q 1 is the resonance-neutral point at every slope");
+        const double neutral = db(variable_slope::response(Biquad::Type::LowPass,
+            sr, center, 1.0, 0.0, 24.0, false, center));
+        const double resonant = db(variable_slope::response(Biquad::Type::LowPass,
+            sr, center, 2.0, 0.0, 24.0, false, center));
+        CHECK(resonant > neutral + 5.5,
+              "cut Q 2 produces a clear cutoff resonance");
+        const double shallowA = db(variable_slope::response(Biquad::Type::HighPass,
+            sr, center, 1.0, 0.0, 6.0, false, center / 8.0));
+        const double shallowB = db(variable_slope::response(Biquad::Type::HighPass,
+            sr, center, 1.0, 0.0, 6.0, false, center / 4.0));
+        const double steepA = db(variable_slope::response(Biquad::Type::HighPass,
+            sr, center, 1.0, 0.0, 48.0, false, center / 8.0));
+        const double steepB = db(variable_slope::response(Biquad::Type::HighPass,
+            sr, center, 1.0, 0.0, 48.0, false, center / 4.0));
+        CHECK((steepA - steepB) < (shallowA - shallowB) - 25.0,
+              "cut slope remains independently variable from resonance");
     }
 
     if (failures == 0)

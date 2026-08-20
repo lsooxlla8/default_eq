@@ -57,7 +57,7 @@ class DefaultEqualizerAudioProcessor::LinPhaseRebuildThread : public juce::Threa
 {
 public:
     explicit LinPhaseRebuildThread(DefaultEqualizerAudioProcessor& p)
-        : juce::Thread("default_equalizer_LinPhaseRebuild"), proc(p) {}
+        : juce::Thread("default_eq8_LinPhaseRebuild"), proc(p) {}
 
     void run() override
     {
@@ -102,7 +102,6 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
         apvts.addParameterListener(bandId(i, "placement"), this);
         apvts.addParameterListener(bandId(i, "placement_mode"), this);
         apvts.addParameterListener(bandId(i, "drive"), this);
-        apvts.addParameterListener(bandId(i, "drive_on"), this);
         apvts.addParameterListener(bandId(i, "dyn_lookahead"), this);
         apvts.addParameterListener(bandId(i, "dyn_thresh"), this);
     }
@@ -110,7 +109,6 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
     apvts.addParameterListener("linear_quality", this);
     apvts.addParameterListener("scale", this);
     apvts.addParameterListener("adaptive_q", this);
-    apvts.addParameterListener("decramp", this);
     apvts.addParameterListener("oversampling", this);
 
     linPhaseRebuildThread = std::make_unique<LinPhaseRebuildThread>(*this);
@@ -120,8 +118,8 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
 void DefaultEqualizerAudioProcessor::cacheParameterPointers()
 {
     const auto raw = [this](const juce::String& id) { return apvts.getRawParameterValue(id); };
-    outputGainParam = raw("output_gain"); scaleParam = raw("scale");
-    adaptiveQParam = raw("adaptive_q"); decrampParam = raw("decramp");
+    outputGainParam = raw("output_gain"); amountParam = raw("scale");
+    adaptiveQParam = raw("adaptive_q");
     linearPhaseParam = raw("linear_phase"); linearQualityParam = raw("linear_quality");
     oversamplingParam = raw("oversampling"); autoGainModeParam = raw("auto_gain_mode");
     pluginEnabledParam = raw("plugin_enabled");
@@ -132,10 +130,9 @@ void DefaultEqualizerAudioProcessor::cacheParameterPointers()
         p.type = raw(bandId(b,"type")); p.slope = raw(bandId(b,"slope"));
         p.placementMode = raw(bandId(b,"placement_mode")); p.placement = raw(bandId(b,"placement"));
         p.freq = raw(bandId(b,"freq")); p.q = raw(bandId(b,"q")); p.gain = raw(bandId(b,"gain"));
-        p.drive = raw(bandId(b,"drive")); p.driveOn = raw(bandId(b,"drive_on"));
-        p.driveMix = raw(bandId(b,"drive_mix")); p.driveOutput = raw(bandId(b,"drive_output"));
+        p.drive = raw(bandId(b,"drive"));
         p.driveCharacter = raw(bandId(b,"drive_character")); p.driveSecondary = raw(bandId(b,"drive_secondary"));
-        p.driveAutoGain = raw(bandId(b,"drive_auto_gain")); p.satMode = raw(bandId(b,"sat_mode"));
+        p.satMode = raw(bandId(b,"sat_mode"));
         p.dynMode = raw(bandId(b,"dyn_mode")); p.scSource = raw(bandId(b,"sc_source"));
         p.dynLookahead = raw(bandId(b,"dyn_lookahead")); p.dynThresh = raw(bandId(b,"dyn_thresh"));
         p.dynRange = raw(bandId(b,"dyn_range")); p.dynRatio = raw(bandId(b,"dyn_ratio"));
@@ -155,7 +152,6 @@ DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
     }
 
     apvts.removeParameterListener("adaptive_q", this);
-    apvts.removeParameterListener("decramp", this);
     apvts.removeParameterListener("oversampling", this);
     apvts.removeParameterListener("scale", this);
     apvts.removeParameterListener("linear_phase", this);
@@ -166,7 +162,6 @@ DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
         apvts.removeParameterListener(bandId(i, "placement"), this);
         apvts.removeParameterListener(bandId(i, "placement_mode"), this);
         apvts.removeParameterListener(bandId(i, "drive"), this);
-        apvts.removeParameterListener(bandId(i, "drive_on"), this);
         apvts.removeParameterListener(bandId(i, "dyn_lookahead"), this);
         apvts.removeParameterListener(bandId(i, "dyn_thresh"), this);
         apvts.removeParameterListener(bandId(i, "type"),  this);
@@ -224,10 +219,10 @@ void DefaultEqualizerAudioProcessor::parameterChanged(const juce::String& parame
 {
     juce::ignoreUnused(newValue);
     const bool affectsLinearMagnitude = parameterID == "scale" || parameterID == "adaptive_q"
-        || parameterID == "decramp" || parameterID.endsWith("_freq")
+        || parameterID.endsWith("_freq")
         || parameterID.endsWith("_gain") || parameterID.endsWith("_q")
         || parameterID.endsWith("_present")
-        || (parameterID.endsWith("_on") && !parameterID.endsWith("_drive_on"))
+        || parameterID.endsWith("_on")
         || parameterID.endsWith("_type")
         || parameterID.endsWith("_slope") || parameterID.endsWith("_placement")
         || parameterID.endsWith("_placement_mode");
@@ -271,9 +266,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
             })));
     
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "scale", "Scale",
-        juce::NormalisableRange<float>(0.1f, 2.0f, 0.01f, 1.0f),
-        1.0f));
+        "scale", "Amount",
+        juce::NormalisableRange<float>(-2.0f, 2.0f, 0.01f, 1.0f),
+        1.0f,
+        juce::AudioParameterFloatAttributes{}.withLabel("%")
+            .withStringFromValueFunction([](float value, int)
+            {
+                const auto percent = std::abs(value) < 0.005f ? 0.0f : value * 100.0f;
+                return juce::String(percent, 0) + "%";
+            })));
     
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "adaptive_q", "Adaptive Q", false));
@@ -297,10 +298,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "plugin_enabled", "Plugin Enabled", true));
 
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "decramp", "De-cramping", false));
-
-    auto typeChoices    = juce::StringArray { "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass", "Notch" };
+    auto typeChoices    = juce::StringArray { "Bell", "LowShelf", "HighShelf", "HighPass", "LowPass", "Bandpass", "Notch", "Tilt" };
     for (int i = 1; i <= kNumBands; ++i)
     {
         params.push_back(std::make_unique<juce::AudioParameterBool>(
@@ -351,27 +349,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcess
             juce::AudioParameterFloatAttributes{}.withLabel("dB")
                 .withStringFromValueFunction([](float value, int)
                 { return juce::String(std::abs(value) < 0.005f ? 0.0f : value, 1) + " dB"; })));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            bandId(i,"drive_on"), "Band " + juce::String(i) + " Drive On", true));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"drive_mix"), "Band " + juce::String(i) + " Drive Mix",
-            juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f), 100.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"drive_output"), "Band " + juce::String(i) + " Drive Output",
-            juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f), 0.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("dB")
-                .withStringFromValueFunction([](float value, int)
-                {
-                    return juce::String(std::abs(value) < 0.005f ? 0.0f : value, 2) + " dB";
-                })));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"drive_character"), "Band " + juce::String(i) + " Drive Character",
             juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f), 0.0f));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             bandId(i,"drive_secondary"), "Band " + juce::String(i) + " Drive Secondary",
             juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            bandId(i,"drive_auto_gain"), "Band " + juce::String(i) + " Drive Auto Gain", true));
 
 #if DEFAULT_EQUALIZER_FULL
         params.push_back(std::make_unique<juce::AudioParameterChoice>(
@@ -523,6 +506,7 @@ void DefaultEqualizerAudioProcessor::syncBandsFromParams()
             case 4: tp = Biquad::Type::LowPass; break;
             case 5: tp = Biquad::Type::Bandpass; break;
             case 6: tp = Biquad::Type::Notch; break;
+            case 7: tp = Biquad::Type::Tilt; break;
             default: tp = Biquad::Type::Bell; break;
         }
 
@@ -541,6 +525,14 @@ void DefaultEqualizerAudioProcessor::syncBandsFromParams()
 void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    bool transportPlaying = false;
+    if (auto* playHead = getPlayHead())
+        if (const auto position = playHead->getPosition())
+            transportPlaying = position->getIsPlaying();
+    if (transportPlaying && !transportWasPlaying)
+        transportStartGeneration.fetch_add(1, std::memory_order_release);
+    transportWasPlaying = transportPlaying;
 
     auto mainBuffer = getBusBuffer(buffer, false, 0);
     const int mainChannels = mainBuffer.getNumChannels();
@@ -585,11 +577,11 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     syncBandsFromParams();
     
     // Get global parameters
-    const float scale = scaleParam->load(std::memory_order_relaxed);
+    const float amount = amountParam->load(std::memory_order_relaxed);
     const float outputGainDb = outputGainParam->load(std::memory_order_relaxed);
     const float outputGain = std::pow(10.0f, outputGainDb / 20.0f);
     const bool adaptiveQ = adaptiveQParam->load(std::memory_order_relaxed) > 0.5f;
-    const bool decramp = decrampParam->load(std::memory_order_relaxed) > 0.5f;
+    constexpr bool decramp = true;
     const bool linearPhase = linearPhaseParam->load(std::memory_order_relaxed) > 0.5f;
 
     // A1: look up oversampler from the pre-built pool. Zero heap allocation
@@ -633,15 +625,18 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         auto& b = bands[(size_t)i];
         const auto& p = bandParams[(size_t)i];
 
-        const bool effectiveEnabled = b.enabled;
+        const bool isCut = b.parameterType == Biquad::Type::HighPass
+            || b.parameterType == Biquad::Type::LowPass;
+        const bool effectiveEnabled = b.enabled && (!isCut || amount > 0.0001f);
 
-        float scaledGain = b.targetGainDb * scale;
+        const float bandGain = b.targetGainDb;
 
         float effectiveQ = b.targetQ;
         if (adaptiveQ)
-            effectiveQ = calculateAdaptiveQ(b.targetQ, scaledGain);
+            effectiveQ = calculateAdaptiveQ(b.targetQ, bandGain);
 
         const float slope = p.slope->load(std::memory_order_relaxed);
+        const bool gainBearing = variable_slope::distributesGain(b.parameterType);
 
         const bool placementMS = mainChannels > 1
             && p.placementMode->load(std::memory_order_relaxed) > 0.5f;
@@ -651,9 +646,6 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         // Drive
         const float driveDb = p.drive->load(std::memory_order_relaxed);
         const float drive = driveDb / 36.0f;
-        const bool driveOn = p.driveOn->load(std::memory_order_relaxed) > 0.5f;
-        const float driveMix = p.driveMix->load(std::memory_order_relaxed) / 100.0f;
-        const float driveOutputDb = p.driveOutput->load(std::memory_order_relaxed);
         const float driveCharacterRaw = p.driveCharacter->load(std::memory_order_relaxed);
         const float driveSecondary = p.driveSecondary->load(std::memory_order_relaxed);
         const int satIdx = (int)p.satMode->load(std::memory_order_relaxed);
@@ -674,13 +666,12 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         const float dynAtk = p.dynAttack->load(std::memory_order_relaxed);
         const float dynRel = p.dynRelease->load(std::memory_order_relaxed);
 
-        b.driveAmount   = driveOn ? drive : 0.0f;
-        b.driveMix      = driveMix;
-        b.driveOutputGain = std::pow(10.0f, driveOutputDb / 20.0f);
+        // Zero drive is a hard off state: the band is not added to the driven
+        // list, so neither the nonlinear code nor oversampling runs at all.
+        b.driveAmount   = driveDb > 0.0001f ? drive : 0.0f;
         b.driveCharacter = driveCharacter;
         b.driveSecondary = driveSecondary;
-        b.driveAutoGainLinear = p.driveAutoGain->load(std::memory_order_relaxed) > 0.5f
-            ? deq::drive_auto_gain_table::lookup(satIdx, driveDb) : 1.0f;
+        b.driveAutoGainLinear = deq::drive_auto_gain_table::lookup(satIdx, driveDb);
         // Threshold doubles as the dynamic enable control. Its stepped default
         // of 0 dB is truly inactive; the first active value is -0.1 dB.
         const bool wasDynamic = b.dynEnabled;
@@ -698,6 +689,23 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         b.dynAttackMs   = dynAtk;
         b.dynReleaseMs  = dynRel;
         b.detectorListen = auditionBand == i;
+        // Gain-bearing filters scale their actual dB parameters for the whole
+        // -200..200% range. This is monotonic and cannot create the phase-
+        // cancellation reversal caused by dry + amount * (wet - dry).
+        b.gainScale = gainBearing ? amount : 1.0f;
+        b.globalAmount = (gainBearing || isCut) ? 1.0f : std::clamp(amount, 0.0f, 1.0f);
+        b.driveGlobalAmount = std::max(0.0f, amount);
+
+        float amountAdjustedFrequency = b.targetFreqHz;
+        if (isCut && amount > 0.0f)
+        {
+            const float neutralEdge = b.parameterType == Biquad::Type::LowPass
+                ? (float)sr * 0.45f : 10.0f;
+            amountAdjustedFrequency = neutralEdge * std::pow(
+                std::max(1.0e-6f, b.targetFreqHz / neutralEdge), amount);
+            amountAdjustedFrequency = std::clamp(amountAdjustedFrequency, 10.0f,
+                                                  (float)sr * 0.45f);
+        }
 
         // Stereo static magnitude is handled by the FIR in linear mode. The
         // post stage remains a neutral Bell so dynamic modulation and per-band
@@ -706,7 +714,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         const bool linearStereo = linearPhase && !placementMS && std::abs(placement) < 0.0001f;
         b.beginBlock(sr, effectiveEnabled,
                      linearStereo ? Biquad::Type::Bell : b.parameterType,
-                     b.targetFreqHz, effectiveQ, linearStereo ? 0.0f : scaledGain,
+                     amountAdjustedFrequency, effectiveQ, linearStereo ? 0.0f : bandGain,
                      linearStereo ? 12.0f : slope, placementMS, placement, decramp);
         if (effectiveEnabled)
         {
@@ -737,8 +745,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         { smartSignature = (smartSignature ^ (std::uint64_t)std::llround(value * 1000.0f)) * 1099511628211ULL; };
         for (const auto& p : bandParams)
             for (auto* value : { p.present, p.on, p.type, p.freq, p.q, p.gain, p.dynThresh, p.dynRange,
-                                 p.driveOn, p.drive, p.driveMix, p.satMode, p.driveCharacter,
-                                 p.driveSecondary, p.driveAutoGain })
+                                 p.drive, p.satMode, p.driveCharacter, p.driveSecondary })
                 hash(value->load(std::memory_order_relaxed));
     }
     if (autoGainMode == 2 && smartSignature != smartParameterSignature)
@@ -850,14 +857,16 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             const auto& p = bandParams[(size_t)index];
             if (p.present->load(std::memory_order_relaxed) < 0.5f
                 || p.on->load(std::memory_order_relaxed) < 0.5f) continue;
-            const float gain = p.gain->load(std::memory_order_relaxed) * scale;
-            const float q = p.q->load(std::memory_order_relaxed);
             const int type = (int)p.type->load(std::memory_order_relaxed);
+            const bool gainBearing = type == 0 || type == 1 || type == 2 || type == 7;
+            const float effectiveAmount = amount < 0.0f && !gainBearing ? 0.0f : amount;
+            const float gain = p.gain->load(std::memory_order_relaxed) * effectiveAmount;
+            const float q = p.q->load(std::memory_order_relaxed);
             const float coverage = (type == 1 || type == 2) ? 0.42f : std::clamp(0.32f / std::sqrt(q), 0.04f, 0.32f);
             estimatedDelta += gain * coverage;
-            if (p.driveOn->load(std::memory_order_relaxed) > 0.5f)
+            if (p.drive->load(std::memory_order_relaxed) > 0.0001f)
                 estimatedDelta += p.drive->load(std::memory_order_relaxed) * 0.018f
-                                  * p.driveMix->load(std::memory_order_relaxed) * 0.01f;
+                    * std::max(0.0f, amount);
         }
         const float targetDb = std::clamp(-estimatedDelta, -24.0f, 24.0f);
         const float previous = autoGainCompDb.load(std::memory_order_relaxed);
@@ -926,7 +935,9 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     // Match EQ capture/analysis only enqueues samples here. Its FFT runs on a
     // low-priority worker and the result is converted into normal EQ bands by
     // the editor, so no analysis FFT executes on the audio thread.
-    matchEQ.pushSamples(L, R, n);
+    const bool useMatchSidechain = matchUseSidechain.load(std::memory_order_relaxed);
+    matchEQ.pushSamples(useMatchSidechain && sidechainL != nullptr ? sidechainL : L,
+                        useMatchSidechain && sidechainR != nullptr ? sidechainR : R, n);
 
     // Push post-EQ samples to spectrum FIFO
     if (shouldAnalyze) spectrumFifo.pushBlock(L, R, n);
@@ -962,8 +973,7 @@ void DefaultEqualizerAudioProcessor::updateReportedLatency() noexcept
     for (const auto& p : bandParams)
         driven = driven || (p.present->load(std::memory_order_relaxed) > 0.5f
             && p.on->load(std::memory_order_relaxed) > 0.5f
-            && p.driveOn->load(std::memory_order_relaxed) > 0.5f
-            && p.drive->load(std::memory_order_relaxed) > 0.001f);
+            && p.drive->load(std::memory_order_relaxed) > 0.0001f);
     const auto* os = driven && order > 0 && order <= kNumOversamplingOrders
         ? oversamplers[(size_t)(order - 1)].get() : nullptr;
     const int osLatency = os != nullptr ? juce::roundToInt(os->getLatencyInSamples()) : 0;
@@ -1017,7 +1027,7 @@ void DefaultEqualizerAudioProcessor::applyLookaheadDelay(juce::AudioBuffer<float
 void DefaultEqualizerAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
     juce::ValueTree root("DEFAULT_EQUALIZER_STATE");
-    root.setProperty("schemaVersion", 8, nullptr);
+    root.setProperty("schemaVersion", 9, nullptr);
     auto current = apvts.copyState();
     current.setProperty("stateRole", "current", nullptr);
     root.appendChild(current, nullptr);
@@ -1198,7 +1208,7 @@ void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
     linPhaseMagBuf.resize((size_t)numBins);
     std::fill(linPhaseMagBuf.begin(), linPhaseMagBuf.end(), 0.0f);
     float* magDb = linPhaseMagBuf.data();
-    const float scale = apvts.getRawParameterValue("scale")->load();
+    const float amount = apvts.getRawParameterValue("scale")->load();
 
     for (int b = 0; b < kNumBands; ++b)
     {
@@ -1221,72 +1231,46 @@ void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
             case 4: tp = Biquad::Type::LowPass; break;
             case 5: tp = Biquad::Type::Bandpass; break;
             case 6: tp = Biquad::Type::Notch; break;
+            case 7: tp = Biquad::Type::Tilt; break;
         }
 
         const float freq = apvts.getRawParameterValue(bandId(idx, "freq"))->load();
         float q    = apvts.getRawParameterValue(bandId(idx, "q"))->load();
-        const float gain = apvts.getRawParameterValue(bandId(idx, "gain"))->load() * scale;
+        const float rawGain = apvts.getRawParameterValue(bandId(idx, "gain"))->load();
+        const bool gainBearing = variable_slope::distributesGain(tp);
+        const float gain = gainBearing ? rawGain * amount : rawGain;
 
         // Apply adaptive Q in linear phase magnitude build
         const bool adaptiveQ = apvts.getRawParameterValue("adaptive_q")->load() > 0.5f;
         if (adaptiveQ)
-            q = calculateAdaptiveQ(q, gain);
+            q = calculateAdaptiveQ(q, rawGain);
 
-        const float slopeStages = std::clamp(
-            apvts.getRawParameterValue(bandId(idx, "slope"))->load() / 12.0f, 0.0f, 4.0f);
-        const int fullStages = (int) std::floor(slopeStages);
-        const float fractionalStage = slopeStages - (float) fullStages;
-        const int coefficientStages = std::min(4, fullStages + (fractionalStage > 0.0001f ? 1 : 0));
-        const float stageGain = gain / std::max(1.0f, slopeStages);
-
-        Biquad tempBq;
-        if (apvts.getRawParameterValue("decramp")->load() > 0.5f)
-            tempBq.setMatched(tp, sr, freq, q, stageGain);
-        else
-            tempBq.set(tp, sr, freq, q, stageGain);
+        const float slope = apvts.getRawParameterValue(bandId(idx, "slope"))->load();
+        constexpr bool decramp = true;
+        const bool cut = tp == Biquad::Type::HighPass || tp == Biquad::Type::LowPass;
+        double responseFreq = freq;
+        if (cut && amount > 0.0f)
+        {
+            const double neutralEdge = tp == Biquad::Type::LowPass ? sr * 0.45 : 10.0;
+            responseFreq = neutralEdge * std::pow(std::max(1.0e-9, freq / neutralEdge), amount);
+            responseFreq = std::clamp(responseFreq, 10.0, sr * 0.45);
+        }
 
         for (int i = 0; i < numBins; ++i)
         {
             const double f = (double)i / (double)(numBins - 1) * sr * 0.5;
             if (f < 1.0) continue;
 
-            if (tp == Biquad::Type::HighPass || tp == Biquad::Type::LowPass)
-            {
-                const double ratio = tp == Biquad::Type::HighPass ? (double)freq / f : f / (double)freq;
-                const double exponent = std::max(0.9966,
-                    (double)apvts.getRawParameterValue(bandId(idx, "slope"))->load() / 3.01029995664);
-                magDb[(size_t)i] += (float)(-10.0 * std::log10(1.0 + std::pow(ratio, exponent)));
-                continue;
-            }
-
-            const double omega = 2.0 * kPi * f / sr;
-            const double cosw  = std::cos(omega);
-            const double cos2w = std::cos(2.0 * omega);
-            const double sinw  = std::sin(omega);
-            const double sin2w = std::sin(2.0 * omega);
-
-            const double numReal = tempBq.b0 + tempBq.b1 * cosw + tempBq.b2 * cos2w;
-            const double numImag = -(tempBq.b1 * sinw + tempBq.b2 * sin2w);
-            const double denReal = 1.0 + tempBq.a1 * cosw + tempBq.a2 * cos2w;
-            const double denImag = -(tempBq.a1 * sinw + tempBq.a2 * sin2w);
-
-            const double numMagSq = numReal * numReal + numImag * numImag;
-            const double denMagSq = denReal * denReal + denImag * denImag;
-
-            if (denMagSq < 1e-30) continue;
-
-            const float singleDb = (float)(10.0 * std::log10(std::max(numMagSq / denMagSq, 1e-30)));
-            float fractionalDb = 0.0f;
-            if (fractionalStage > 0.0001f)
-            {
-                const std::complex<double> h(numReal, numImag);
-                const std::complex<double> d(denReal, denImag);
-                const auto mixed = std::complex<double>(1.0 - fractionalStage, 0.0)
-                    + (double)fractionalStage * (h / d);
-                fractionalDb = (float)(20.0 * std::log10(std::max(std::abs(mixed), 1.0e-15)));
-            }
-            if (coefficientStages > 0)
-                magDb[(size_t)i] += singleDb * (float)fullStages + fractionalDb;
+            const auto rawResponse = variable_slope::response(tp, sr, responseFreq, q, gain,
+                                                              slope, decramp, f);
+            const auto response = gainBearing || (cut && amount > 0.0f)
+                ? rawResponse
+                : cut ? std::complex<double>(1.0, 0.0)
+                      : std::complex<double>(1.0, 0.0)
+                          + (double)std::clamp(amount, 0.0f, 1.0f)
+                              * (rawResponse - std::complex<double>(1.0, 0.0));
+            magDb[(size_t)i] += (float)(20.0 * std::log10(
+                std::max(std::abs(response), 1.0e-15)));
         }
     }
 

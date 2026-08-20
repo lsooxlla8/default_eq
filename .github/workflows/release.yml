@@ -34,30 +34,30 @@ jobs:
 
       - name: Verify universal binaries and signatures
         run: |
-          vst3="build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3"
-          au="build/DefaultEqualizer_artefacts/Release/AU/default_equalizer.component"
-          app="build/DefaultEqualizer_artefacts/Release/Standalone/default_equalizer.app"
+          vst3="build/DefaultEqualizer_artefacts/Release/VST3/default_eq8.vst3"
+          au="build/DefaultEqualizer_artefacts/Release/AU/default_eq8.component"
+          app="build/DefaultEqualizer_artefacts/Release/Standalone/default_eq8.app"
           for bundle in "$vst3" "$au" "$app"; do
             codesign --force --deep --sign - "$bundle"
             codesign --verify --deep --strict "$bundle"
           done
           for binary in \
-            "$vst3/Contents/MacOS/default_equalizer" \
-            "$au/Contents/MacOS/default_equalizer" \
-            "$app/Contents/MacOS/default_equalizer"; do
+            "$vst3/Contents/MacOS/default_eq8" \
+            "$au/Contents/MacOS/default_eq8" \
+            "$app/Contents/MacOS/default_eq8"; do
             lipo "$binary" -verify_arch arm64 x86_64
           done
 
       - name: Validate Audio Unit
         run: |
           mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
-          rm -rf "$HOME/Library/Audio/Plug-Ins/Components/default_equalizer.component"
-          cp -R build/DefaultEqualizer_artefacts/Release/AU/default_equalizer.component \
+          rm -rf "$HOME/Library/Audio/Plug-Ins/Components/default_eq8.component"
+          cp -R build/DefaultEqualizer_artefacts/Release/AU/default_eq8.component \
             "$HOME/Library/Audio/Plug-Ins/Components/"
           killall -9 AudioComponentRegistrar 2>/dev/null || true
           python3 - <<'PY'
           import subprocess
-          subprocess.run(["auval", "-v", "aufx", "Deq1", "Icss"], check=True, timeout=180)
+          subprocess.run(["auval", "-v", "aufx", "Deq8", "Icss"], check=True, timeout=180)
           PY
 
       - name: Validate VST3 with pluginval
@@ -68,24 +68,24 @@ jobs:
           unzip -q pluginval.zip
           chmod +x pluginval.app/Contents/MacOS/pluginval
           pluginval.app/Contents/MacOS/pluginval \
-            --validate build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 \
+            --validate build/DefaultEqualizer_artefacts/Release/VST3/default_eq8.vst3 \
             --strictness-level 10 --timeout-ms 120000
 
       - name: Package
         run: |
           version="${GITHUB_REF_NAME#v}"
-          package="default_equalizer-v${version}-macOS-universal"
+          package="default_eq8-v${version}-macOS-universal"
           mkdir -p "build/$package"
-          cp -R build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 "build/$package/"
-          cp -R build/DefaultEqualizer_artefacts/Release/AU/default_equalizer.component "build/$package/"
-          cp -R build/DefaultEqualizer_artefacts/Release/Standalone/default_equalizer.app "build/$package/"
+          cp -R build/DefaultEqualizer_artefacts/Release/VST3/default_eq8.vst3 "build/$package/"
+          cp -R build/DefaultEqualizer_artefacts/Release/AU/default_eq8.component "build/$package/"
+          cp -R build/DefaultEqualizer_artefacts/Release/Standalone/default_eq8.app "build/$package/"
           cp README.md LICENSE.md THIRD_PARTY_NOTICES.md "build/$package/"
           ditto -c -k --sequesterRsrc --keepParent "build/$package" "build/$package.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: macos-universal
-          path: build/default_equalizer-v*-macOS-universal.zip
+          path: build/default_eq8-v*-macOS-universal.zip
           if-no-files-found: error
 
   linux:
@@ -124,23 +124,23 @@ jobs:
           unzip -q pluginval.zip
           chmod +x pluginval
           xvfb-run -a ./pluginval \
-            --validate build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 \
+            --validate build/DefaultEqualizer_artefacts/Release/VST3/default_eq8.vst3 \
             --strictness-level 10 --timeout-ms 120000
 
       - name: Package
         run: |
           version="${GITHUB_REF_NAME#v}"
-          package="default_equalizer-v${version}-Linux-x86_64"
+          package="default_eq8-v${version}-Linux-x86_64"
           mkdir -p "build/$package"
-          cp -R build/DefaultEqualizer_artefacts/Release/VST3/default_equalizer.vst3 "build/$package/"
-          cp build/DefaultEqualizer_artefacts/Release/Standalone/default_equalizer "build/$package/default_equalizer-Standalone"
+          cp -R build/DefaultEqualizer_artefacts/Release/VST3/default_eq8.vst3 "build/$package/"
+          cp build/DefaultEqualizer_artefacts/Release/Standalone/default_eq8 "build/$package/default_eq8-Standalone"
           cp README.md LICENSE.md THIRD_PARTY_NOTICES.md "build/$package/"
           tar -C build -czf "build/$package.tar.gz" "$package"
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
-          path: build/default_equalizer-v*-Linux-x86_64.tar.gz
+          path: build/default_eq8-v*-Linux-x86_64.tar.gz
           if-no-files-found: error
 
   windows:
@@ -167,7 +167,7 @@ jobs:
             -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
           & .\pluginval\pluginval.exe `
-            --validate "build\DefaultEqualizer_artefacts\Release\VST3\default_equalizer.vst3" `
+            --validate "build\DefaultEqualizer_artefacts\Release\VST3\default_eq8.vst3" `
             --strictness-level 10 --timeout-ms 120000
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -175,18 +175,18 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME.TrimStart('v')
-          $package = "default_equalizer-v$version-Windows-x64"
+          $package = "default_eq8-v$version-Windows-x64"
           $directory = "build\$package"
           New-Item -ItemType Directory -Path $directory -Force | Out-Null
-          Copy-Item -Recurse "build\DefaultEqualizer_artefacts\Release\VST3\default_equalizer.vst3" $directory
-          Copy-Item "build\DefaultEqualizer_artefacts\Release\Standalone\default_equalizer.exe" $directory
+          Copy-Item -Recurse "build\DefaultEqualizer_artefacts\Release\VST3\default_eq8.vst3" $directory
+          Copy-Item "build\DefaultEqualizer_artefacts\Release\Standalone\default_eq8.exe" $directory
           Copy-Item README.md, LICENSE.md, THIRD_PARTY_NOTICES.md $directory
           Compress-Archive -Path "$directory\*" -DestinationPath "build\$package.zip" -Force
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: build/default_equalizer-v*-Windows-x64.zip
+          path: build/default_eq8-v*-Windows-x64.zip
           if-no-files-found: error
 
   release:
@@ -206,7 +206,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          name: default_equalizer ${{ github.ref_name }}
+          name: default_eq8 ${{ github.ref_name }}
           generate_release_notes: true
           make_latest: true
           files: artifacts/*

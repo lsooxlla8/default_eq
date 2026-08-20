@@ -37,31 +37,42 @@ public:
     int getSelectedBand() const { return selectedBand; }
     void setSelectedBand(int band);
     void setDarkMode(bool shouldBeDark) { darkMode = shouldBeDark; repaint(); }
-    void setAnalyzerVisible(bool shouldShow) { analyzerVisible = shouldShow; repaint(); }
     void setAnalyzerSources(bool input, bool output) { showInputSpectrum = input; showOutputSpectrum = output; repaint(); }
-    void setSpectrumFrozen(bool frozen) { spectrumFrozen = frozen; }
+    void resetPeakHold()
+    {
+        std::fill(std::begin(peakInputSpectrum), std::end(peakInputSpectrum), -120.0f);
+        std::fill(std::begin(peakOutputSpectrum), std::end(peakOutputSpectrum), -120.0f);
+        repaint();
+    }
     void dismissNumericEditor();
     bool isNumericEditorComponent(const juce::Component* component) const noexcept
     {
         return component == &numericEditor || numericEditor.isParentOf(component);
     }
-    void setAnalyzerSettings(float floorDb, float rangeDb, float speed, float averaging,
-                             int resolution, float tilt, bool holdPeaks)
+    void setAnalyzerSettings(float floorDb, float averagingSeconds, float tilt)
     {
-        analyzerFloorDb = floorDb; analyzerRangeDb = rangeDb;
-        analyzerDecayDb = juce::jmap(speed, 0.0f, 100.0f, 0.15f, 4.0f);
-        analyzerAveraging = juce::jmap(averaging, 0.0f, 100.0f, 1.0f, 0.08f);
-        analyzerStride = resolution == 0 ? 4 : (resolution == 1 ? 2 : 1);
-        analyzerTiltDbPerOct = tilt; peakHold = holdPeaks;
-        if (!peakHold) { std::fill(std::begin(peakInputSpectrum), std::end(peakInputSpectrum), -120.0f);
-                         std::fill(std::begin(peakOutputSpectrum), std::end(peakOutputSpectrum), -120.0f); }
+        analyzerFloorDb = floorDb;
+        analyzerDecayDb = 1.5f;
+        analyzerAveraging = averagingSeconds <= 0.0f
+            ? 1.0f
+            : 1.0f - std::exp(-1.0f / (30.0f * averagingSeconds));
+        analyzerTiltDbPerOct = tilt;
         repaint();
     }
 
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
     static int defaultTypeForNewBand(float frequencyHz, float gainDb) noexcept;
+    static bool typeDefaultsToMidSide(int type) noexcept { return type >= 1 && type <= 4; }
+    static float analyzerLevelToY(float db, float floorDb, float rangeDb, float height) noexcept
+    {
+        const float ceiling = floorDb + std::max(1.0f, rangeDb);
+        const float normalized = juce::jmap(juce::jlimit(floorDb, ceiling, db),
+                                             floorDb, ceiling, 0.0f, 1.0f);
+        return height * (1.0f - normalized);
+    }
     static bool isCutType(int type) noexcept { return type == 3 || type == 4; }
+    static bool usesQVerticalDrag(int type) noexcept { return type >= 3 && type <= 6; }
     static float cutQFromVerticalDrag(float startQ, float deltaY) noexcept
     {
         return std::clamp(startQ * std::pow(2.0f, -deltaY / 80.0f), 0.1f, 24.0f);
@@ -109,12 +120,9 @@ private:
     float displayMaxDb = 12.0f;
     bool rangeExpansionAvailable = true;
     bool darkMode = true;
-    bool analyzerVisible = true;
-    bool showInputSpectrum = true, showOutputSpectrum = true, spectrumFrozen = false;
-    float analyzerFloorDb = -90.0f, analyzerRangeDb = 90.0f, analyzerDecayDb = 1.5f;
-    float analyzerAveraging = 0.35f, analyzerTiltDbPerOct = 0.0f;
-    int analyzerStride = 1;
-    bool peakHold = false;
+    bool showInputSpectrum = true, showOutputSpectrum = true;
+    float analyzerFloorDb = -90.0f, analyzerDecayDb = 1.5f;
+    float analyzerAveraging = 0.402f, analyzerTiltDbPerOct = 4.5f;
 
     // Coordinate mapping
     float freqToX(float freqHz) const;

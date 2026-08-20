@@ -29,6 +29,51 @@ semantics (Soft Clip through Sine Erosion):
 The bypass was moved to `Source/DSP/GlobalBypass.h`, detached from distortion
 parameters, and integrated with equalizer latency reporting.
 
+### Indirect drive-algorithm provenance
+
+`default_distortion` itself contains third-party-derived implementations. The
+following provenance is retained here because the corresponding user-facing
+drive modes and control semantics reached `default_equalizer` through that
+project.
+
+#### Vital Soft Clip and Hard Clip lineage
+
+- repository: https://github.com/mtytel/vital
+- revision: `636ca0ef517a4db087a6a08a6a8a5e704e21f836`
+- original files: `src/synthesis/effects/distortion.cpp` and
+  `src/synthesis/framework/futils.h`
+- copyright: Copyright (C) 2013-2019 Matt Tytel
+- license: GNU GPL version 3 or later
+
+The referenced `default_distortion` revision contains scalar adaptations of
+Vital's Soft Clip, Hard Clip, and rational `futils::tanh`. In
+`default_equalizer`, the Soft Clip and Hard Clip modes were subsequently
+modified in `Source/DSP/EQBand.h`: they use the C++ standard-library
+`std::tanh`, a bounded cubic morph, and a conventional clamp. Vital's rational
+`futils::tanh` implementation is **not** present in this repository. The mode
+lineage is nevertheless disclosed, and the GPLv3 text is included at
+`LICENSES/GPL-3.0.txt`.
+
+#### CHOW Tape Model and BYOD hysteresis lineage
+
+- repositories: https://github.com/jatinchowdhury18/AnalogTapeModel and
+  https://github.com/Chowdhury-DSP/BYOD
+- revisions: `604372e4ffd9690c3e283362e4598cb43edbb475` and
+  `1cf22b6ac802b9dc33cfc9f8dd6af5b3c3e40bc9`
+- original files: `Plugin/Source/Processors/Hysteresis/HysteresisOps.h`,
+  `Plugin/Source/Processors/Hysteresis/HysteresisProcessing.*`,
+  `src/processors/drive/hysteresis/HysteresisOps.h`, and
+  `src/processors/drive/hysteresis/HysteresisProcessing.*`
+- copyright: Copyright (C) Jatin Chowdhury and CHOW/BYOD contributors
+- license: GNU GPL version 3
+
+The referenced `default_distortion` revision contains a scalar adaptation of
+the CHOW/BYOD Jiles-Atherton model. `default_equalizer` does **not** contain
+that numerical model: its `Tape Hysteresis` mode is a smaller feedback-memory
+waveshaper written for per-band operation, while retaining the inherited
+Drive/Hysteresis/Bias vocabulary. This indirect lineage is disclosed to avoid
+presenting the mode as wholly unrelated work. See `LICENSES/GPL-3.0.txt`.
+
 ## Faust vaeffects.lib matched filters
 
 - repository: https://github.com/grame-cncm/faustlibraries

@@ -33,7 +33,7 @@ struct Biquad
         return (float)y;
     }
 
-    enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch };
+    enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch, Tilt };
 
     // Matched/de-cramped second-order designs adapted from Dario Sanfilippo's
     // MIT-licensed Faust vaeffects.lib implementation of Martin Vicanek's
@@ -60,7 +60,7 @@ struct Biquad
             a1 = rbjReference.a1 + matchedBlend * (a1 - rbjReference.a1);
             a2 = rbjReference.a2 + matchedBlend * (a2 - rbjReference.a2);
         };
-        if (type == Type::Notch) { fallback(); return; }
+        if (type == Type::Notch || type == Type::Tilt) { fallback(); return; }
         if ((type == Type::Bell || type == Type::LowShelf || type == Type::HighShelf)
             && std::abs(gainDb) < 1.0e-7)
         {
@@ -317,6 +317,27 @@ struct Biquad
                 a0_ = 1.0 + alpha;
                 a1_ = -2.0 * cosw0;
                 a2_ = 1.0 - alpha;
+            } break;
+
+            case Type::Tilt:
+            {
+                // A low shelf of -2G followed by +G make-up gives a symmetric
+                // response: +6 dB means -6 dB below the pivot and +6 dB above.
+                const double shelfA = std::pow(10.0, (-2.0 * gainDb) / 40.0);
+                const double S = std::clamp(Q / 2.0, 0.1, 1.0);
+                const double alphaS = sinw0 * 0.5
+                    * std::sqrt((shelfA + 1.0 / shelfA) * (1.0 / S - 1.0) + 2.0);
+                const double twoSqrtAlpha = 2.0 * std::sqrt(shelfA) * alphaS;
+                b0_ = shelfA * ((shelfA + 1.0) - (shelfA - 1.0) * cosw0 + twoSqrtAlpha);
+                b1_ = 2.0 * shelfA * ((shelfA - 1.0) - (shelfA + 1.0) * cosw0);
+                b2_ = shelfA * ((shelfA + 1.0) - (shelfA - 1.0) * cosw0 - twoSqrtAlpha);
+                a0_ = (shelfA + 1.0) + (shelfA - 1.0) * cosw0 + twoSqrtAlpha;
+                a1_ = -2.0 * ((shelfA - 1.0) + (shelfA + 1.0) * cosw0);
+                a2_ = (shelfA + 1.0) + (shelfA - 1.0) * cosw0 - twoSqrtAlpha;
+                const double makeup = std::pow(10.0, gainDb / 20.0);
+                b0_ *= makeup;
+                b1_ *= makeup;
+                b2_ *= makeup;
             } break;
         }
 

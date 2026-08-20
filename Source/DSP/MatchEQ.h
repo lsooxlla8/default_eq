@@ -20,7 +20,7 @@ public:
     static constexpr int analysisFramesNeeded = 8;
 
     MatchEQ()
-        : juce::Thread("default_equalizer_MatchAnalysis"), fft(fftOrder),
+        : juce::Thread("default_eq8_MatchAnalysis"), fft(fftOrder),
           window(fftSize, juce::dsp::WindowingFunction<float>::hann)
     {
         clear();

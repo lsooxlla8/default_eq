@@ -1,10 +1,100 @@
 #include "ResponseCurveComponent.h"
+#include "../DSP/VariableSlope.h"
 #include "../PluginProcessor.h"
 #include <complex>
 
 static juce::String bandId(int idx, const char* suffix)
 {
     return "b" + juce::String(idx) + "_" + suffix;
+}
+
+namespace
+{
+class ChoiceRow final : public juce::PopupMenu::CustomComponent
+{
+public:
+    ChoiceRow(int count, int selected, bool dark, std::function<void(int)> callback,
+              std::function<void(juce::Graphics&, juce::Rectangle<float>, int, juce::Colour)> painter)
+        : juce::PopupMenu::CustomComponent(false), count(count), selected(selected), dark(dark),
+          callback(std::move(callback)), painter(std::move(painter)) {}
+
+    void getIdealSize(int& width, int& height) override
+    {
+        width = count == 5 ? 180 : 280;
+        height = 34;
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto fg = dark ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
+        const auto bg = dark ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6);
+        g.fillAll(bg);
+        const float cellW = (float)getWidth() / (float)count;
+        for (int i = 0; i < count; ++i)
+        {
+            auto cell = juce::Rectangle<float>(cellW * i, 0.0f, cellW, (float)getHeight()).reduced(1.0f);
+            if (i == selected)
+            {
+                g.setColour(fg); g.fillRect(cell);
+                painter(g, cell.reduced(4.0f), i, bg);
+            }
+            else
+            {
+                g.setColour(fg.withAlpha(i == hovered ? 0.20f : 0.08f)); g.fillRect(cell);
+                painter(g, cell.reduced(4.0f), i, fg);
+            }
+        }
+    }
+
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        const int next = choiceAt(e.x);
+        if (next != hovered) { hovered = next; repaint(); }
+    }
+    void mouseExit(const juce::MouseEvent&) override { hovered = -1; repaint(); }
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const int choice = choiceAt(e.x);
+        if (choice >= 0 && callback) callback(choice);
+        triggerMenuItem();
+    }
+
+private:
+    int choiceAt(int x) const noexcept
+    {
+        return juce::jlimit(0, count - 1, x * count / juce::jmax(1, getWidth()));
+    }
+    int count = 0, selected = 0, hovered = -1;
+    bool dark = false;
+    std::function<void(int)> callback;
+    std::function<void(juce::Graphics&, juce::Rectangle<float>, int, juce::Colour)> painter;
+};
+
+void paintFilterIcon(juce::Graphics& g, juce::Rectangle<float> r, int type, juce::Colour colour)
+{
+    r = r.withSizeKeepingCentre(juce::jmin(26.0f, r.getWidth()),
+                                juce::jmin(16.0f, r.getHeight()));
+    juce::Path p;
+    const float x0 = r.getX(), x1 = r.getRight(), y0 = r.getY(), y1 = r.getBottom();
+    const float midX = r.getCentreX(), midY = r.getCentreY();
+    switch (type)
+    {
+        case 0: p.startNewSubPath(x0, midY); p.cubicTo(midX - 8, midY, midX - 7, y0 + 3, midX, y0 + 3);
+                p.cubicTo(midX + 7, y0 + 3, midX + 8, midY, x1, midY); break;
+        case 1: p.startNewSubPath(x0, y0 + 4); p.lineTo(midX - 5, y0 + 4); p.cubicTo(midX, y0 + 4, midX, midY, midX + 5, midY); p.lineTo(x1, midY); break;
+        case 2: p.startNewSubPath(x0, midY); p.lineTo(midX - 5, midY); p.cubicTo(midX, midY, midX, y0 + 4, midX + 5, y0 + 4); p.lineTo(x1, y0 + 4); break;
+        case 3: p.startNewSubPath(x0, y1); p.cubicTo(x0 + 6, y1 - 9, midX - 5, midY, midX + 2, midY); p.lineTo(x1, midY); break;
+        case 4: p.startNewSubPath(x0, midY); p.lineTo(midX - 2, midY); p.cubicTo(midX + 5, midY, x1 - 6, y1 - 9, x1, y1); break;
+        case 5: p.startNewSubPath(x0, y1 - 3); p.cubicTo(midX - 8, y1 - 3, midX - 7, y0 + 3, midX, y0 + 3); p.cubicTo(midX + 7, y0 + 3, midX + 8, y1 - 3, x1, y1 - 3); break;
+        case 6: p.startNewSubPath(x0, midY); p.cubicTo(midX - 7, midY, midX - 6, y1 - 3, midX, y1 - 3); p.cubicTo(midX + 6, y1 - 3, midX + 7, midY, x1, midY); break;
+        case 7: p.startNewSubPath(x0, y1 - 4); p.lineTo(x1, y0 + 4); break;
+    }
+    const auto pathBounds = p.getBounds();
+    p.applyTransform(juce::AffineTransform::translation(
+        r.getCentreX() - pathBounds.getCentreX(), r.getCentreY() - pathBounds.getCentreY()));
+    g.setColour(colour);
+    g.strokePath(p, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
 }
 
 // Family UI is intentionally monochrome. Selection is also encoded by shape.
@@ -56,9 +146,10 @@ ResponseCurveComponent::ResponseCurveComponent(DefaultEqualizerAudioProcessor& p
 
 void ResponseCurveComponent::setSelectedBand(int band)
 {
-    selectedBand = juce::jlimit(0, kNumBands - 1, band);
     selection.fill(false);
-    selection[(size_t)selectedBand] = true;
+    selectedBand = band >= 0 && band < kNumBands ? band : -1;
+    if (selectedBand >= 0)
+        selection[(size_t)selectedBand] = true;
     repaint();
 }
 
@@ -122,7 +213,7 @@ float ResponseCurveComponent::computeMagnitudeDb(const Biquad& bq, double freq, 
 void ResponseCurveComponent::updateResponseCurve()
 {
     const double sr = proc.getSampleRate() > 0 ? proc.getSampleRate() : 44100.0;
-    const float scale = proc.apvts.getRawParameterValue("scale")->load();
+    const float amount = proc.apvts.getRawParameterValue("scale")->load();
 
     // The graph opens at +/-12 dB, but restored/automated bands must never be
     // stranded outside it. Range only grows during an editor session; deleting
@@ -133,7 +224,7 @@ void ResponseCurveComponent::updateResponseCurve()
         if (proc.apvts.getRawParameterValue(bandId(band, "present"))->load() < 0.5f)
             continue;
         const float visibleGain = std::abs(
-            proc.apvts.getRawParameterValue(bandId(band, "gain"))->load() * scale);
+            proc.apvts.getRawParameterValue(bandId(band, "gain"))->load());
         if (visibleGain > 24.001f) requiredDisplayDb = 36.0f;
         else if (visibleGain > 12.001f) requiredDisplayDb = std::max(requiredDisplayDb, 24.0f);
     }
@@ -142,8 +233,7 @@ void ResponseCurveComponent::updateResponseCurve()
     std::uint64_t signature = 1469598103934665603ULL;
     const auto hash = [&signature](float value)
     { signature = (signature ^ (std::uint64_t)std::llround(value * 1000.0f)) * 1099511628211ULL; };
-    hash(scale); hash(proc.apvts.getRawParameterValue("adaptive_q")->load());
-    hash(proc.apvts.getRawParameterValue("decramp")->load());
+    hash(amount); hash(proc.apvts.getRawParameterValue("adaptive_q")->load());
     for (int band = 1; band <= kNumBands; ++band)
     {
         for (auto* suffix : { "present", "on", "type", "freq", "q", "gain", "slope" })
@@ -180,7 +270,7 @@ void ResponseCurveComponent::updateResponseCurve()
         const int t = (int)proc.apvts.getRawParameterValue(bandId(idx, "type"))->load();
         const float freq = proc.apvts.getRawParameterValue(bandId(idx, "freq"))->load();
         float q = proc.apvts.getRawParameterValue(bandId(idx, "q"))->load();
-        float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load() * scale;
+        float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load();
         if (proc.apvts.getRawParameterValue("adaptive_q")->load() > 0.5f)
             q = DefaultEqualizerAudioProcessor::calculateAdaptiveQ(q, gain);
         gain += proc.getBandDynamicGainDb(b);
@@ -195,48 +285,38 @@ void ResponseCurveComponent::updateResponseCurve()
             case 4: tp = Biquad::Type::LowPass; break;
             case 5: tp = Biquad::Type::Bandpass; break;
             case 6: tp = Biquad::Type::Notch; break;
+            case 7: tp = Biquad::Type::Tilt; break;
         }
 
-        const float slopeStages = std::clamp(
-            proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load() / 12.0f,
-            0.0f, 4.0f);
-        const float stageGain = gain / std::max(1.0f, slopeStages);
-        const int fullStages = (int)std::floor(slopeStages);
-        const float fractional = slopeStages - (float)fullStages;
+        const bool gainBearing = variable_slope::distributesGain(tp);
+        if (gainBearing)
+            gain *= amount;
 
-        // Build a temporary biquad with current coefficients
-        Biquad tempBq;
-        if (proc.apvts.getRawParameterValue("decramp")->load() > 0.5f)
-            tempBq.setMatched(tp, sr, freq, q, stageGain);
-        else
-            tempBq.set(tp, sr, freq, q, stageGain);
+        const bool cut = tp == Biquad::Type::HighPass || tp == Biquad::Type::LowPass;
+        float responseFreq = freq;
+        if (cut && amount > 0.0f)
+        {
+            const float neutralEdge = tp == Biquad::Type::LowPass ? (float)sr * 0.45f : 10.0f;
+            responseFreq = neutralEdge * std::pow(std::max(1.0e-6f, freq / neutralEdge), amount);
+            responseFreq = std::clamp(responseFreq, 10.0f, (float)sr * 0.45f);
+        }
+
+        const float slope = proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load();
+        constexpr bool decramp = true;
 
         for (int i = 0; i < numPoints; ++i)
         {
             const float f = responseFrequencies[i];
 
-            if (tp == Biquad::Type::HighPass || tp == Biquad::Type::LowPass)
-            {
-                const double ratio = tp == Biquad::Type::HighPass ? (double)freq / f : f / (double)freq;
-                const double exponent = std::max(0.9966, (double)proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load() / 3.01029995664);
-                const float mag = (float)(-10.0 * std::log10(1.0 + std::pow(ratio, exponent)));
-                perBandMagnitudes[b][i] = mag;
-                magnitudes[i] += mag;
-                continue;
-            }
-            const float baseMag = computeMagnitudeDb(tempBq, f, sr);
-            float fractionalMag = 0.0f;
-            if (fractional > 0.0001f)
-            {
-                const double omega = 2.0 * kPi * f / sr;
-                const std::complex<double> z1(std::cos(omega), -std::sin(omega));
-                const auto z2 = z1 * z1;
-                const std::complex<double> h = (tempBq.b0 + tempBq.b1 * z1 + tempBq.b2 * z2)
-                    / (1.0 + tempBq.a1 * z1 + tempBq.a2 * z2);
-                const auto mixed = std::complex<double>(1.0 - fractional, 0.0) + (double)fractional * h;
-                fractionalMag = (float)(20.0 * std::log10(std::max(std::abs(mixed), 1.0e-15)));
-            }
-            const float mag = baseMag * (float)fullStages + fractionalMag;
+            const auto rawResponse = variable_slope::response(tp, sr, responseFreq, q, gain,
+                                                              slope, decramp, f);
+            const auto response = gainBearing || (cut && amount > 0.0f)
+                ? rawResponse
+                : cut ? std::complex<double>(1.0, 0.0)
+                      : std::complex<double>(1.0, 0.0)
+                          + (double)std::clamp(amount, 0.0f, 1.0f)
+                              * (rawResponse - std::complex<double>(1.0, 0.0));
+            const float mag = (float)(20.0 * std::log10(std::max(std::abs(response), 1.0e-15)));
             perBandMagnitudes[b][i] = mag;
             magnitudes[i] += mag;
         }
@@ -260,7 +340,7 @@ void ResponseCurveComponent::paint(juce::Graphics& g)
     g.fillAll(bg);
 
     paintGrid(g);
-    if (analyzerVisible) paintSpectrum(g);
+    paintSpectrum(g);
     paintMatchPreview(g);
     paintBandCurves(g);
     paintResponseCurve(g);
@@ -362,7 +442,6 @@ void ResponseCurveComponent::paintGrid(juce::Graphics& g)
 // ── Spectrum analyzer ──────────────────────────────────────────────
 void ResponseCurveComponent::pushSpectrumData(const float* mags, int numBins, double sr, bool input)
 {
-    if (spectrumFrozen) return;
     const int n = std::min(numBins, maxSpectrumBins);
     std::copy(mags, mags + n, input ? inputSpectrum : outputSpectrum);
     currentSpectrumSize = n;
@@ -385,7 +464,7 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
         bool started = false;
         bool peakStarted = false;
         float lastY = h, lastPeakY = h;
-        for (int i = 1; i < currentSpectrumSize; i += analyzerStride)
+        for (int i = 1; i < currentSpectrumSize; ++i)
         {
             const float target = source[i];
             smoothed[i] += analyzerAveraging * (target - smoothed[i]);
@@ -393,21 +472,21 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
             const float freq = (float)i * binWidth;
             if (freq < minFreq || freq > maxFreq) continue;
             const float tilted = smoothed[i] + analyzerTiltDbPerOct * std::log2(freq / 1000.0f);
-            const float ceiling = analyzerFloorDb + analyzerRangeDb;
+            constexpr float ceiling = 0.0f;
+            const float analyzerRangeDb = -analyzerFloorDb;
             const float db = juce::jlimit(analyzerFloorDb, ceiling, tilted);
             const float x = freqToX(freq);
-            const float y = dbToY(juce::jmap(db, analyzerFloorDb, ceiling, -displayMaxDb, 0.0f));
+            const float y = analyzerLevelToY(db, analyzerFloorDb, analyzerRangeDb, h);
             if (!started) { outline.startNewSubPath(0.0f, y); outline.lineTo(x, y); started = true; }
             else outline.lineTo(x, y);
             lastY = y;
-            if (peakHold)
-            {
-                peaks[i] = std::max(peaks[i], tilted);
-                const float py = dbToY(juce::jmap(juce::jlimit(analyzerFloorDb, ceiling, peaks[i]), analyzerFloorDb, ceiling, -displayMaxDb, 0.0f));
-                if (!peakStarted) { peakPath.startNewSubPath(0.0f, py); peakPath.lineTo(x, py); peakStarted = true; }
-                else peakPath.lineTo(x, py);
-                lastPeakY = py;
-            }
+            peaks[i] = std::max(peaks[i], tilted);
+            const float py = analyzerLevelToY(
+                juce::jlimit(analyzerFloorDb, ceiling, peaks[i]),
+                analyzerFloorDb, analyzerRangeDb, h);
+            if (!peakStarted) { peakPath.startNewSubPath(0.0f, py); peakPath.lineTo(x, py); peakStarted = true; }
+            else peakPath.lineTo(x, py);
+            lastPeakY = py;
         }
         if (!started) return;
         outline.lineTo(w, lastY);
@@ -493,8 +572,7 @@ void ResponseCurveComponent::paintNodes(juce::Graphics& g)
         const bool on = proc.apvts.getRawParameterValue(bandId(idx, "on"))->load() > 0.5f;
 
         const float freq = proc.apvts.getRawParameterValue(bandId(idx, "freq"))->load();
-        const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load()
-                           * proc.apvts.getRawParameterValue("scale")->load();
+        const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load();
 
         const float x = freqToX(freq);
         const float y = dbToY(gain);
@@ -561,9 +639,8 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
     const float q = proc.apvts.getRawParameterValue(bandId(idx, "q"))->load();
     const float slope = proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load();
     const float drive = proc.apvts.getRawParameterValue(bandId(idx, "drive"))->load();
-    const bool driveOn = proc.apvts.getRawParameterValue(bandId(idx, "drive_on"))->load() > 0.5f;
     const float x = freqToX(freq);
-    const float y = dbToY(gain * proc.apvts.getRawParameterValue("scale")->load());
+    const float y = dbToY(gain);
 
     const float threshold = proc.apvts.getRawParameterValue(bandId(idx, "dyn_thresh"))->load();
     const bool midSide = proc.apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load() > 0.5f;
@@ -578,7 +655,7 @@ void ResponseCurveComponent::paintHoverCard(juce::Graphics& g)
     const auto qText = adaptive ? "Q " + juce::String(q, 3) + " > " + juce::String(actualQ, 3)
                                 : "Q " + juce::String(q, 3);
     const auto qLine = qText + "   SLOPE " + juce::String(slope, 1) + " dB/oct";
-    const auto driveLine = "DRIVE " + juce::String(drive, 1) + " dB  " + (driveOn ? "ON" : "OFF");
+    const auto driveLine = "DRIVE " + juce::String(drive, 1) + " dB";
     const auto placementText = std::abs(placement) < 0.05f
         ? juce::String(midSide ? "M/S CENTER" : "L/R CENTER")
         : juce::String(midSide ? "M/S " : "L/R ")
@@ -673,8 +750,7 @@ int ResponseCurveComponent::hitTestNode(float mx, float my) const
         if (!present) continue;
 
         const float freq = proc.apvts.getRawParameterValue(bandId(idx, "freq"))->load();
-        const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load()
-                           * proc.apvts.getRawParameterValue("scale")->load();
+        const float gain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load();
 
         const float nx = freqToX(freq);
         const float ny = dbToY(gain);
@@ -694,6 +770,14 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
     if (numericEditor.isVisible() && !numericEditor.getBounds().contains(e.getPosition()))
         dismissNumericEditor();
     int hit = hitTestNode((float)e.x, (float)e.y);
+
+    if (e.mods.isPopupMenu() && hit < 0)
+    {
+        selectedBand = -1;
+        selection.fill(false);
+        repaint();
+        return;
+    }
 
     if (e.mods.isPopupMenu() && e.mods.isCommandDown() && hit >= 0)
     {
@@ -732,27 +816,64 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
         menu.setLookAndFeel(&getLookAndFeel());
         menu.addItem(1, "Enable/Disable Band " + juce::String(idx));
         menu.addSeparator();
-        juce::PopupMenu filterMenu;
-        filterMenu.setLookAndFeel(&getLookAndFeel());
-        filterMenu.addItem(10, "Bell");
-        filterMenu.addItem(11, "Low Shelf");
-        filterMenu.addItem(12, "High Shelf");
-        filterMenu.addItem(13, "High Pass");
-        filterMenu.addItem(14, "Low Pass");
-        filterMenu.addItem(15, "Bandpass");
-        filterMenu.addItem(16, "Notch");
-        menu.addSubMenu("Filter type", filterMenu);
+        const int selectedType = juce::jlimit(0, 7,
+            (int)proc.apvts.getRawParameterValue(bandId(idx, "type"))->load());
+        menu.addCustomItem(100, std::make_unique<ChoiceRow>(8, selectedType, darkMode,
+            [this](int type)
+            {
+                proc.undoManager.beginNewTransaction("Set selected band filter type");
+                for (int b = 0; b < kNumBands; ++b)
+                    if (selection[(size_t)b])
+                    {
+                        if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "type")))
+                        {
+                            parameter->beginChangeGesture();
+                            parameter->setValueNotifyingHost(parameter->convertTo0to1((float)type));
+                            parameter->endChangeGesture();
+                        }
+                        if (ResponseCurveComponent::typeDefaultsToMidSide(type))
+                            if (auto* mode = proc.apvts.getParameter(bandId(b + 1, "placement_mode")))
+                            {
+                                mode->beginChangeGesture();
+                                mode->setValueNotifyingHost(mode->convertTo0to1(1.0f));
+                                mode->endChangeGesture();
+                            }
+                    }
+            }, paintFilterIcon), nullptr, "Filter type");
         menu.addSeparator();
-        juce::PopupMenu enterMenu;
-        enterMenu.setLookAndFeel(&getLookAndFeel());
-        enterMenu.addItem(20, "Frequency...");
-        enterMenu.addItem(21, "Gain...");
-        enterMenu.addItem(22, "Q...");
-        enterMenu.addItem(23, "Slope...");
-        menu.addSubMenu("Enter", enterMenu);
-        menu.addSeparator();
-        menu.addItem(40, "Placement mode: L/R");
-        menu.addItem(41, "Placement mode: M/S");
+        const bool selectedMS = proc.apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load() > 0.5f;
+        const float selectedPlacement = proc.apvts.getRawParameterValue(bandId(idx, "placement"))->load();
+        const int selectedRoute = std::abs(selectedPlacement) <= 1.0f ? 1
+            : selectedMS ? (selectedPlacement < 0.0f ? 3 : 4)
+                         : (selectedPlacement < 0.0f ? 0 : 2);
+        menu.addCustomItem(101, std::make_unique<ChoiceRow>(5, selectedRoute, darkMode,
+            [this](int route)
+            {
+                static constexpr float placements[] { -100.0f, 0.0f, 100.0f, -100.0f, 100.0f };
+                proc.undoManager.beginNewTransaction("Set selected band placement");
+                for (int b = 0; b < kNumBands; ++b)
+                    if (selection[(size_t)b])
+                    {
+                        if (auto* mode = proc.apvts.getParameter(bandId(b + 1, "placement_mode")))
+                        {
+                            mode->beginChangeGesture();
+                            mode->setValueNotifyingHost(mode->convertTo0to1(route >= 3 ? 1.0f : 0.0f));
+                            mode->endChangeGesture();
+                        }
+                        if (auto* placement = proc.apvts.getParameter(bandId(b + 1, "placement")))
+                        {
+                            placement->beginChangeGesture();
+                            placement->setValueNotifyingHost(placement->convertTo0to1(placements[route]));
+                            placement->endChangeGesture();
+                        }
+                    }
+            }, [](juce::Graphics& g, juce::Rectangle<float> r, int route, juce::Colour colour)
+            {
+                static constexpr const char* labels[] { "L", "C", "R", "M", "S" };
+                g.setColour(colour);
+                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 12.0f, juce::Font::bold)));
+                g.drawText(labels[route], r, juce::Justification::centred);
+            }), nullptr, "Placement");
         menu.addSeparator();
         menu.addItem(2, "Delete band");
         menu.addItem(3, "Reset band");
@@ -764,7 +885,11 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
             menu.addItem(31, "Delete selected (" + juce::String(selectedCount) + ")");
         }
 
-        menu.showMenuAsync(juce::PopupMenu::Options(), [this, idx, px = (float)e.x, py = (float)e.y](int result)
+        auto menuOptions = juce::PopupMenu::Options()
+            .withTargetComponent(*this)
+            .withMousePosition()
+            .withItemThatMustBeVisible(101);
+        menu.showMenuAsync(menuOptions, [this, idx](int result)
         {
             if (result == 1)
             {
@@ -776,22 +901,13 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
             {
                 proc.undoManager.beginNewTransaction("Delete EQ band");
                 proc.resetBandToDefaults(idx - 1, false);
+                selection[(size_t)(idx - 1)] = false;
+                if (selectedBand == idx - 1) selectedBand = -1;
             }
             else if (result == 3)
             {
                 proc.undoManager.beginNewTransaction("Reset EQ band");
                 proc.resetBandToDefaults(idx - 1, true);
-            }
-            else if (result >= 10 && result <= 16)
-            {
-                auto* param = proc.apvts.getParameter(bandId(idx, "type"));
-                if (param)
-                    param->setValueNotifyingHost(param->convertTo0to1((float)(result - 10)));
-            }
-            else if (result >= 20 && result <= 23)
-            {
-                static const char* suffixes[] = { "freq", "gain", "q", "slope" };
-                showNumericEditor(idx - 1, suffixes[result - 20], px, py);
             }
             else if (result == 30 || result == 31)
             {
@@ -802,6 +918,7 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
                         if (result == 31)
                         {
                             proc.resetBandToDefaults(b, false);
+                            if (selectedBand == b) selectedBand = -1;
                             continue;
                         }
                         if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "on")))
@@ -811,23 +928,9 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
                             parameter->endChangeGesture();
                         }
                     }
+                if (result == 31) selection.fill(false);
             }
-            else if (result >= 40 && result <= 41)
-            {
-                proc.undoManager.beginNewTransaction("Set selected band placement");
-                for (int b = 0; b < kNumBands; ++b)
-                    if (selection[(size_t)b])
-                    {
-                        auto* parameter = proc.apvts.getParameter(bandId(b + 1, "placement_mode"));
-                        if (parameter != nullptr)
-                        {
-                            parameter->beginChangeGesture();
-                            const float value = result == 41 ? 1.0f : 0.0f;
-                            parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
-                            parameter->endChangeGesture();
-                        }
-                    }
-            }
+            repaint();
         });
         return;
     }
@@ -885,12 +988,20 @@ int ResponseCurveComponent::createBandAt(float x, float y, std::int64_t eventTim
     const float gain = std::clamp(yToDb(y), minBandGainDb, maxBandGainDb);
     proc.undoManager.beginNewTransaction("Create EQ band");
     proc.resetBandToDefaults(freeBand, true, frequency, gain);
+    const int newType = defaultTypeForNewBand(frequency, gain);
     if (auto* type = proc.apvts.getParameter(bandId(freeBand + 1, "type")))
     {
         type->beginChangeGesture();
-        type->setValueNotifyingHost(type->convertTo0to1((float)defaultTypeForNewBand(frequency, gain)));
+        type->setValueNotifyingHost(type->convertTo0to1((float)newType));
         type->endChangeGesture();
     }
+    if (typeDefaultsToMidSide(newType))
+        if (auto* mode = proc.apvts.getParameter(bandId(freeBand + 1, "placement_mode")))
+        {
+            mode->beginChangeGesture();
+            mode->setValueNotifyingHost(mode->convertTo0to1(1.0f));
+            mode->endChangeGesture();
+        }
 
     selectedBand = freeBand;
     selection.fill(false);
@@ -923,8 +1034,11 @@ void ResponseCurveComponent::beginStaticBandDrag(int hit, bool beginUndoTransact
         dragStartGain[(size_t)b] = proc.apvts.getRawParameterValue(bandId(b + 1, "gain"))->load();
         dragStartQ[(size_t)b] = proc.apvts.getRawParameterValue(bandId(b + 1, "q"))->load();
         dragFreqParams[(size_t)b] = proc.apvts.getParameter(bandId(b + 1, "freq"));
-        if (isCutType(type))
+        if (usesQVerticalDrag(type))
+        {
             dragQParams[(size_t)b] = proc.apvts.getParameter(bandId(b + 1, "q"));
+            dragGainParams[(size_t)b] = proc.apvts.getParameter(bandId(b + 1, "gain"));
+        }
         else
             dragGainParams[(size_t)b] = proc.apvts.getParameter(bandId(b + 1, "gain"));
         if (dragFreqParams[(size_t)b]) dragFreqParams[(size_t)b]->beginChangeGesture();
@@ -947,8 +1061,6 @@ void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
             if (!selection[(size_t)b]) continue;
             dragStartDrive[(size_t)b] = proc.apvts.getRawParameterValue(bandId(b + 1, "drive"))->load();
             dragDriveParams[(size_t)b] = proc.apvts.getParameter(bandId(b + 1, "drive"));
-            if (auto* driveEnabled = proc.apvts.getParameter(bandId(b + 1, "drive_on")))
-                driveEnabled->setValueNotifyingHost(1.0f);
             if (dragDriveParams[(size_t)b]) dragDriveParams[(size_t)b]->beginChangeGesture();
         }
     }
@@ -1013,16 +1125,14 @@ void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
 
     const float anchorFreq = std::clamp(xToFreq((float)e.x), minFreq, maxFreq);
     const float ratio = anchorFreq / std::max(1.0f, groupAnchorFreq);
-    const float scale = proc.apvts.getRawParameterValue("scale")->load();
     // The current visible range is also the maximum reachable range for this
     // gesture. This prevents the first edge crossing (+/-12 -> +/-24) from
     // writing a >24 dB value and making the timer immediately jump to +/-36.
     float anchorGain = std::clamp(yToDb((float)e.y), -displayMaxDb, displayMaxDb);
-    if (scale > 0.001f) anchorGain /= scale;
     anchorGain = std::clamp(anchorGain, minBandGainDb, maxBandGainDb);
     const float gainDelta = anchorGain - groupAnchorGain;
-    // Cut filters have no gain parameter in the audible topology. Vertical
-    // movement therefore edits their Q control in a logarithmic
+    // Gainless filters retain gain only as the node's visual Y coordinate;
+    // vertical movement edits Q in a logarithmic domain.
     // domain, while horizontal movement continues to edit frequency. Mixed
     // selections retain the normal gain gesture on non-cut bands.
     for (int b = 0; b < kNumBands; ++b)
@@ -1209,6 +1319,10 @@ void ResponseCurveComponent::mouseWheelMove(const juce::MouseEvent& e,
     }
     if (e.mods.isShiftDown())
     {
+        const float rawStep = wheel.deltaY * 120.0f;
+        const float minimumStep = wheel.isSmooth ? 2.5f : 12.0f;
+        const float placementStep = std::copysign(
+            std::max(std::abs(rawStep), minimumStep), rawStep);
         proc.undoManager.beginNewTransaction(std::count(selection.begin(), selection.end(), true) > 1
             ? "Adjust selected band placement" : "Adjust band placement");
         for (int b = 0; b < kNumBands; ++b)
@@ -1218,7 +1332,7 @@ void ResponseCurveComponent::mouseWheelMove(const juce::MouseEvent& e,
                     const float placement = proc.apvts.getRawParameterValue(bandId(b + 1, "placement"))->load();
                     parameter->beginChangeGesture();
                     parameter->setValueNotifyingHost(parameter->convertTo0to1(
-                        juce::jlimit(-100.0f, 100.0f, placement + wheel.deltaY * 40.0f)));
+                        juce::jlimit(-100.0f, 100.0f, placement + placementStep)));
                     parameter->endChangeGesture();
                 }
         repaint();
@@ -1280,8 +1394,7 @@ void ResponseCurveComponent::paintCollisionWarnings(juce::Graphics& g)
                 auto drawWarning = [&](const BandInfo& bi)
                 {
                     const float gain = proc.apvts.getRawParameterValue(
-                        bandId(bi.index + 1, "gain"))->load()
-                        * proc.apvts.getRawParameterValue("scale")->load();
+                        bandId(bi.index + 1, "gain"))->load();
                     const float x = freqToX(bi.freq);
                     const float y = dbToY(gain);
                     const float wr = nodeRadius + 4.0f;

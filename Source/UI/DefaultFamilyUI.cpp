@@ -42,7 +42,12 @@ juce::Colour backgroundOf(const juce::Component& component)
 
 float controlFontHeight(float controlHeight) noexcept
 {
-    return juce::jlimit(10.0f, metrics::headerFontHeight, controlHeight * 0.43f);
+    return juce::jlimit(10.0f, 11.0f, controlHeight * 0.43f);
+}
+
+int controlTextPadding(float scale) noexcept
+{
+    return juce::jmax(2, juce::roundToInt(3.0f * scale));
 }
 }
 
@@ -94,7 +99,7 @@ void LookAndFeel::applyPalette()
     setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour(juce::ComboBox::backgroundColourId, bg);
     setColour(juce::ComboBox::textColourId, fg);
-    setColour(juce::ComboBox::outlineColourId, fg);
+    setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
     setColour(juce::ComboBox::arrowColourId, fg);
     setColour(juce::PopupMenu::backgroundColourId, surface);
     setColour(juce::PopupMenu::textColourId, fg);
@@ -110,32 +115,37 @@ juce::Font LookAndFeel::getComboBoxFont(juce::ComboBox& box)
 {
     return mono(controlFontHeight((float)box.getHeight()) * uiScale, true);
 }
-juce::Font LookAndFeel::getLabelFont(juce::Label&) { return mono(13.0f * uiScale, true); }
-juce::Font LookAndFeel::getPopupMenuFont() { return mono(12.0f * uiScale, true); }
+juce::Font LookAndFeel::getLabelFont(juce::Label& label)
+{
+    if (const auto* slider = dynamic_cast<const juce::Slider*>(label.getParentComponent()))
+        if (slider->getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag)
+            return mono(11.5f * uiScale, true);
+    return mono(10.0f * uiScale, true);
+}
+juce::Font LookAndFeel::getPopupMenuFont() { return mono(10.0f * uiScale, true); }
 
 void LookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
 {
-    const int left = juce::roundToInt(10.0f * uiScale);
+    const int left = controlTextPadding(uiScale);
     const int top = juce::jmax(1, juce::roundToInt(uiScale));
-    label.setBounds(left, top, juce::jmax(1, box.getWidth() - juce::roundToInt(42.0f * uiScale)),
+    label.setBounds(left, top, juce::jmax(1, box.getWidth() - left * 2 - juce::roundToInt(14.0f * uiScale)),
                     box.getHeight() - 2 * top);
     label.setFont(getComboBoxFont(box));
-    label.setJustificationType(juce::Justification::centredLeft);
+    label.setJustificationType(juce::Justification::centred);
 }
 
 void LookAndFeel::getIdealPopupMenuItemSize(const juce::String& text, bool separator, int,
                                              int& width, int& height)
 {
-    height = separator ? juce::roundToInt(7.0f * uiScale) : juce::roundToInt(27.0f * uiScale);
+    height = separator ? juce::roundToInt(5.0f * uiScale) : juce::roundToInt(23.0f * uiScale);
     width = separator ? 48 : juce::jlimit(88, 260,
         juce::roundToInt((float)text.length() * 7.5f * uiScale + 34.0f * uiScale));
 }
 
 void LookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int height)
 {
+    juce::ignoreUnused(width, height);
     g.fillAll(findColour(surfaceColourId));
-    g.setColour(foreground());
-    g.drawRect(0, 0, width, height, juce::jmax(1, juce::roundToInt(2.0f * uiScale)));
 }
 
 void LookAndFeel::drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,
@@ -203,7 +213,7 @@ void LookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bo
     g.setColour(colour);
     g.setFont(getTextButtonFont(button, button.getHeight()));
     g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(
-        juce::roundToInt(10.0f * uiScale), juce::roundToInt(2.0f * uiScale)),
+        controlTextPadding(uiScale), juce::roundToInt(2.0f * uiScale)),
         juce::Justification::centred, 1);
 }
 
@@ -214,7 +224,8 @@ void LookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button
     g.setColour((inverse ? background() : foreground()).withMultipliedAlpha(
         button.isEnabled() ? 1.0f : metrics::disabledOpacity));
     g.setFont(mono(controlFontHeight((float)button.getHeight()) * uiScale, true));
-    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(5, 2),
+    g.drawFittedText(button.getButtonText(), button.getLocalBounds().reduced(
+        controlTextPadding(uiScale), juce::roundToInt(2.0f * uiScale)),
                      juce::Justification::centred, 1);
 }
 
@@ -253,8 +264,10 @@ void LookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool,
 {
     const auto bounds = juce::Rectangle<int>(0, 0, width, height);
     const auto fg = foreground().withMultipliedAlpha(box.isEnabled() ? 1.0f : metrics::disabledOpacity);
-    g.setColour(background()); g.fillRect(bounds);
-    g.setColour(fg); g.drawRect(bounds, juce::jmax(1, juce::roundToInt(2.0f * uiScale)));
+    g.setColour(findColour(surfaceColourId)); g.fillRect(bounds);
+    g.setColour(fg);
+    g.drawRect(bounds, juce::jmax(1, juce::roundToInt(2.0f * uiScale)));
+    g.setColour(fg);
     const int marker = juce::jmax(juce::roundToInt(8.0f * uiScale), height / 5);
     g.fillRect(width - marker - juce::roundToInt(10.0f * uiScale), (height - marker) / 2, marker, marker);
 }
@@ -273,9 +286,7 @@ void LookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int width, i
     const float proportion = (float)slider.valueToProportionOfLength(slider.getValue());
     juce::Rectangle<float> fill;
     auto inner = r.reduced(4.0f * uiScale);
-    if (slider.getName() == "OUTPUT_HDR")
-        fill = inner.withTop(inner.getBottom() - inner.getHeight() * proportion);
-    else if (slider.getName() == "PLACEMENT")
+    if (slider.getName() == "OUTPUT_HDR" || slider.getName() == "PLACEMENT")
     {
         const float centre = inner.getCentreX();
         const float marker = inner.getX() + inner.getWidth() * proportion;

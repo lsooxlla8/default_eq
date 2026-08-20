@@ -219,7 +219,7 @@ private:
     std::atomic<int>  fifoWriteIndex { 0 };
     std::atomic<int>  midSlot        { 1 };
     std::atomic<bool> fresh          { false };
-    std::atomic<int> resolutionIndex { 1 };
+    std::atomic<int> resolutionIndex { 2 };
     int samplesSincePublish = 0;
     int currentBins = numBins;
 
