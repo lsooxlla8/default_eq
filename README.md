@@ -5,7 +5,7 @@
 **default_eq8** is designed to be your go-to EQ for shaping, balancing, and
 dynamically controlling audio.
 
-Built around eight fully independent bands, it combines parametric and dynamic EQ, per-band saturation, Linear Phase processing, variable filter slopes, two Auto Gain modes, Match EQ, and a real-time spectrum analyzer in a compact, modern interface.
+Built around eight fully independent bands, it combines parametric and dynamic EQ, per-band saturation, Linear Phase processing, two Auto Gain modes, Match EQ, and a real-time spectrum analyzer in a compact, modern interface.
 
 Most editing happens directly on the analyzer:
 
