@@ -23,16 +23,6 @@ There is deliberately no internal preset system. Plugin state is handled
 through the host, with complete project recall, versioned state, and Undo/Redo
 support.
 
-## Downloads
-
-Release packages are available for:
-
-* **macOS:** AU, VST3, Standalone
-* **Windows:** VST3, Standalone
-* **Linux:** VST3, Standalone
-
-See [GitHub Releases](https://github.com/lsooxlla8/default_equalizer/releases).
-
 ## Thanks and third-party code
 
 * [FreeEQ8](https://github.com/GareBear99/FreeEQ8) by GareBear99, providing the
