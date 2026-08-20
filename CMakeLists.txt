@@ -128,6 +128,12 @@ if (DEFAULT_EQUALIZER_BUILD_TESTS)
     target_link_libraries(DefaultEqualizer_DspIntegration PRIVATE DefaultEqualizer juce::juce_audio_utils juce::juce_dsp)
     target_compile_definitions(DefaultEqualizer_DspIntegration PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    if (MSVC)
+        # The processor deliberately owns large fixed DSP workspaces. Plugin
+        # hosts instantiate it on the heap, while this integration runner uses
+        # scoped instances and therefore needs more than Windows' 1 MiB default.
+        target_link_options(DefaultEqualizer_DspIntegration PRIVATE "/STACK:33554432")
+    endif()
 
     add_test(NAME biquad COMMAND DefaultEqualizer_Tests)
     add_test(NAME shelf_nan_sweep COMMAND DefaultEqualizer_ShelfNaNSweep)
