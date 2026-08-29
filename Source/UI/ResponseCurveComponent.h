@@ -35,6 +35,11 @@ public:
     void pushSpectrumData(const float* magnitudes, int numBins, double sampleRate, bool input);
 
     int getSelectedBand() const { return selectedBand; }
+    const std::array<bool, kNumBands>& getSelection() const noexcept { return selection; }
+    int getSelectionCount() const noexcept
+    { return (int)std::count(selection.begin(), selection.end(), true); }
+    bool isBandSelected(int band) const noexcept
+    { return band >= 0 && band < kNumBands && selection[(size_t)band]; }
     void setSelectedBand(int band);
     void setDarkMode(bool shouldBeDark) { darkMode = shouldBeDark; repaint(); }
     void setAnalyzerSources(bool input, bool output) { showInputSpectrum = input; showOutputSpectrum = output; repaint(); }
@@ -63,7 +68,8 @@ public:
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
     static int defaultTypeForNewBand(float frequencyHz, float gainDb) noexcept;
-    static bool typeDefaultsToMidSide(int type) noexcept { return type >= 1 && type <= 4; }
+    static int shiftClickTypeForNewBand(float frequencyHz, float gainDb) noexcept;
+    static bool typeDefaultsToMidSide(int) noexcept { return false; }
     static float analyzerLevelToY(float db, float floorDb, float rangeDb, float height) noexcept
     {
         const float ceiling = floorDb + std::max(1.0f, rangeDb);
@@ -71,12 +77,17 @@ public:
                                              floorDb, ceiling, 0.0f, 1.0f);
         return height * (1.0f - normalized);
     }
-    static bool isCutType(int type) noexcept { return type == 3 || type == 4; }
-    static bool usesQVerticalDrag(int type) noexcept { return type >= 3 && type <= 6; }
+    static bool isCutType(int type) noexcept { return type == 0 || type == 1 || type == 8 || type == 9; }
+    static bool isClassicCutType(int type) noexcept { return type == 8 || type == 9; }
+    static bool usesQVerticalDrag(int type) noexcept { return isCutType(type) || type == 2 || type == 4; }
+    static bool usesGainVerticalDrag(int type) noexcept { return !usesQVerticalDrag(type); }
     static float cutQFromVerticalDrag(float startQ, float deltaY) noexcept
     {
         return std::clamp(startQ * std::pow(2.0f, -deltaY / 80.0f), 0.1f, 24.0f);
     }
+    static bool marqueeContains(juce::Rectangle<float> marquee,
+                                juce::Point<float> point) noexcept
+    { return marquee.getSmallestIntegerContainer().contains(point.roundToInt()); }
 
 private:
     DefaultEqualizerAudioProcessor& proc;
@@ -100,12 +111,19 @@ private:
     // Draggable nodes
     int selectedBand = -1;   // Currently selected band (-1 = none)
     int hoveredBand = -1;    // Band under cursor
+    int hoverCardBand = -1;
+    int hoverCardPlacement = -1;
     bool dragging = false;
     bool driveDragging = false;
     bool thresholdDragging = false;
+    bool dynamicRangeDragging = false;
     bool commandGesturePending = false;
     bool shiftGesturePending = false;
     bool momentarySoloActive = false;
+    bool marqueePending = false;
+    bool marqueeDragging = false;
+    bool marqueeCreatesShiftFilterOnClick = false;
+    juce::Point<float> marqueeStart, marqueeCurrent;
     int modifierGestureBand = -1;
     int mostRecentlyCreatedBand = -1;
     std::int64_t mostRecentCreationTimeMs = 0;
@@ -116,6 +134,8 @@ private:
     std::array<juce::RangedAudioParameter*, kNumBands> dragFreqParams {}, dragGainParams {}, dragQParams {};
     std::array<juce::RangedAudioParameter*, kNumBands> dragDriveParams {};
     std::array<juce::RangedAudioParameter*, kNumBands> dragThresholdParams {};
+    juce::RangedAudioParameter* dynamicRangeDragParam = nullptr;
+    float dynamicRangeDragBaseGain = 0.0f;
     float groupAnchorFreq = 1000.0f, groupAnchorGain = 0.0f;
     float displayMaxDb = 12.0f;
     bool rangeExpansionAvailable = true;
@@ -127,6 +147,8 @@ private:
     // Coordinate mapping
     float freqToX(float freqHz) const;
     float xToFreq(float x) const;
+    float displayedBandFrequency(float baseFrequency) const;
+    float baseBandFrequency(float displayedFrequency) const;
     float dbToY(float db) const;
     float yToDb(float y) const;
 
@@ -139,19 +161,21 @@ private:
     // Paint helpers
     void paintGrid(juce::Graphics& g);
     void paintSpectrum(juce::Graphics& g);
-    void paintMatchPreview(juce::Graphics& g);
     void paintResponseCurve(juce::Graphics& g);
     void paintBandCurves(juce::Graphics& g);
     void paintNodes(juce::Graphics& g);
     void paintHoverCard(juce::Graphics& g);
-#if DEFAULT_EQUALIZER_FULL
+    void paintMarquee(juce::Graphics& g);
+#if DEFAULT_EQ_FULL
     void paintCollisionWarnings(juce::Graphics& g);
 #endif
 
     // Hit test for band nodes
     int hitTestNode(float x, float y) const;
-    int createBandAt(float x, float y, std::int64_t eventTimeMs);
+    int createBandAt(float x, float y, std::int64_t eventTimeMs, int forcedType = -1);
+    juce::Rectangle<float> dynamicRangeHandleBounds() const;
     void beginStaticBandDrag(int band, bool beginUndoTransaction);
+    void updateMarqueeSelection();
     void showNumericEditor(int band, const juce::String& suffix, float x, float y);
     void commitNumericEditor();
     juce::TextEditor numericEditor;

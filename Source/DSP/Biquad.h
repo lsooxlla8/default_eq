@@ -11,10 +11,51 @@ struct Biquad
     // Transposed Direct Form II
     double b0=1, b1=0, b2=0, a1=0, a2=0;
     double z1L=0, z2L=0, z1R=0, z2R=0;
+    double targetB0=1, targetB1=0, targetB2=0, targetA1=0, targetA2=0;
+    double stepB0=0, stepB1=0, stepB2=0, stepA1=0, stepA2=0;
+    int coefficientRampRemaining = 0;
 
     void reset()
     {
         z1L = z2L = z1R = z2R = 0.0;
+        coefficientRampRemaining = 0;
+        targetB0 = b0; targetB1 = b1; targetB2 = b2;
+        targetA1 = a1; targetA2 = a2;
+        stepB0 = stepB1 = stepB2 = stepA1 = stepA2 = 0.0;
+    }
+
+    void setCoefficients(double newB0, double newB1, double newB2,
+                         double newA1, double newA2, int rampSamples = 0) noexcept
+    {
+        targetB0 = newB0; targetB1 = newB1; targetB2 = newB2;
+        targetA1 = newA1; targetA2 = newA2;
+        coefficientRampRemaining = std::max(0, rampSamples);
+        if (coefficientRampRemaining == 0)
+        {
+            b0 = targetB0; b1 = targetB1; b2 = targetB2;
+            a1 = targetA1; a2 = targetA2;
+            stepB0 = stepB1 = stepB2 = stepA1 = stepA2 = 0.0;
+            return;
+        }
+        const double inverse = 1.0 / (double)coefficientRampRemaining;
+        stepB0 = (targetB0 - b0) * inverse;
+        stepB1 = (targetB1 - b1) * inverse;
+        stepB2 = (targetB2 - b2) * inverse;
+        stepA1 = (targetA1 - a1) * inverse;
+        stepA2 = (targetA2 - a2) * inverse;
+    }
+
+    void advanceCoefficientRamp() noexcept
+    {
+        if (coefficientRampRemaining <= 0) return;
+        if (--coefficientRampRemaining == 0)
+        {
+            b0 = targetB0; b1 = targetB1; b2 = targetB2;
+            a1 = targetA1; a2 = targetA2;
+            return;
+        }
+        b0 += stepB0; b1 += stepB1; b2 += stepB2;
+        a1 += stepA1; a2 += stepA2;
     }
 
     inline float processL(float x)
@@ -33,7 +74,8 @@ struct Biquad
         return (float)y;
     }
 
-    enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch, Tilt };
+    enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch, Tilt,
+                      ResHighPass, ResLowPass };
 
     // Matched/de-cramped second-order designs adapted from Dario Sanfilippo's
     // MIT-licensed Faust vaeffects.lib implementation of Martin Vicanek's
@@ -223,6 +265,7 @@ struct Biquad
                 a2_ = 1.0 - alpha / A;
             } break;
 
+            case Type::ResLowPass:
             case Type::LowPass:
             {
                 b0_ = (1.0 - cosw0) * 0.5;
@@ -233,6 +276,7 @@ struct Biquad
                 a2_ = 1.0 - alpha;
             } break;
 
+            case Type::ResHighPass:
             case Type::HighPass:
             {
                 b0_ = (1.0 + cosw0) * 0.5;

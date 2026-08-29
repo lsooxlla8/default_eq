@@ -573,60 +573,7 @@ static void bench_spectrum_fifo()
            "16 x 4096-sample frames, single producer");
 }
 
-// --- 12. MatchEQ correction gains — pre-computed vs naive pow() --------------
-
-static void bench_match_eq_correction()
-{
-    constexpr int NUM_BINS = 2048;
-    constexpr int BLOCK = 512;
-    constexpr int TRIALS_OUTER = 256; // total blocks to process
-
-    // Correction curve (static once computed)
-    std::array<float, NUM_BINS> corrDb;
-    std::array<float, NUM_BINS> corrGain; // pre-computed
-    for (int i = 0; i < NUM_BINS; ++i)
-    {
-        corrDb[i]   = (std::sin(i * 0.01f) * 12.0f); // ±12 dB shaped curve
-        corrGain[i] = std::pow(10.0f, corrDb[i] / 20.0f);
-    }
-
-    // Naive: pow(10) per bin per block (old behaviour)
-    auto naive_fn = [&]() {
-        volatile float acc = 0.0f;
-        for (int blk = 0; blk < TRIALS_OUTER; ++blk)
-        {
-            acc += std::pow(10.0f, corrDb[0] / 20.0f);
-            acc += std::pow(10.0f, corrDb[NUM_BINS - 1] / 20.0f);
-            for (int i = 1; i < NUM_BINS; ++i)
-                acc += std::pow(10.0f, corrDb[i] / 20.0f);
-        }
-        (void)acc;
-    };
-
-    // Fixed: table lookup (v2.2.1)
-    auto fixed_fn = [&]() {
-        volatile float acc = 0.0f;
-        for (int blk = 0; blk < TRIALS_OUTER; ++blk)
-        {
-            acc += corrGain[0];
-            acc += corrGain[NUM_BINS - 1];
-            for (int i = 1; i < NUM_BINS; ++i)
-                acc += corrGain[i];
-        }
-        (void)acc;
-    };
-
-    int total = NUM_BINS * TRIALS_OUTER;
-    double ns_naive = bench_ns_per_sample(naive_fn, total);
-    double ns_fixed = bench_ns_per_sample(fixed_fn, total);
-
-    record("MatchEQ gain lookup (naive pow)", "OLD: pow(10) per bin per block", ns_naive,
-           "baseline — eliminated in v2.2.1");
-    record("MatchEQ gain lookup (v2.2.1)",    "NEW: pre-computed table lookup", ns_fixed,
-           [&](){ static char buf[32]; std::snprintf(buf,sizeof(buf),"%dx speedup vs naive",(int)std::round(ns_naive/ns_fixed)); return buf; }());
-}
-
-// --- 13. LinearPhaseEngine — FIR kernel build cost ---------------------------
+// --- 12. LinearPhaseEngine — FIR kernel build cost ---------------------------
 
 static void bench_linear_phase_rebuild()
 {
@@ -1318,7 +1265,6 @@ int main(int argc, char** argv)
     bench_adaptive_q();
     bench_saturation();
     bench_spectrum_fifo();
-    bench_match_eq_correction();
     bench_linear_phase_rebuild();
     bench_biquad_set();
     verify_biquad_unity();

@@ -1,4 +1,4 @@
-name: default_equalizer Tester Feedback
+name: default_eq Tester Feedback
 description: Report DAW compatibility, bugs, crashes, UI issues, or sound/workflow feedback.
 title: "[Tester Feedback]: "
 labels: ["tester-feedback", "needs-triage"]
@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for testing default_equalizer. Please include your DAW, OS, plug-in format, and what happened.
+        Thanks for testing default_eq. Please include your DAW, OS, plug-in format, and what happened.
 
   - type: input
     id: os
@@ -68,7 +68,7 @@ body:
       label: Steps to reproduce
       placeholder: |
         1. Open DAW
-        2. Load default_equalizer
+        2. Load default_eq
         3. Change...
         4. Result...
     validations:

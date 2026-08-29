@@ -5,11 +5,12 @@
 #include "DSP/EQBand.h"
 #include "DSP/SpectrumFIFO.h"
 #include "DSP/LinearPhaseEngine.h"
-#include "DSP/MatchEQ.h"
 #include "DSP/GlobalBypass.h"
+#include "DSP/TransientSplitter.h"
 #include <array>
 #include <atomic>
 #include <memory>
+#include <utility>
 
 class DefaultEqualizerAudioProcessor : public juce::AudioProcessor,
                                public juce::AudioProcessorValueTreeState::Listener
@@ -63,14 +64,10 @@ public:
     // Linear phase engine (public for UI to check state)
     LinearPhaseEngine linearPhaseEngine;
 
-    // Match EQ (public for UI capture/match control)
-    MatchEQ matchEQ;
-    std::atomic<bool> matchUseSidechain { false }; // transient editor choice; never serialized
-
     // ── Auto-gain bypass ───────────────────────────────────────────
     std::atomic<float> autoGainCompDb { 0.0f }; // smoothed compensation in dB
-    std::atomic<int> sidechainAuditionBand { -1 }; // transient UI action; never serialized
     std::atomic<int> soloBand { -1 }; // transient UI action; never serialized
+    std::atomic<int> uiMeterBand { -1 }; // selected editor band; avoids idle detector work
     std::atomic<bool> smartAutoGainLocked { false };
     std::atomic<float> smartAutoGainProgress { 0.0f };
     std::atomic<std::uint64_t> transportStartGeneration { 0 };
@@ -84,6 +81,22 @@ public:
         return index >= 0 && index < kNumBands
             ? bandDynamicGainDb[(size_t) index].load(std::memory_order_relaxed) : 0.0f;
     }
+    std::pair<float, float> getBandDetectorLevelsDb(int index) const noexcept
+    {
+        if (index < 0 || index >= kNumBands) return { -60.0f, -60.0f };
+        return { bandDetectorLevelDbL[(size_t)index].load(std::memory_order_relaxed),
+                 bandDetectorLevelDbR[(size_t)index].load(std::memory_order_relaxed) };
+    }
+    float getBandDetectorLevelDb(int index) const noexcept
+    {
+        const auto levels = getBandDetectorLevelsDb(index);
+        return std::max(levels.first, levels.second);
+    }
+    static std::pair<float, float> dynamicsTimingForSpeed(float speed) noexcept;
+    static float frequencyShiftRatio(float semitones) noexcept
+    { return std::pow(2.0f, semitones / 12.0f); }
+    static float shiftedFrequency(float baseFrequency, float semitones) noexcept
+    { return baseFrequency * frequencyShiftRatio(semitones); }
     static float calculateAdaptiveQ(float baseQ, float gainDb) noexcept
     {
         return std::clamp(baseQ * (1.0f + std::abs(gainDb) * 0.12f), 0.1f, 24.0f);
@@ -110,38 +123,69 @@ private:
         std::atomic<float>* dynMode = nullptr; std::atomic<float>* scSource = nullptr;
         std::atomic<float>* dynLookahead = nullptr; std::atomic<float>* dynThresh = nullptr;
         std::atomic<float>* dynRange = nullptr; std::atomic<float>* dynRatio = nullptr;
-        std::atomic<float>* dynAttack = nullptr; std::atomic<float>* dynRelease = nullptr;
+        std::atomic<float>* dynSpeed = nullptr;
     };
     std::array<BandParameterPointers, kNumBands> bandParams {};
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* amountParam = nullptr;
+    std::atomic<float>* shiftParam = nullptr;
     std::atomic<float>* adaptiveQParam = nullptr;
     std::atomic<float>* linearPhaseParam = nullptr;
     std::atomic<float>* linearQualityParam = nullptr;
     std::atomic<float>* oversamplingParam = nullptr;
     std::atomic<float>* autoGainModeParam = nullptr;
     std::atomic<float>* pluginEnabledParam = nullptr;
+    std::atomic<float>* transientStrengthParam = nullptr;
+    std::atomic<float>* transientBalanceParam = nullptr;
+    std::atomic<float>* transientHoldParam = nullptr;
+    std::atomic<float>* transientSmoothParam = nullptr;
     void cacheParameterPointers();
     std::atomic<bool> analyzerEnabled { false };
     bool transportWasPlaying = false; // audio-thread owned
 
     std::array<EQBand, kNumBands> bands;
+    std::array<EQBand, kNumBands> transientBands, sustainBands;
+    TransientSplitter transientSplitter;
+    TransientSplitter internalDetectorTransientSplitter, externalDetectorTransientSplitter;
+    juce::AudioBuffer<float> transientBuffer, sustainBuffer;
+    juce::AudioBuffer<float> internalDetectorTransientBuffer, internalDetectorSustainBuffer;
+    juce::AudioBuffer<float> externalDetectorTransientBuffer, externalDetectorSustainBuffer;
+    juce::AudioBuffer<float> externalDetectorInputBuffer;
+    std::array<juce::AudioBuffer<float>, kNumBands> internalBandDetectorBuffers;
+    std::array<juce::AudioBuffer<float>, kNumBands> externalBandDetectorBuffers;
     GlobalBypass globalBypass;
     double sr = 44100.0;
     int maxBlockSize = 512;
     static constexpr double lookaheadSeconds = 0.005;
-    juce::AudioBuffer<float> lookaheadDelayBuffer, detectorInputBuffer;
+    juce::AudioBuffer<float> lookaheadDelayBuffer, externalLookaheadDelayBuffer, detectorInputBuffer;
+    juce::AudioBuffer<float> internalTSDetectorDelayBuffer, externalTSDetectorDelayBuffer;
     int lookaheadWritePosition = 0;
+    int tsDetectorLookaheadWritePosition = 0;
+    bool transientRoutingWasActive = false;
+    bool externalTSDetectorWasActive = false;
+    int externalTSDetectorWarmupSamplesRemaining = 0;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> externalTSDetectorMix;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> lookaheadMix;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> latencyTransitionGain;
     int processedLatency = 0;
     bool latencyFadingOut = false;
     std::array<std::atomic<float>, kNumBands> bandDynamicGainDb {};
+    std::array<std::atomic<float>, kNumBands> bandDetectorLevelDbL {}, bandDetectorLevelDbR {};
+    std::atomic<bool> regularAutoGainDirty { true };
+    float regularTargetCompDb = 0.0f;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> autoGainLinearSm;
     double smartInputEnergy = 0.0, smartOutputEnergy = 0.0;
+    float smartInputPeak = 0.0f, smartOutputPeak = 0.0f;
     int64_t smartEnergySamples = 0;
+    int64_t smartWarmupSamplesRemaining = 0;
     std::uint64_t smartParameterSignature = 0;
-    void applyLookaheadDelay(juce::AudioBuffer<float>&, int delaySamples) noexcept;
+    float smartTargetCompDb = 0.0f;
+    juce::AudioBuffer<float> smartReferenceDelayBuffer;
+    int smartReferenceDelayPosition = 0;
+    void routeLookahead(juce::AudioBuffer<float>&, const float* sidechainL,
+                        const float* sidechainR, int maximumDelaySamples) noexcept;
     int requestedLookaheadSamples() const noexcept;
+    int requestedBandLookaheadSamples(int index, int maximumDelaySamples) const noexcept;
 
     // ── Oversampling pool (A1) ────────────────────────────────────
     // All four orders (0=1x, 1=2x, 2=4x, 3=8x) are built in prepareToPlay;
@@ -150,6 +194,8 @@ private:
     // oversamplers[i] covers order (i+1); order 0 (1x) uses the direct path.
     static constexpr int kNumOversamplingOrders = 3;
     std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, kNumOversamplingOrders> oversamplers;
+    std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, kNumOversamplingOrders> transientOversamplers;
+    std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, kNumOversamplingOrders> sustainOversamplers;
     int currentOversamplingOrder = 0;
 
     // Pre-allocated buffer for buildLinearPhaseMagnitude (avoids heap alloc on audio thread)

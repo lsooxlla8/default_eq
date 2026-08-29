@@ -16,7 +16,7 @@ filters, dynamic processing, interaction, and UI. Original history is retained.
 ## default_distortion
 
 Reused author-owned family design, click-free latency-aligned bypass, Smart
-Auto Gain interaction, and the first ten user-facing drive algorithms/control
+Auto Gain interaction, and the retained user-facing drive algorithms/control
 semantics (Soft Clip through Sine Erosion):
 
 - repository: https://github.com/lsooxlla8/default_distortion
@@ -31,12 +31,11 @@ parameters, and integrated with equalizer latency reporting.
 
 ### Indirect drive-algorithm provenance
 
-`default_distortion` itself contains third-party-derived implementations. The
+`default_distortion` itself contains a third-party-derived implementation. The
 following provenance is retained here because the corresponding user-facing
-drive modes and control semantics reached `default_equalizer` through that
-project.
+drive modes reached `default_eq` through that project.
 
-#### Vital Soft Clip and Hard Clip lineage
+#### Vital Soft Clip lineage
 
 - repository: https://github.com/mtytel/vital
 - revision: `636ca0ef517a4db087a6a08a6a8a5e704e21f836`
@@ -46,33 +45,12 @@ project.
 - license: GNU GPL version 3 or later
 
 The referenced `default_distortion` revision contains scalar adaptations of
-Vital's Soft Clip, Hard Clip, and rational `futils::tanh`. In
-`default_equalizer`, the Soft Clip and Hard Clip modes were subsequently
-modified in `Source/DSP/EQBand.h`: they use the C++ standard-library
-`std::tanh`, a bounded cubic morph, and a conventional clamp. Vital's rational
-`futils::tanh` implementation is **not** present in this repository. The mode
-lineage is nevertheless disclosed, and the GPLv3 text is included at
-`LICENSES/GPL-3.0.txt`.
-
-#### CHOW Tape Model and BYOD hysteresis lineage
-
-- repositories: https://github.com/jatinchowdhury18/AnalogTapeModel and
-  https://github.com/Chowdhury-DSP/BYOD
-- revisions: `604372e4ffd9690c3e283362e4598cb43edbb475` and
-  `1cf22b6ac802b9dc33cfc9f8dd6af5b3c3e40bc9`
-- original files: `Plugin/Source/Processors/Hysteresis/HysteresisOps.h`,
-  `Plugin/Source/Processors/Hysteresis/HysteresisProcessing.*`,
-  `src/processors/drive/hysteresis/HysteresisOps.h`, and
-  `src/processors/drive/hysteresis/HysteresisProcessing.*`
-- copyright: Copyright (C) Jatin Chowdhury and CHOW/BYOD contributors
-- license: GNU GPL version 3
-
-The referenced `default_distortion` revision contains a scalar adaptation of
-the CHOW/BYOD Jiles-Atherton model. `default_equalizer` does **not** contain
-that numerical model: its `Tape Hysteresis` mode is a smaller feedback-memory
-waveshaper written for per-band operation, while retaining the inherited
-Drive/Hysteresis/Bias vocabulary. This indirect lineage is disclosed to avoid
-presenting the mode as wholly unrelated work. See `LICENSES/GPL-3.0.txt`.
+Vital's Soft Clip, Hard Clip, and rational `futils::tanh`. `default_eq` retains
+only the Soft Clip lineage, subsequently modified in `Source/DSP/EQBand.h` to
+use the C++ standard-library `std::tanh` and a bounded cubic morph. The Hard
+Clip mode and Vital's rational `futils::tanh` implementation are **not**
+present in this repository. The remaining mode lineage is nevertheless
+disclosed, and the GPLv3 text is included at `LICENSES/GPL-3.0.txt`.
 
 ## Faust vaeffects.lib matched filters
 
@@ -90,18 +68,41 @@ smooth upper-frequency-only RBJ/matched blend were added. See
 
 ## ZLEqualizer
 
-Analyzer FFT normalisation, fractional-octave linear-power smoothing and decay
-architecture were adapted; no names, logos or branded assets were copied:
+Analyzer FFT normalisation, fractional-octave linear-power smoothing, decay
+architecture, Ivantsov coefficient equations, discrete cascade design, Flat
+Tilt coefficient design and the selected-band dynamic-range interaction were
+adapted; no names, logos or branded assets were copied:
 
 - repository: https://github.com/ZL-Audio/ZLEqualizer
-- revision: `26b0ed14cbbac254344e37d872235ce349b79c26`
+- analyzer reference revision: `26b0ed14cbbac254344e37d872235ce349b79c26`
+- filter-design revision: `02c517e35f0ef8460c15815f303051dffdb0895a`
 - copyright: zsliu98 and contributors
 - license: GNU AGPL version 3
 
-Modified integration lives in `Source/DSP/SpectrumFIFO.h` and
+Modified integration lives in `Source/DSP/SpectrumFIFO.h`,
+`Source/DSP/ZLFilter.h`, `Source/DSP/EQBand.h` and
 `Source/UI/ResponseCurveComponent.cpp`: JUCE FFT replaces ZL's SIMD FFT,
 triple-buffer publication remains from this project's FreeEQ8-derived path,
-and the UI uses the default_* monochrome dual-spectrum presentation.
+the range handle is a square, and the UI uses the default_* monochrome
+dual-spectrum presentation.
+
+## ZLSplitter
+
+Transient/sustain separation is adapted from the upstream TSSplitter:
+
+- repository: https://github.com/ZL-Audio/ZLSplitter
+- revision: `2f50824ab925eeff7950986eac640dab43c3ce67`
+- files referenced: `source/dsp/splitter/ts_splitter/ts_splitter.hpp`,
+  `source/dsp/splitter/ts_splitter/median_filter.hpp`, and
+  `source/dsp/filter/fir_filter/fir_base.hpp`
+- copyright: zsliu98 and contributors
+- license: GNU AGPL version 3
+
+The adapted implementation is in `Source/DSP/TransientSplitter.h`. It retains
+the 75% overlap, Hann-window overlap-add, 5-bin/5-frame median mask, two-hop
+spectral delay and upstream parameter transforms. JUCE FFT replaces KFR, and
+the code is integrated as one shared stereo splitter feeding per-band T/S
+routes; no ZL branding or assets are included.
 
 ## JUCE
 
@@ -111,3 +112,7 @@ and the UI uses the default_* monochrome dual-spectrum presentation.
 
 The upstream FreeEQ8 JUCE 7 revision was updated because it uses a CoreGraphics
 API unavailable in the installed macOS 15 SDK.
+
+The local patch at `patches/juce-popup-submenu-direction.patch` adds an
+explicit left/right preference for hover submenus. It changes only popup-menu
+placement and is applied automatically by CMake to a clean JUCE submodule.

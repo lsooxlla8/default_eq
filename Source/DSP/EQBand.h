@@ -1,7 +1,8 @@
 #pragma once
 #include <juce_dsp/juce_dsp.h>
 #include "Biquad.h"
-#include "VariableSlope.h"
+#include "FilterTypes.h"
+#include "ZLFilter.h"
 #include "../Config.h"
 #include <array>
 #include <memory>
@@ -9,14 +10,23 @@
 #include <vector>
 
 // Saturation / waveshaper modes retained and expanded from the FreeEQ8 base
-// and default_distortion. The latter has nested Vital and CHOW/BYOD lineage;
-// this file uses modified replacements rather than Vital's rational tanh or
-// the CHOW/BYOD Jiles-Atherton model. See THIRD_PARTY_NOTICES.md.
+// and default_distortion. Soft Clip has indirect Vital lineage but uses a
+// modified replacement rather than Vital's rational tanh. Other current
+// implementations are author-owned; see THIRD_PARTY_NOTICES.md.
 enum class SaturationType
 {
-    SoftClip = 0, HardClip, DiodeClipper, TriodeStage, TransistorFET,
-    TapeHysteresis, HarmonicMorph, PhaseDistortion, SpectralClip, SineErosion
+    SoftClip = 0, DiodeClipper, TriodeStage, FET,
+    Tape, OddEven, PhaseDistortion, SineErosion
 };
+
+inline constexpr int kSaturationModeCount = 8;
+
+inline bool saturationModeUsesBipolarCharacter(int mode) noexcept
+{
+    return mode == static_cast<int>(SaturationType::TriodeStage)
+        || mode == static_cast<int>(SaturationType::FET)
+        || mode == static_cast<int>(SaturationType::OddEven);
+}
 
 // EQBand with lightweight parameter smoothing and continuously morphed
 // variable-order responses.
@@ -25,17 +35,39 @@ struct EQBand
     struct FirstOrderCut
     {
         float b0 = 1.0f, b1 = 0.0f, a1 = 0.0f;
+        float targetB0 = 1.0f, targetB1 = 0.0f, targetA1 = 0.0f;
+        float stepB0 = 0.0f, stepB1 = 0.0f, stepA1 = 0.0f;
+        int coefficientRampRemaining = 0;
         float x1L = 0.0f, y1L = 0.0f, x1R = 0.0f, y1R = 0.0f;
-        void reset() { x1L = y1L = x1R = y1R = 0.0f; }
-        void set(bool highPass, double sampleRate, float frequency)
+        void reset()
+        {
+            x1L = y1L = x1R = y1R = 0.0f;
+            coefficientRampRemaining = 0;
+            targetB0 = b0; targetB1 = b1; targetA1 = a1;
+            stepB0 = stepB1 = stepA1 = 0.0f;
+        }
+        void set(bool highPass, double sampleRate, float frequency, int rampSamples = 0)
         {
             const float k = std::tan(juce::MathConstants<float>::pi
                                       * std::clamp(frequency, 5.0f, (float)sampleRate * 0.49f)
                                       / (float)sampleRate);
             const float norm = 1.0f / (1.0f + k);
-            if (highPass) { b0 = norm; b1 = -norm; }
-            else          { b0 = k * norm; b1 = b0; }
-            a1 = (k - 1.0f) * norm;
+            targetB0 = highPass ? norm : k * norm;
+            targetB1 = highPass ? -norm : targetB0;
+            targetA1 = (k - 1.0f) * norm;
+            coefficientRampRemaining = std::max(0, rampSamples);
+            if (coefficientRampRemaining == 0)
+            {
+                b0 = targetB0; b1 = targetB1; a1 = targetA1;
+                stepB0 = stepB1 = stepA1 = 0.0f;
+            }
+            else
+            {
+                const float inverse = 1.0f / (float)coefficientRampRemaining;
+                stepB0 = (targetB0 - b0) * inverse;
+                stepB1 = (targetB1 - b1) * inverse;
+                stepA1 = (targetA1 - a1) * inverse;
+            }
         }
         float process(float x, bool right)
         {
@@ -45,19 +77,19 @@ struct EQBand
             x1 = x; y1 = y;
             return y;
         }
-    };
-
-    struct CutOrderPath
-    {
-        FirstOrderCut firstOrder;
-        std::array<Biquad, 4> pairs;
-        int pairCount = 0;
-        bool hasFirstOrder = false;
-
-        void reset()
+        void advanceCoefficientRamp()
         {
-            firstOrder.reset();
-            for (auto& pair : pairs) pair.reset();
+            if (coefficientRampRemaining > 0)
+            {
+                if (--coefficientRampRemaining == 0)
+                {
+                    b0 = targetB0; b1 = targetB1; a1 = targetA1;
+                }
+                else
+                {
+                    b0 += stepB0; b1 += stepB1; a1 += stepA1;
+                }
+            }
         }
     };
 
@@ -68,7 +100,9 @@ struct EQBand
     float placement = 0.0f;
     float globalAmount = 1.0f;
     float gainScale = 1.0f;
+    float appliedGainScale = std::numeric_limits<float>::quiet_NaN();
     float driveGlobalAmount = 1.0f;
+    float routeEffectWeight = 1.0f;
 
     float freqHz = 1000.0f;
     float Q = 1.0f;
@@ -93,43 +127,33 @@ struct EQBand
     float dynRangeDb = 6.0f;
     bool dynUpward = false;
     bool useExternalSidechain = false;
-    bool detectorListen = false;
     float dynAttackMs = 10.0f;
     float dynReleaseMs = 100.0f;
     float envLevel = 0.0f;       // current envelope level (linear)
+    float detectorPeakL = 0.0f, detectorPeakR = 0.0f;
     float dynGainMod = 0.0f;     // current dynamic gain modulation in dB
-    float lastSidechainSample = 0.0f;
     float dynAttackCoeff = 1.0f;
     float dynReleaseCoeff = 1.0f;
     float cachedDynAttackMs = -1.0f;
     float cachedDynReleaseMs = -1.0f;
     double cachedDynSampleRate = 0.0;
 
-    // Four complete order paths stay live so slope morphing never activates a
-    // cold filter state or redistributes gain at an order boundary.
     float slopeDbPerOct = 12.0f;
+    float targetSlopeDbPerOct = 12.0f;
     bool decrampEnabled = false;
-    using OrderPaths = std::array<std::array<Biquad, variable_slope::maxOrder>, variable_slope::maxOrder>;
-    std::unique_ptr<OrderPaths> orderPaths { std::make_unique<OrderPaths>() };
-    std::array<CutOrderPath, 8> cutOrderPaths;
-    std::array<CutOrderPath, variable_slope::maxOrder> shapeLowerPaths;
-    std::array<CutOrderPath, variable_slope::maxOrder> shapeUpperPaths;
-    std::array<CutOrderPath, variable_slope::maxOrder> shapeLowerPaths2;
-    std::array<CutOrderPath, variable_slope::maxOrder> shapeUpperPaths2;
-    Biquad cutResonance;
-    Biquad shapeResonance;
-    float shapeGainLinear = 1.0f;
-    float shapeLowLinear = 1.0f;
-    float shapeHighLinear = 1.0f;
+    zl_filter::Cascade zlCascade;
+    static constexpr int maxClassicCutStages = 16;
+    std::array<FirstOrderCut, maxClassicCutStages> classicCutStages;
+    int classicCutFullStages = 2;
+    float classicCutFractionalStage = 0.0f;
+    bool classicCutCoefficientRamping = false;
 
     // Smoothers
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> freqSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> qSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> gainSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> slopeShapeSm;
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> cutAmountSm;
-    float currentSlopeShape = 1.0f;
-    float currentCutAmount = 2.0f;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> slopeSm;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> amountSm;
 
     // Coefficient update interval while smoothing (in samples)
     int coeffUpdateInterval = 16;
@@ -139,47 +163,44 @@ struct EQBand
 
     void reset(double sampleRate)
     {
-        for (auto& path : *orderPaths)
-            for (auto& bq : path)
-                bq.reset();
-        cutResonance.reset();
         scBiquad.reset();
         auditionBiquad.reset();
         driveBandBiquad.reset();
-        for (auto& cut : cutOrderPaths) cut.reset();
-        for (auto& path : shapeLowerPaths) path.reset();
-        for (auto& path : shapeUpperPaths) path.reset();
-        for (auto& path : shapeLowerPaths2) path.reset();
-        for (auto& path : shapeUpperPaths2) path.reset();
-        shapeResonance.reset();
+        zlCascade.reset();
+        for (auto& stage : classicCutStages) stage.reset();
 
         freqSm.reset(sampleRate, 0.02);   // 20ms
         qSm.reset(sampleRate, 0.02);
         gainSm.reset(sampleRate, 0.02);
-        slopeShapeSm.reset(sampleRate, 0.02);
-        cutAmountSm.reset(sampleRate, 0.02);
+        slopeSm.reset(sampleRate, 0.02);
+        amountSm.reset(sampleRate, 0.01);
 
         freqSm.setCurrentAndTargetValue(freqHz);
         qSm.setCurrentAndTargetValue(Q);
         gainSm.setCurrentAndTargetValue(gainDb);
-        currentSlopeShape = variable_slope::shapePosition(slopeDbPerOct);
-        currentCutAmount = variable_slope::cutStageAmount(slopeDbPerOct);
-        slopeShapeSm.setCurrentAndTargetValue(currentSlopeShape);
-        cutAmountSm.setCurrentAndTargetValue(currentCutAmount);
+        slopeSm.setCurrentAndTargetValue(slopeDbPerOct);
+        amountSm.setCurrentAndTargetValue(globalAmount);
 
         targetFreqHz = freqHz;
         targetQ = Q;
         targetGainDb = gainDb;
+        targetSlopeDbPerOct = slopeDbPerOct;
 
         envLevel = 0.0f;
+        detectorPeakL = detectorPeakR = 0.0f;
         dynGainMod = 0.0f;
         intervalCounter = 0;
         dynamicControlCounter = 0;
         coefficientsValid = false;
+        classicCutCoefficientRamping = false;
+        appliedGainScale = std::numeric_limits<float>::quiet_NaN();
         driveProcessSampleRate = 0.0;
         drivePreparedFrequency = drivePreparedQ = -1.0f;
         driveMemoryL = driveMemoryR = 0.0f;
         drivePhaseL = drivePhaseR = 0.0;
+        phaseEnvelopeL = phaseEnvelopeR = 0.0f;
+        phaseTailGainL = phaseTailGainR = 1.0f;
+        phaseSilenceSamplesL = phaseSilenceSamplesR = 0;
         driveDelayPosL = driveDelayPosR = 0;
         const size_t maximumDelay = (size_t)std::ceil(sampleRate * 8.0 * 0.05) + 2u;
         driveDelayL.assign(maximumDelay, 0.0f);
@@ -192,20 +213,39 @@ struct EQBand
                     float newPlacement = 0.0f,
                     bool useDecramping = false)
     {
-        const float clampedSlope = std::clamp(newSlopeDbPerOct, 3.0f, 48.0f);
+        const float clampedSlope = zl_filter::isClassicCut(newType)
+            ? std::clamp(newSlopeDbPerOct, 3.0f, 96.0f)
+            : zl_filter::snapSlope(newType, newSlopeDbPerOct);
+        const bool newTypeIsClassicCut = zl_filter::isClassicCut(newType);
         const float clampedPlacement = std::clamp(newPlacement, -1.0f, 1.0f);
         const bool topologyChanged = !coefficientsValid || processSampleRate != sampleRate
-            || enabled != isEnabled || type != newType || slopeDbPerOct != clampedSlope
+            || enabled != isEnabled || type != newType
+            || (!newTypeIsClassicCut && slopeDbPerOct != clampedSlope)
             || decrampEnabled != useDecramping;
+        const bool gainScaleChanged = !std::isfinite(appliedGainScale)
+            || std::abs(appliedGainScale - gainScale) > 1.0e-6f;
         const bool auxiliaryChanged = topologyChanged || targetFreqHz != newFreqHz || targetQ != newQ;
         enabled = isEnabled;
+        detectorPeakL = detectorPeakR = 0.0f;
         type = newType;
-        slopeDbPerOct = clampedSlope;
-        slopeShapeSm.setTargetValue(variable_slope::shapePosition(slopeDbPerOct));
-        cutAmountSm.setTargetValue(variable_slope::cutStageAmount(slopeDbPerOct));
+        targetSlopeDbPerOct = clampedSlope;
+        if (!coefficientsValid || !newTypeIsClassicCut)
+        {
+            slopeDbPerOct = targetSlopeDbPerOct;
+            slopeSm.setCurrentAndTargetValue(slopeDbPerOct);
+        }
+        else if (slopeSm.getTargetValue() != targetSlopeDbPerOct)
+            slopeSm.setTargetValue(targetSlopeDbPerOct);
+        const float classicAmount = slopeDbPerOct / 6.0f;
+        classicCutFullStages = std::clamp((int)std::floor(classicAmount), 0, maxClassicCutStages);
+        classicCutFractionalStage = classicAmount - (float)classicCutFullStages;
         midSidePlacement = useMidSidePlacement;
         placement = clampedPlacement;
         decrampEnabled = useDecramping;
+        if (!coefficientsValid)
+            amountSm.setCurrentAndTargetValue(globalAmount);
+        else
+            amountSm.setTargetValue(globalAmount);
 
         targetFreqHz = newFreqHz;
         targetQ = newQ;
@@ -219,7 +259,7 @@ struct EQBand
         if (!enabled) return;
 
         updateDynamicTimeConstants(sampleRate);
-        if (topologyChanged || auxiliaryChanged || !coefficientsValid)
+        if (topologyChanged || auxiliaryChanged || gainScaleChanged || !coefficientsValid)
         {
             if (!coefficientsValid)
             {
@@ -229,6 +269,7 @@ struct EQBand
             }
             setAllStages(sampleRate, true);
             coefficientsValid = true;
+            appliedGainScale = gainScale;
         }
 
     }
@@ -238,7 +279,8 @@ struct EQBand
         if (!enabled) return;
 
         // Force periodic coefficient updates when dynamic EQ is active (dynGainMod changes per-sample)
-        if (dynEnabled || freqSm.isSmoothing() || qSm.isSmoothing() || gainSm.isSmoothing())
+        if (dynEnabled || freqSm.isSmoothing() || qSm.isSmoothing()
+            || gainSm.isSmoothing() || slopeSm.isSmoothing())
         {
             if (intervalCounter++ >= coeffUpdateInterval)
             {
@@ -246,14 +288,18 @@ struct EQBand
                 freqHz = freqSm.getNextValue();
                 Q      = qSm.getNextValue();
                 gainDb = gainSm.getNextValue();
+                slopeDbPerOct = slopeSm.getNextValue();
                 const bool movingFrequencyOrQ = freqSm.isSmoothing() || qSm.isSmoothing();
-                setAllStages(sampleRate, movingFrequencyOrQ);
+                const bool dynamicallyMovingQ = dynEnabled
+                    && (zl_filter::isResonantCut(type) || type == Biquad::Type::Bandpass);
+                setAllStages(sampleRate, movingFrequencyOrQ || dynamicallyMovingQ);
             }
             else
             {
                 (void)freqSm.getNextValue();
                 (void)qSm.getNextValue();
                 (void)gainSm.getNextValue();
+                (void)slopeSm.getNextValue();
             }
         }
     }
@@ -261,23 +307,43 @@ struct EQBand
     // Update dynamic EQ envelope from the input signal (call per sample, before process).
     inline void updateDynamicEnvelope(float l, float r, double sampleRate)
     {
-        if (!enabled || (!dynEnabled && !detectorListen))
+        if (!enabled)
         {
             dynGainMod = 0.0f;
-            lastSidechainSample = 0.0f;
             return;
         }
 
-        // Sidechain: bandpass-filter the input at the band frequency
-        const float scMono = (l + r) * 0.5f;
-        const float scFiltered = scBiquad.processL(scMono);
-        lastSidechainSample = scFiltered;
+        // Route the detector through the same domain and placement as the
+        // audio path. At the centre both components remain fully linked; the
+        // endpoints listen exclusively to L/R or M/S respectively.
+        const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
+        const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
+        float first = l;
+        float second = r;
+        if (midSidePlacement)
+        {
+            // Detector calibration uses the conventional -6 dB matrix so a
+            // mono signal reads the same at centre-L/R and full-Mid (and an
+            // anti-phase signal reads the same at centre-L/R and full-Side).
+            // The audible M/S matrix remains energy-preserving.
+            first = (l + r) * 0.5f;
+            second = (l - r) * 0.5f;
+        }
+
+        // Sidechain: bandpass-filter the routed input at the band frequency.
+        // Weighting before the filters also keeps the stereo meter honest:
+        // an unselected component reads silence rather than showing a source
+        // that cannot trigger this band.
+        const float scFilteredL = scBiquad.processL(first * firstWeight);
+        const float scFilteredR = scBiquad.processR(second * secondWeight);
+        detectorPeakL = std::max(detectorPeakL, std::abs(scFilteredL));
+        detectorPeakR = std::max(detectorPeakR, std::abs(scFilteredR));
         if (!dynEnabled)
         {
             dynGainMod = 0.0f;
             return;
         }
-        const float rectified = std::abs(scFiltered);
+        const float rectified = std::max(std::abs(scFilteredL), std::abs(scFilteredR));
 
         if (rectified > envLevel)
             envLevel += dynAttackCoeff * (rectified - envLevel);
@@ -318,23 +384,22 @@ struct EQBand
     inline void processEqualizer(float& l, float& r)
     {
         if (!enabled) return;
-        currentSlopeShape = slopeShapeSm.getNextValue();
-        currentCutAmount = cutAmountSm.getNextValue();
+        const float wetAmount = amountSm.getNextValue();
         const float firstWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
         const float secondWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
         if (!midSidePlacement)
         {
             const float dryL = l, dryR = r;
-            l += globalAmount * firstWeight * (processLeft(dryL) - dryL);
-            r += globalAmount * secondWeight * (processRight(dryR) - dryR);
+            l += routeEffectWeight * wetAmount * firstWeight * (processLeft(dryL) - dryL);
+            r += routeEffectWeight * wetAmount * secondWeight * (processRight(dryR) - dryR);
         }
         else
         {
             constexpr float invSqrt2 = 0.7071067811865475f;
             const float dryMid = (l + r) * invSqrt2;
             const float drySide = (l - r) * invSqrt2;
-            const float mid = dryMid + globalAmount * firstWeight * (processLeft(dryMid) - dryMid);
-            const float side = drySide + globalAmount * secondWeight * (processRight(drySide) - drySide);
+            const float mid = dryMid + routeEffectWeight * wetAmount * firstWeight * (processLeft(dryMid) - dryMid);
+            const float side = drySide + routeEffectWeight * wetAmount * secondWeight * (processRight(drySide) - drySide);
             l = (mid + side) * invSqrt2;
             r = (mid - side) * invSqrt2;
         }
@@ -343,10 +408,42 @@ struct EQBand
     inline void processDrive(float& l, float& r)
     {
         if (enabled && driveAmount > 0.0f)
-            applySpectralDrive(l, r);
+            applyBandDrive(l, r);
     }
 
     bool driveActive() const noexcept { return enabled && driveAmount > 0.0f; }
+
+    static float dynamicClassicCutSlope(float baseSlope, float dynamicModDb) noexcept
+    {
+        return std::clamp(baseSlope - dynamicModDb * 6.0f, 3.0f, 96.0f);
+    }
+
+    static float dynamicResonantCutQ(float baseQ, float dynamicModDb) noexcept
+    {
+        return std::clamp(baseQ * std::pow(2.0f, dynamicModDb / 6.0f), 0.1f, 24.0f);
+    }
+
+    static float amountResonantCutQ(float baseQ, float amount) noexcept
+    {
+        const float strength = std::clamp(amount, 0.0f, 1.0f);
+        return deq::filter_types::resonantCutDefaultQ
+            + (baseQ - deq::filter_types::resonantCutDefaultQ) * strength;
+    }
+
+    static float cutAmountMix(float amount) noexcept
+    {
+        // The cutoff itself already moves towards a neutral edge as Amount
+        // approaches zero. This short smooth easing makes the final
+        // few percent converge to an exact dry signal instead of hard-bypassing
+        // the filter between the 1% and 0% parameter steps.
+        const float x = std::clamp(amount / 0.05f, 0.0f, 1.0f);
+        return x * x * (3.0f - 2.0f * x);
+    }
+
+    static float dynamicBandPassQ(float baseQ, float dynamicModDb) noexcept
+    {
+        return std::clamp(baseQ * std::pow(2.0f, -dynamicModDb / 6.0f), 0.1f, 24.0f);
+    }
 
     void prepareDriveRate(double sampleRate)
     {
@@ -383,48 +480,14 @@ struct EQBand
 
     inline float processLeft(float x)
     {
-        if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
-            return processCut(x, false);
-        if (type == Biquad::Type::LowShelf || type == Biquad::Type::HighShelf
-            || type == Biquad::Type::Tilt)
-            return processShape(x, false);
-        const int low = std::clamp((int)std::floor(currentSlopeShape), 1, variable_slope::maxOrder);
-        const int high = std::min(variable_slope::maxOrder, low + 1);
-        const float mix = high == low ? 0.0f : currentSlopeShape - (float)low;
-        const auto processPath = [this, x](int order)
-        {
-            float path = x;
-            for (int stage = 0; stage < order; ++stage)
-                path = (*orderPaths)[(size_t)(order - 1)][(size_t)stage].processL(path);
-            return path;
-        };
-        const float lowOutput = processPath(low);
-        if (mix <= 0.0001f) return lowOutput;
-        const float highOutput = processPath(high);
-        return lowOutput + mix * (highOutput - lowOutput);
+        if (zl_filter::isClassicCut(type)) return processClassicCut(x, false);
+        return zlCascade.processL(x);
     }
 
     inline float processRight(float x)
     {
-        if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
-            return processCut(x, true);
-        if (type == Biquad::Type::LowShelf || type == Biquad::Type::HighShelf
-            || type == Biquad::Type::Tilt)
-            return processShape(x, true);
-        const int low = std::clamp((int)std::floor(currentSlopeShape), 1, variable_slope::maxOrder);
-        const int high = std::min(variable_slope::maxOrder, low + 1);
-        const float mix = high == low ? 0.0f : currentSlopeShape - (float)low;
-        const auto processPath = [this, x](int order)
-        {
-            float path = x;
-            for (int stage = 0; stage < order; ++stage)
-                path = (*orderPaths)[(size_t)(order - 1)][(size_t)stage].processR(path);
-            return path;
-        };
-        const float lowOutput = processPath(low);
-        if (mix <= 0.0001f) return lowOutput;
-        const float highOutput = processPath(high);
-        return lowOutput + mix * (highOutput - lowOutput);
+        if (zl_filter::isClassicCut(type)) return processClassicCut(x, true);
+        return zlCascade.processR(x);
     }
 
     inline float saturateOne(float x, bool rightState = false)
@@ -436,12 +499,11 @@ struct EQBand
         {
             case SaturationType::SoftClip:
             {
-                const float cubic = std::clamp(x * d - std::pow(x * d, 3.0f) / 3.0f,
-                                                -2.0f / 3.0f, 2.0f / 3.0f) * 1.5f;
+                const float cubicInput = std::clamp(x * d, -1.0f, 1.0f);
+                const float cubic = 1.5f * (cubicInput
+                    - cubicInput * cubicInput * cubicInput / 3.0f);
                 return juce::jmap(c, std::tanh(x * d), cubic);
             }
-            case SaturationType::HardClip:
-                return std::clamp(juce::jmap(c, x * d, std::tanh(x * d)), -1.0f, 1.0f);
             case SaturationType::DiodeClipper:
             {
                 const float driven = x * d;
@@ -457,14 +519,14 @@ struct EQBand
                 const float zero = std::tanh(1.08f * bias + 0.34f * bias * bias - 0.055f * bias * bias * bias);
                 return std::clamp((std::tanh(curve) - zero) / std::max(0.1f, 1.0f - std::abs(zero)), -1.0f, 1.0f);
             }
-            case SaturationType::TransistorFET:
+            case SaturationType::FET:
             {
                 const float gateBias = -0.12f + 1.18f * (c * 2.0f - 1.0f);
                 const float gate = std::max(0.0f, x * d + gateBias);
                 const float base = std::max(0.0f, gateBias);
                 return std::tanh(2.2f * (gate * gate - base * base) / (1.0f + 0.55f * std::abs(c * 2.0f - 1.0f)));
             }
-            case SaturationType::TapeHysteresis:
+            case SaturationType::Tape:
             {
                 // Stable stateful hysteresis loop using the same Drive /
                 // Hysteresis / Bias semantics as default_distortion.
@@ -473,7 +535,7 @@ struct EQBand
                 memory += (0.02f + 0.18f * (1.0f - c)) * (target - memory);
                 return 0.72f * target + 0.28f * memory;
             }
-            case SaturationType::HarmonicMorph:
+            case SaturationType::OddEven:
             {
                 const float bounded = std::tanh(x * d);
                 const float second = 2.0f * bounded * bounded - 1.0f;
@@ -481,17 +543,7 @@ struct EQBand
                 return juce::jmap(c, second, third);
             }
             case SaturationType::PhaseDistortion:
-                return processModulatedDelay(x, c, driveAmount, 0.0f, rightState);
-            case SaturationType::SpectralClip:
-            {
-                // Per-band magnitude shaper. The surrounding band extractor
-                // supplies the spectral isolation; Character controls knee.
-                const float threshold = juce::jmap(c, 0.9f, 0.08f);
-                const float driven = x * d;
-                const float mag = std::abs(driven);
-                const float clipped = threshold * std::tanh(mag / std::max(0.001f, threshold));
-                return std::copysign(clipped, driven);
-            }
+                return processPhaseDistortion(x, c, driveAmount, rightState);
             case SaturationType::SineErosion:
                 return processModulatedDelay(x, c, driveAmount, driveSecondary, rightState);
         }
@@ -530,6 +582,57 @@ private:
     double drivePhaseL = 0.0, drivePhaseR = 0.0;
     double driveProcessSampleRate = 0.0;
     float drivePreparedFrequency = -1.0f, drivePreparedQ = -1.0f;
+    float phaseEnvelopeL = 0.0f, phaseEnvelopeR = 0.0f;
+    float phaseTailGainL = 1.0f, phaseTailGainR = 1.0f;
+    int phaseSilenceSamplesL = 0, phaseSilenceSamplesR = 0;
+
+    inline float processPhaseDistortion(float x, float character, float depth,
+                                        bool rightState)
+    {
+        auto& delay = rightState ? driveDelayR : driveDelayL;
+        auto& pos = rightState ? driveDelayPosR : driveDelayPosL;
+        auto& envelope = rightState ? phaseEnvelopeR : phaseEnvelopeL;
+        auto& tailGain = rightState ? phaseTailGainR : phaseTailGainL;
+        auto& silenceSamples = rightState ? phaseSilenceSamplesR : phaseSilenceSamplesL;
+        const int delaySize = (int)delay.size();
+        if (delaySize < 2 || driveProcessSampleRate <= 0.0) return x;
+
+        const float c01 = std::clamp(character, 0.0f, 1.0f);
+        const float nyquistSafe = (float)std::max(40.0, 0.45 * driveProcessSampleRate);
+        const float toneHz = 40.0f * std::pow(nyquistSafe / 40.0f, c01);
+        const float toneCoefficient = c01 >= 0.999f ? 0.0f
+            : (float)std::exp(-juce::MathConstants<double>::twoPi * toneHz
+                             / driveProcessSampleRate);
+        envelope = (1.0f - toneCoefficient) * x + toneCoefficient * envelope;
+
+        const float boundedDepth = std::clamp(depth, 0.0f, 1.0f);
+        const float modulator = std::clamp(envelope, 0.0f, 1.0f);
+        const float delaySamples = std::clamp(0.001f * 50.0f * boundedDepth * modulator
+                                                * (float)driveProcessSampleRate,
+                                              0.0f, (float)(delaySize - 2));
+        delay[(size_t)pos] = x;
+        float readPosition = (float)pos - delaySamples;
+        while (readPosition < 0.0f) readPosition += (float)delaySize;
+        const int first = (int)std::floor(readPosition) % delaySize;
+        const int second = (first + 1) % delaySize;
+        const float delayed = juce::jmap(readPosition - (float)first,
+                                        delay[(size_t)first], delay[(size_t)second]);
+        pos = (pos + 1) % delaySize;
+
+        constexpr float silenceThreshold = 3.16227766e-5f;
+        const int silenceHold = std::max(8, juce::roundToInt(0.001 * driveProcessSampleRate));
+        if (std::abs(x) <= silenceThreshold)
+            ++silenceSamples;
+        else
+        {
+            silenceSamples = 0;
+            tailGain = 1.0f;
+        }
+        if (silenceSamples >= silenceHold)
+            tailGain = std::max(0.0f, tailGain
+                - (float)(1.0 / std::max(1.0, 0.006 * driveProcessSampleRate)));
+        return delayed * tailGain;
+    }
 
     inline float processModulatedDelay(float x, float character, float depth,
                                        float noiseMix, bool rightState)
@@ -541,6 +644,7 @@ private:
         const float frequency = character <= 0.5f
             ? 4000.0f * character * character
             : 1000.0f * std::pow(10.0f, 2.0f * character - 1.0f);
+        if (frequency <= 0.0f) return x;
         phase += juce::MathConstants<double>::twoPi * frequency / std::max(1.0, driveProcessSampleRate);
         if (phase >= juce::MathConstants<double>::twoPi) phase -= juce::MathConstants<double>::twoPi;
         memory = 0.97f * memory + 0.03f * std::sin((float)phase * 12.9898f + 78.233f);
@@ -560,81 +664,31 @@ private:
         return out;
     }
 
-    inline float processCut(float x, bool right)
+    // The v0.1.0 cut: identical first-order stages and a continuously wet/dry
+    // final stage. Q is deliberately absent from this path.
+    inline float processClassicCut(float x, bool right)
     {
-        const int lowOrder = std::clamp((int)std::floor(currentCutAmount), 1, 8);
-        const int highOrder = std::min(8, lowOrder + 1);
-        const float mix = highOrder == lowOrder ? 0.0f : currentCutAmount - (float)lowOrder;
-        const auto processPath = [this, x, right](int order)
+        if (!right && classicCutCoefficientRamping)
         {
-            auto& path = cutOrderPaths[(size_t)(order - 1)];
-            float y = path.hasFirstOrder ? path.firstOrder.process(x, right) : x;
-            for (int pair = 0; pair < path.pairCount; ++pair)
-                y = right ? path.pairs[(size_t)pair].processR(y)
-                          : path.pairs[(size_t)pair].processL(y);
-            return y;
-        };
-        const float low = processPath(lowOrder);
-        const float base = mix > 0.0001f
-            ? low + mix * (processPath(highOrder) - low) : low;
-        return right ? cutResonance.processR(base) : cutResonance.processL(base);
-    }
-
-    inline float processShapePath(CutOrderPath& path, float x, bool right)
-    {
-        float y = path.hasFirstOrder ? path.firstOrder.process(x, right) : x;
-        for (int pair = 0; pair < path.pairCount; ++pair)
-            y = right ? path.pairs[(size_t)pair].processR(y)
-                      : path.pairs[(size_t)pair].processL(y);
-        return y;
-    }
-
-    inline float processShape(float x, bool right)
-    {
-        const int lowOrder = std::clamp((int)std::lround(currentSlopeShape), 1,
-                                        variable_slope::maxOrder);
-        const int highOrder = lowOrder;
-        constexpr float mix = 0.0f;
-        const auto lrForOrder = [this, x, right](int order)
-        {
-            const size_t index = (size_t)(order - 1);
-            const float lowA = processShapePath(shapeLowerPaths[index], x, right);
-            const float low = processShapePath(shapeLowerPaths2[index], lowA, right);
-            const float highA = processShapePath(shapeUpperPaths[index], x, right);
-            float high = processShapePath(shapeUpperPaths2[index], highA, right);
-            if ((order & 1) != 0) high = -high;
-            return std::array<float, 2> { low, high };
-        };
-        const auto lowPair = lrForOrder(lowOrder);
-        auto low = lowPair[0], high = lowPair[1];
-        if (mix > 0.0001f)
-        {
-            const auto highPair = lrForOrder(highOrder);
-            low += mix * (highPair[0] - low);
-            high += mix * (highPair[1] - high);
+            bool remains = false;
+            const int activeStages = std::min(maxClassicCutStages,
+                classicCutFullStages + (classicCutFractionalStage > 0.0001f ? 1 : 0));
+            for (int stage = 0; stage < activeStages; ++stage)
+            {
+                classicCutStages[(size_t)stage].advanceCoefficientRamp();
+                remains = remains
+                    || classicCutStages[(size_t)stage].coefficientRampRemaining > 0;
+            }
+            classicCutCoefficientRamping = remains;
         }
-        if ((type == Biquad::Type::Tilt
-                && std::abs(shapeLowLinear - 1.0f) < 1.0e-7f
-                && std::abs(shapeHighLinear - 1.0f) < 1.0e-7f)
-            || (type != Biquad::Type::Tilt && std::abs(shapeGainLinear - 1.0f) < 1.0e-7f))
-            return x;
-
-        float y;
-        switch (type)
+        for (int stage=0; stage<classicCutFullStages; ++stage)
+            x=classicCutStages[(size_t)stage].process(x,right);
+        if (classicCutFractionalStage>0.0001f && classicCutFullStages<maxClassicCutStages)
         {
-            case Biquad::Type::LowShelf:
-                y = shapeGainLinear * low + high;
-                break;
-            case Biquad::Type::HighShelf:
-                y = low + shapeGainLinear * high;
-                break;
-            case Biquad::Type::Tilt:
-                y = shapeLowLinear * low + shapeHighLinear * high;
-                break;
-            default: return x;
+            const float wet=classicCutStages[(size_t)classicCutFullStages].process(x,right);
+            x += classicCutFractionalStage*(wet-x);
         }
-        y = right ? shapeResonance.processR(y) : shapeResonance.processL(y);
-        return y;
+        return x;
     }
 
     static inline float dcBlock(float x, float& previousX, float& previousY)
@@ -645,7 +699,7 @@ private:
         return y;
     }
 
-    inline void applySpectralDrive(float& l, float& r)
+    inline void applyBandDrive(float& l, float& r)
     {
         constexpr float invSqrt2 = 0.7071067811865475f;
         const auto driveOneBand = [this](float band, bool rightState)
@@ -660,15 +714,15 @@ private:
         {
             const float bandL = driveBandBiquad.processL(l);
             const float bandR = driveBandBiquad.processR(r);
-            l += driveGlobalAmount * firstWeight * driveOneBand(bandL, false);
-            r += driveGlobalAmount * secondWeight * driveOneBand(bandR, true);
+            l += routeEffectWeight * driveGlobalAmount * firstWeight * driveOneBand(bandL, false);
+            r += routeEffectWeight * driveGlobalAmount * secondWeight * driveOneBand(bandR, true);
         }
         else
         {
             float mid = (l + r) * invSqrt2;
             float side = (l - r) * invSqrt2;
-            mid += driveGlobalAmount * firstWeight * driveOneBand(driveBandBiquad.processL(mid), false);
-            side += driveGlobalAmount * secondWeight * driveOneBand(driveBandBiquad.processR(side), true);
+            mid += routeEffectWeight * driveGlobalAmount * firstWeight * driveOneBand(driveBandBiquad.processL(mid), false);
+            side += routeEffectWeight * driveGlobalAmount * secondWeight * driveOneBand(driveBandBiquad.processR(side), true);
             l = (mid + side) * invSqrt2;
             r = (mid - side) * invSqrt2;
         }
@@ -691,107 +745,38 @@ private:
     void setAllStages(double sampleRate, bool updateAuxiliary)
     {
         processSampleRate = sampleRate;
-        // Incorporate dynamic gain modulation into the filter coefficients
-        const float totalGainDb = (gainDb + dynGainMod) * gainScale;
-        for (int order = 1; order <= variable_slope::maxOrder; ++order)
+        const bool classicCut = zl_filter::isClassicCut(type);
+        const bool resonantCut = zl_filter::isResonantCut(type);
+        const bool bandPass = type == Biquad::Type::Bandpass;
+        const float totalGainDb = (gainDb + (classicCut || resonantCut || bandPass ? 0.0f : dynGainMod))
+            * gainScale;
+        const float dynamicSlope = classicCut
+            ? dynamicClassicCutSlope(slopeDbPerOct, dynGainMod)
+            : slopeDbPerOct;
+        const float dynamicQ = resonantCut ? dynamicResonantCutQ(Q, dynGainMod)
+            : bandPass ? dynamicBandPassQ(Q, dynGainMod) : Q;
+        if (zl_filter::isClassicCut(type))
         {
-            const double bellGain = type == Biquad::Type::Bell && order > 1
-                ? variable_slope::bellStageGain(sampleRate, freqHz, Q, totalGainDb,
-                                                order, decrampEnabled)
-                : std::numeric_limits<double>::quiet_NaN();
-            for (int stage = 0; stage < order; ++stage)
-                variable_slope::configureStage(
-                    (*orderPaths)[(size_t)(order - 1)][(size_t)stage], type,
-                    sampleRate, freqHz, Q, totalGainDb, order, stage,
-                    slopeDbPerOct, decrampEnabled, bellGain);
+            const float classicAmount = dynamicSlope / 6.0f;
+            classicCutFullStages = std::clamp((int)std::floor(classicAmount), 0,
+                                              maxClassicCutStages);
+            classicCutFractionalStage = classicAmount - (float)classicCutFullStages;
+            const bool highPass=type==Biquad::Type::HighPass;
+            const int rampSamples = coefficientsValid ? coeffUpdateInterval + 1 : 0;
+            classicCutCoefficientRamping = rampSamples > 0;
+            for(auto& stage:classicCutStages) stage.set(highPass,sampleRate,freqHz,rampSamples);
         }
-
-        const auto configureCrossoverPath = [sampleRate, this](CutOrderPath& path,
-                                                                int order, float cutoff,
-                                                                bool highPass)
-        {
-            path.hasFirstOrder = (order & 1) != 0;
-            path.pairCount = order / 2;
-            if (path.hasFirstOrder)
-                path.firstOrder.set(highPass, sampleRate, cutoff);
-            for (int pair = 0; pair < path.pairCount; ++pair)
-            {
-                const double sectionQ = 1.0 / (2.0 * std::sin(
-                    (2.0 * pair + 1.0) * juce::MathConstants<double>::pi
-                    / (2.0 * order)));
-                if (decrampEnabled)
-                    path.pairs[(size_t)pair].setMatched(highPass ? Biquad::Type::HighPass
-                                                                 : Biquad::Type::LowPass,
-                                                        sampleRate, cutoff, sectionQ, 0.0);
-                else
-                    path.pairs[(size_t)pair].set(highPass ? Biquad::Type::HighPass
-                                                          : Biquad::Type::LowPass,
-                                                 sampleRate, cutoff, sectionQ, 0.0);
-            }
-        };
-
-        shapeGainLinear = juce::Decibels::decibelsToGain(totalGainDb);
-        shapeLowLinear = juce::Decibels::decibelsToGain(-totalGainDb);
-        shapeHighLinear = juce::Decibels::decibelsToGain(totalGainDb);
-        for (int order = 1; order <= variable_slope::maxOrder; ++order)
-        {
-            const float cutoff = std::clamp(freqHz, 10.0f, (float)sampleRate * 0.45f);
-            configureCrossoverPath(shapeLowerPaths[(size_t)(order - 1)], order,
-                                   cutoff, false);
-            configureCrossoverPath(shapeLowerPaths2[(size_t)(order - 1)], order,
-                                   cutoff, false);
-            configureCrossoverPath(shapeUpperPaths[(size_t)(order - 1)], order,
-                                   cutoff, true);
-            configureCrossoverPath(shapeUpperPaths2[(size_t)(order - 1)], order,
-                                   cutoff, true);
-        }
-        const double midpointLinear = type == Biquad::Type::Tilt
-            ? 0.5 * ((double)shapeLowLinear + (double)shapeHighLinear)
-            : 0.5 * (1.0 + (double)shapeGainLinear);
-        const double midpointTargetDb = type == Biquad::Type::Tilt ? 0.0 : 0.5 * totalGainDb;
-        const double pivotCorrectionDb = midpointTargetDb
-            - juce::Decibels::gainToDecibels(midpointLinear, -120.0);
-        const double shapeResonanceGain = std::clamp(
-            pivotCorrectionDb + 6.0 * std::log2(std::max(0.1f, Q)), -12.0, 12.0);
-        if (decrampEnabled)
-            shapeResonance.setMatched(Biquad::Type::Bell, sampleRate, freqHz, 0.7,
-                                      shapeResonanceGain);
         else
-            shapeResonance.set(Biquad::Type::Bell, sampleRate, freqHz, 0.7,
-                               shapeResonanceGain);
-        variable_slope::configureCutResonance(
-            cutResonance, sampleRate, freqHz, Q, slopeDbPerOct, decrampEnabled);
-
-        if (updateAuxiliary)
         {
-            const bool highPass = type == Biquad::Type::HighPass;
-            if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
-            {
-                for (int order = 1; order <= 8; ++order)
-                {
-                    auto& path = cutOrderPaths[(size_t)(order - 1)];
-                    path.hasFirstOrder = (order & 1) != 0;
-                    path.pairCount = order / 2;
-                    if (path.hasFirstOrder)
-                        path.firstOrder.set(highPass, sampleRate, freqHz);
-                    for (int pair = 0; pair < path.pairCount; ++pair)
-                    {
-                        const double sectionQ = 1.0 / (2.0 * std::sin(
-                            (2.0 * pair + 1.0) * juce::MathConstants<double>::pi
-                            / (2.0 * order)));
-                        if (decrampEnabled)
-                            path.pairs[(size_t)pair].setMatched(type, sampleRate, freqHz,
-                                                               sectionQ, 0.0);
-                        else
-                            path.pairs[(size_t)pair].set(type, sampleRate, freqHz,
-                                                        sectionQ, 0.0);
-                    }
-                }
-            }
-
-            scBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, 2.0, 0.0);
-            const float auditionQ = std::clamp(Q, 0.2f, 12.0f);
-            auditionBiquad.set(Biquad::Type::Bandpass, sampleRate, freqHz, auditionQ, 0.0);
+            zlCascade.configure(type,sampleRate,freqHz,dynamicQ,totalGainDb,slopeDbPerOct,
+                                coefficientsValid ? coeffUpdateInterval + 1 : 0);
+        }
+        if(updateAuxiliary)
+        {
+            const float detectorQ = classicCut ? 2.0f
+                : std::clamp(dynamicQ, 0.2f, 12.0f);
+            scBiquad.set(Biquad::Type::Bandpass,sampleRate,freqHz,detectorQ,0.0);
+            auditionBiquad.set(Biquad::Type::Bandpass,sampleRate,freqHz,std::clamp(Q,0.2f,12.0f),0.0);
         }
     }
     double processSampleRate = 44100.0;

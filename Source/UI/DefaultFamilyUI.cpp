@@ -42,7 +42,7 @@ juce::Colour backgroundOf(const juce::Component& component)
 
 float controlFontHeight(float controlHeight) noexcept
 {
-    return juce::jlimit(10.0f, 11.0f, controlHeight * 0.43f);
+    return juce::jlimit(15.0f, 16.5f, controlHeight * 0.645f);
 }
 
 int controlTextPadding(float scale) noexcept
@@ -117,12 +117,20 @@ juce::Font LookAndFeel::getComboBoxFont(juce::ComboBox& box)
 }
 juce::Font LookAndFeel::getLabelFont(juce::Label& label)
 {
+    if ((bool)label.getProperties().getWithDefault("rotaryValueLabel", false))
+        return mono(17.25f * uiScale, true);
+    if ((bool)label.getProperties().getWithDefault("numericValueControl", false))
+    {
+        const auto* parent = label.getParentComponent();
+        return mono(controlFontHeight((float)(parent != nullptr ? parent->getHeight() : label.getHeight()))
+                        * uiScale, true);
+    }
     if (const auto* slider = dynamic_cast<const juce::Slider*>(label.getParentComponent()))
         if (slider->getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag)
-            return mono(11.5f * uiScale, true);
-    return mono(10.0f * uiScale, true);
+            return mono(17.25f * uiScale, true);
+    return mono(15.0f * uiScale, true);
 }
-juce::Font LookAndFeel::getPopupMenuFont() { return mono(10.0f * uiScale, true); }
+juce::Font LookAndFeel::getPopupMenuFont() { return mono(15.0f * uiScale, true); }
 
 void LookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
 {
@@ -297,16 +305,16 @@ void LookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int width, i
     }
     else fill = inner.withWidth(inner.getWidth() * proportion);
     if (!fill.isEmpty()) { g.setColour(fg); g.fillRect(fill); }
-    const bool ms = (bool)slider.getProperties().getWithDefault("midSide", false);
+    const int routeMode=(int)slider.getProperties().getWithDefault("routeMode",0);
     const auto value = slider.getName() == "PLACEMENT"
         ? (std::abs(slider.getValue()) < 0.05 ? "CENTER"
-           : slider.getValue() < 0.0 ? juce::String(ms ? "M " : "L ") + juce::String(std::abs(slider.getValue()), 0)
-                                     : juce::String(ms ? "S " : "R ") + juce::String(slider.getValue(), 0))
+           : slider.getValue() < 0.0 ? juce::String(routeMode==0?"L ":routeMode==1?"M ":"T ") + juce::String(std::abs(slider.getValue()), 0)
+                                     : juce::String(routeMode==0?"R ":"S ") + juce::String(slider.getValue(), 0))
         : slider.getName() == "OVERSAMPLING"
         ? juce::String("OS ") + std::array<const char*, 4>{ "OFF", "2X", "4X", "8X" }[(size_t)juce::jlimit(0, 3, juce::roundToInt(slider.getValue()))]
         : slider.getName() == "OUTPUT_HDR" ? juce::String("OUT ")
             + juce::String(std::abs(slider.getValue()) < 0.005 ? 0.0 : slider.getValue(), 1)
-        : slider.getValue() <= 0.001 ? "LOOK OFF" : "LOOK " + juce::String(slider.getValue(), 2) + "ms";
+        : slider.getValue() <= 0.001 ? "LOOK OFF" : juce::String("LOOK ") + juce::String(slider.getValue(), 2);
     const auto textBounds = r.toNearestInt().reduced(4, 1);
     const auto draw = [&](juce::Colour colour)
     {
@@ -368,119 +376,4 @@ void SmartGainButton::paintButton(juce::Graphics& g, bool highlighted, bool down
     }
 }
 
-PageRail::PageRail()
-{
-    setWantsKeyboardFocus(true);
-    setMouseCursor(juce::MouseCursor::PointingHandCursor);
-    setTooltip("Switch advanced page: Band, Dynamic, RTA or Match");
-}
-
-int PageRail::pageAt(juce::Point<int> point) const noexcept
-{
-    if (!getLocalBounds().contains(point) || getHeight() <= 0)
-        return -1;
-    return juce::jlimit(0, 3, point.y * 4 / getHeight());
-}
-
-void PageRail::setSelectedPage(int page, juce::NotificationType notification)
-{
-    const int next = juce::jlimit(0, 3, page);
-    if (selectedPage == next) return;
-    selectedPage = next;
-    repaint();
-    if (notification != juce::dontSendNotification && onPageChange)
-        onPageChange(selectedPage);
-}
-
-void PageRail::choosePage(int page)
-{
-    if (page < 0 || page > 3) return;
-    const bool changed = page != selectedPage;
-    selectedPage = page;
-    repaint();
-    if (changed && onPageChange) onPageChange(selectedPage);
-}
-
-void PageRail::paint(juce::Graphics& g)
-{
-    static constexpr std::array<const char*, 4> labels { "BAND", "DYNAMIC", "RTA", "MATCH" };
-    const auto fg = foregroundOf(*this);
-    const auto bg = backgroundOf(*this);
-    const float scale = scaleOf(*this);
-    const int border = juce::jmax(1, juce::roundToInt(2.0f * scale));
-    const auto bounds = getLocalBounds();
-    const auto inner = bounds.reduced(border);
-
-    g.setColour(fg); g.fillRect(bounds);
-    g.setColour(bg); g.fillRect(inner);
-    const float segmentHeight = (float)inner.getHeight() / 4.0f;
-    g.setFont(mono(controlFontHeight(segmentHeight) * scale, true));
-
-    for (int page = 0; page < 4; ++page)
-    {
-        const int top = inner.getY() + inner.getHeight() * page / 4;
-        const int bottom = inner.getY() + inner.getHeight() * (page + 1) / 4;
-        auto segment = juce::Rectangle<int>(inner.getX(), top, inner.getWidth(), bottom - top);
-        const bool pressed = page == pressedPage;
-        const bool selected = page == selectedPage || pressed;
-        if (selected) { g.setColour(fg); g.fillRect(segment); }
-        if (page == hoveredPage)
-        {
-            const auto hover = segment.reduced(juce::jmax(1, juce::roundToInt(2.0f * scale)));
-            g.setColour(selected ? bg : fg);
-            if (!hover.isEmpty()) g.drawRect(hover, 1);
-        }
-        g.setColour(selected ? bg : fg);
-        g.drawFittedText(labels[(size_t)page], segment.reduced(2, 0), juce::Justification::centred, 1);
-        if (page < 3)
-        {
-            g.setColour(fg);
-            g.fillRect(inner.getX(), bottom - 1, inner.getWidth(), 1);
-        }
-    }
-}
-
-void PageRail::mouseMove(const juce::MouseEvent& event)
-{
-    const int page = pageAt(event.getPosition());
-    if (page != hoveredPage) { hoveredPage = page; repaint(); }
-}
-
-void PageRail::mouseExit(const juce::MouseEvent&)
-{
-    hoveredPage = -1; pressedPage = -1; repaint();
-}
-
-void PageRail::mouseDown(const juce::MouseEvent& event)
-{
-    grabKeyboardFocus();
-    pressedPage = pageAt(event.getPosition());
-    repaint();
-}
-
-void PageRail::mouseUp(const juce::MouseEvent& event)
-{
-    const int released = pageAt(event.getPosition());
-    const int pressed = pressedPage;
-    pressedPage = -1;
-    if (released == pressed) choosePage(released);
-    else repaint();
-}
-
-void PageRail::mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel)
-{
-    if (std::abs(wheel.deltaY) < 0.01f) return;
-    choosePage(juce::jlimit(0, 3, selectedPage + (wheel.deltaY < 0.0f ? 1 : -1)));
-}
-
-bool PageRail::keyPressed(const juce::KeyPress& key)
-{
-    if (key == juce::KeyPress::upKey || key == juce::KeyPress::leftKey)
-    { choosePage(juce::jmax(0, selectedPage - 1)); return true; }
-    if (key == juce::KeyPress::downKey || key == juce::KeyPress::rightKey)
-    { choosePage(juce::jmin(3, selectedPage + 1)); return true; }
-    if (key == juce::KeyPress::homeKey) { choosePage(0); return true; }
-    if (key == juce::KeyPress::endKey) { choosePage(3); return true; }
-    return false;
-}
 }

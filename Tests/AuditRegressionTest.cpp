@@ -3,7 +3,7 @@
     Milestone-A correctness/RT-safety pass.
 
     This test is intentionally standalone (no JUCE dependency) so it runs in
-    the same CI slot as BiquadTest. It covers the two algorithmic changes
+    the same CI slot as BiquadTest. It covers the lock-free handoff algorithms
     whose correctness is independent of JUCE's FFT:
 
       1. SpectrumFIFO ping-pong (A4): under a concurrent producer/consumer,
@@ -11,13 +11,8 @@
          producer wrote during that wrap. No tearing, no drops of adjacent
          samples inside a published buffer.
 
-      2. MatchEQ::applyCorrection chunking (A3): for any numSamples >= 0,
-         the chunking loop partitions [0, numSamples) into contiguous
-         sub-ranges each of size <= kMaxChunk, covering every index
-         exactly once with no overlap.
-
-    What this test does NOT cover: the FFT math of MatchEQ or SpectrumFIFO
-    itself — that lives in the juce_dsp library and is covered by JUCE's
+    What this test does NOT cover: the FFT math of SpectrumFIFO itself — that
+    lives in the juce_dsp library and is covered by JUCE's
     own unit tests and by pluginval at integration time (see milestone B3).
 */
 
@@ -193,81 +188,6 @@ static void test_triplebuf_concurrent_no_tearing()
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  2. MatchEQ::applyCorrection chunking invariant
-// ══════════════════════════════════════════════════════════════════════
-//
-// The new loop in MatchEQ::applyCorrection walks [0, numSamples) in
-// chunks of size min(kMaxChunk, remaining). We prove:
-//   (a) every index in [0, numSamples) is visited in exactly one chunk;
-//   (b) each chunk has size <= kMaxChunk;
-//   (c) chunks are emitted in strictly increasing offset order.
-
-static bool validate_chunking(int numSamples, int kMaxChunk)
-{
-    if (numSamples < 0) return false;
-    int offset = 0;
-    int prevEnd = 0;
-    std::vector<bool> visited(numSamples > 0 ? (size_t)numSamples : (size_t)1, false);
-    while (offset < numSamples)
-    {
-        int chunk = std::min(kMaxChunk, numSamples - offset);
-        if (chunk <= 0) return false;           // would loop forever
-        if (chunk > kMaxChunk) return false;    // chunk size invariant
-        if (offset < prevEnd) return false;     // monotonicity
-        for (int i = offset; i < offset + chunk; ++i)
-        {
-            if (visited[(size_t)i]) return false; // no double-visit
-            visited[(size_t)i] = true;
-        }
-        prevEnd = offset + chunk;
-        offset += chunk;
-    }
-    // Coverage
-    for (int i = 0; i < numSamples; ++i)
-        if (!visited[(size_t)i]) return false;
-    return true;
-}
-
-static void test_chunking_invariant()
-{
-    constexpr int kMaxChunk = 2048;  // MatchEQ::fftSize / 2
-
-    // Edge cases
-    CHECK(validate_chunking(0,     kMaxChunk), "chunking: numSamples=0 is a no-op");
-    CHECK(validate_chunking(1,     kMaxChunk), "chunking: numSamples=1");
-    CHECK(validate_chunking(kMaxChunk,   kMaxChunk), "chunking: exact chunk size");
-    CHECK(validate_chunking(kMaxChunk+1, kMaxChunk), "chunking: one past chunk size");
-    CHECK(validate_chunking(4096,  kMaxChunk), "chunking: 2 full chunks (fftSize)");
-    CHECK(validate_chunking(8192,  kMaxChunk), "chunking: 4 full chunks (2x fftSize)");
-    CHECK(validate_chunking(8193,  kMaxChunk), "chunking: 4 full chunks + tail=1");
-
-    // Random sizes up to 3x fftSize
-    std::srand(42);
-    for (int trial = 0; trial < 200; ++trial)
-    {
-        int n = std::rand() % (3 * 4096);
-        if (!validate_chunking(n, kMaxChunk))
-        {
-            std::printf("FAIL: chunking invariant broke at n=%d\n", n);
-            ++failures;
-            break;
-        }
-    }
-
-    // Previous bug: numSamples > fftSize would return early.
-    // Post-fix: the loop runs to completion. Confirm by counting iterations
-    // analytically: ceil(numSamples / kMaxChunk).
-    {
-        int n = 9999;
-        int expectedIters = (n + kMaxChunk - 1) / kMaxChunk;
-        int actualIters = 0;
-        int offset = 0;
-        while (offset < n) { offset += std::min(kMaxChunk, n - offset); ++actualIters; }
-        CHECK(actualIters == expectedIters, "chunk iteration count matches ceil(n/maxChunk)");
-    }
-}
-
-// ══════════════════════════════════════════════════════════════════════
 //  Main
 // ══════════════════════════════════════════════════════════════════════
 
@@ -373,9 +293,6 @@ int main()
 
     std::printf("── A4: SpectrumFIFO triple-buffer, concurrent stress ──\n");
     test_triplebuf_concurrent_no_tearing();
-
-    std::printf("── A3: MatchEQ::applyCorrection chunking invariant ──\n");
-    test_chunking_invariant();
 
     std::printf("── A5: LinearPhaseEngine kernel double-buffer handoff ──\n");
     test_linphase_kernel_handoff();

@@ -68,8 +68,8 @@ the selected lookahead.
 
 ## Visual QA
 
-The live Standalone window was inspected at 720, 860 and 1200 px using Computer
-Use. Combined Band/Drive, Dynamic, RTA and Match workspaces remain readable and within
+The v0.1.0 Standalone window was inspected at 720, 860 and 1200 px using Computer
+Use. Its then-current workspaces remained readable and within
 the window; the formerly separate sparse Global page was folded into the
 header. The 720 px Dynamic page is the densest verified layout. Dark and light
 screenshots confirm exact paper/ink role inversion. The current 860 px compact
@@ -80,7 +80,6 @@ the panel opens, and that no separate meter is overlaid on the RTA edge.
 - `docs/screenshots/default_equalizer-dark-final-860.jpeg`
 - `docs/screenshots/default_equalizer-dark-1200.jpeg`
 - `docs/screenshots/default_equalizer-light-860.jpeg`
-- `docs/screenshots/default_equalizer-match-860.jpeg`
 - `docs/screenshots/default_equalizer-light-final-2026-08-13.jpeg`
 - `docs/screenshots/default_equalizer-light-band-drive-2026-08-13.png`
 - `docs/screenshots/default_equalizer-light-collapsed-2026-08-13.png`
@@ -93,8 +92,8 @@ the panel opens, and that no separate meter is overlaid on the RTA edge.
 - In Linear Phase, centered L/R static bands are synthesized into the FIR.
   Continuously placed L/R or M/S filters remain minimum-phase post stages
   because one shared stereo FIR cannot represent asymmetric placement.
-- Analyzer and Match FFT work is outside the audio thread. Analyzer capture is
-  also dormant with the editor/spectrum hidden or frozen. Optional Linear Phase
+- Analyzer FFT work is outside the audio thread. Analyzer capture is also
+  dormant with the editor/spectrum hidden or frozen. Optional Linear Phase
   uses JUCE's zero-additional-latency uniform partitioned convolution instead
   of a full 8192-point forward/inverse FFT on every host block.
 

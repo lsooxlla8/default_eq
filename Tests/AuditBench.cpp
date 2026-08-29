@@ -5,7 +5,6 @@
       - SpectrumFIFO triple-buffer push throughput (samples/second, ns/sample).
       - SpectrumFIFO triple-buffer consume latency (ns per processIfReady,
         excluding the FFT, which is the same before and after this change).
-      - MatchEQ chunking loop overhead per 2048-sample chunk.
 
     The numbers are for local comparison only; treat them as lower bounds
     (release-mode clang with -O3 on an otherwise-idle machine).

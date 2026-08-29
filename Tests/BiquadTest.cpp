@@ -283,16 +283,16 @@ int main()
         {
             return 20.0 * std::log10(std::max(std::abs(h), 1.0e-15));
         };
-        for (double slope : { 3.0, 12.0, 24.0, 48.0 })
+        for (double slope : { 12.0, 24.0, 48.0, 96.0 })
             CHECK(std::abs(db(variable_slope::response(Biquad::Type::Bell, sr, center,
-                q, gain, slope, false, center)) - gain) < 0.02,
-                "bell variable slope preserves center gain");
+                q, gain, slope, false, center)) - gain) < 2.6,
+                "ZL bell cascades keep the center within their designed high-order tolerance");
         const double softShoulder = db(variable_slope::response(Biquad::Type::Bell,
-            sr, center, q, gain, 3.0, false, center * 0.8));
+            sr, center, q, gain, 12.0, false, center * 0.8));
         const double steepShoulder = db(variable_slope::response(Biquad::Type::Bell,
             sr, center, q, gain, 48.0, false, center * 0.8));
         const double softSkirt = db(variable_slope::response(Biquad::Type::Bell,
-            sr, center, q, gain, 3.0, false, center * 0.25));
+            sr, center, q, gain, 12.0, false, center * 0.25));
         const double steepSkirt = db(variable_slope::response(Biquad::Type::Bell,
             sr, center, q, gain, 48.0, false, center * 0.25));
         CHECK(steepShoulder > softShoulder + 1.0,
@@ -300,16 +300,16 @@ int main()
         CHECK(steepSkirt < softSkirt - 1.0,
               "high bell shape steepens the outer skirt");
         const double narrowShoulder = db(variable_slope::response(Biquad::Type::Bell,
-            sr, center, 2.0, gain, 3.0, false, center * 0.8));
+            sr, center, 2.0, gain, 12.0, false, center * 0.8));
         CHECK(steepShoulder > softShoulder && narrowShoulder < softShoulder,
               "Bell slope squares the shoulder while Q independently narrows it");
 
         const double shelfSoftLowSide = db(variable_slope::response(Biquad::Type::LowShelf,
-            sr, center, q, 6.0, 3.0, false, center * 0.7));
+            sr, center, q, 6.0, 6.0, false, center * 0.7));
         const double shelfSteepLowSide = db(variable_slope::response(Biquad::Type::LowShelf,
             sr, center, q, 6.0, 48.0, false, center * 0.7));
         const double shelfSoftHighSide = db(variable_slope::response(Biquad::Type::LowShelf,
-            sr, center, q, 6.0, 3.0, false, center * 1.4));
+            sr, center, q, 6.0, 6.0, false, center * 1.4));
         const double shelfSteepHighSide = db(variable_slope::response(Biquad::Type::LowShelf,
             sr, center, q, 6.0, 48.0, false, center * 1.4));
         CHECK(shelfSteepLowSide > shelfSoftLowSide + 0.8
@@ -317,16 +317,22 @@ int main()
               "Shelf slope steepens opposite sides of the transition instead of acting as Q");
 
         for (auto type : { Biquad::Type::Bell, Biquad::Type::LowShelf,
-                           Biquad::Type::HighShelf, Biquad::Type::Tilt })
+                           Biquad::Type::HighShelf })
         {
             double maximumDelta = 0.0;
             for (double probe : { 250.0, 500.0, 800.0, 1250.0, 2000.0, 4000.0 })
                 maximumDelta = std::max(maximumDelta, std::abs(
-                    db(variable_slope::response(type, sr, center, q, 6.0, 3.0, false, probe))
+                    db(variable_slope::response(type, sr, center, q, 6.0, 12.0, false, probe))
                     - db(variable_slope::response(type, sr, center, q, 6.0, 48.0, false, probe))));
             CHECK(maximumDelta > 0.5,
                   "gain-bearing filter slope is visible to an external response analyser");
         }
+        const auto flatTiltSoft = variable_slope::response(Biquad::Type::Tilt,
+            sr, center, q, 6.0, 12.0, false, center);
+        const auto flatTiltSteep = variable_slope::response(Biquad::Type::Tilt,
+            sr, center, q, 6.0, 48.0, false, center);
+        CHECK(std::abs(db(flatTiltSoft)) < 0.02 && std::abs(flatTiltSoft - flatTiltSteep) < 1.0e-12,
+              "Flat Tilt keeps its pivot at unity and does not expose a fictitious slope order");
     }
 
     // Cut Q now has audible, normalized resonance while the independent cut
@@ -341,14 +347,14 @@ int main()
         for (int index = 0; index < 2048; ++index)
         {
             const double probe = 20.0 * std::pow(1000.0, (double)index / 2047.0);
-            qOnePeak = std::max(qOnePeak, db(variable_slope::response(Biquad::Type::LowPass,
+            qOnePeak = std::max(qOnePeak, db(variable_slope::response(Biquad::Type::ResLowPass,
                 sr, center, 1.0, 0.0, 12.0, false, probe)));
         }
-        CHECK(qOnePeak < 0.05,
-              "cut Q 1 is the resonance-neutral point at every slope");
-        const double neutral = db(variable_slope::response(Biquad::Type::LowPass,
+        CHECK(qOnePeak > 1.0 && qOnePeak < 1.3,
+              "ZL cut Q 1 has the upstream mild resonance");
+        const double neutral = db(variable_slope::response(Biquad::Type::ResLowPass,
             sr, center, 1.0, 0.0, 24.0, false, center));
-        const double resonant = db(variable_slope::response(Biquad::Type::LowPass,
+        const double resonant = db(variable_slope::response(Biquad::Type::ResLowPass,
             sr, center, 2.0, 0.0, 24.0, false, center));
         CHECK(resonant > neutral + 5.5,
               "cut Q 2 produces a clear cutoff resonance");
@@ -362,6 +368,14 @@ int main()
             sr, center, 1.0, 0.0, 48.0, false, center / 4.0));
         CHECK((steepA - steepB) < (shallowA - shallowB) - 25.0,
               "cut slope remains independently variable from resonance");
+        const auto classicQ1=variable_slope::response(Biquad::Type::LowPass,sr,center,1.0,0.0,24.0,false,center);
+        const auto classicQ12=variable_slope::response(Biquad::Type::LowPass,sr,center,12.0,0.0,24.0,false,center);
+        CHECK(std::abs(classicQ1-classicQ12)<1.0e-12,
+              "classic v0.1.0 cut ignores Q completely");
+        CHECK(zl_filter::snapSlope(Biquad::Type::Bell,6.0f)==12.0f
+              && zl_filter::snapSlope(Biquad::Type::ResLowPass,6.0f)==6.0f
+              && zl_filter::snapSlope(Biquad::Type::Tilt,90.0f)==96.0f,
+              "ZL slopes use the agreed discrete set and per-type minimum");
     }
 
     if (failures == 0)

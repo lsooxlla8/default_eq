@@ -13,7 +13,7 @@ constexpr int structuralGap = 10;
 constexpr int controlGap = 4;
 constexpr int buttonHeight = 28;
 constexpr int controlBorder = 2;
-constexpr float headerFontHeight = 16.0f;
+constexpr float headerFontHeight = 24.0f;
 constexpr float disabledOpacity = 0.35f;
 }
 
@@ -92,32 +92,4 @@ private:
     bool reducedMotion = false;
 };
 
-// A compact four-page navigator. It occupies the same square as one rotary
-// control and uses shape/inversion rather than colour to encode selection.
-class PageRail final : public juce::Component,
-                       public juce::SettableTooltipClient
-{
-public:
-    PageRail();
-
-    void setSelectedPage(int page, juce::NotificationType notification);
-    int getSelectedPage() const noexcept { return selectedPage; }
-    std::function<void(int)> onPageChange;
-
-    void paint(juce::Graphics&) override;
-    void mouseMove(const juce::MouseEvent&) override;
-    void mouseExit(const juce::MouseEvent&) override;
-    void mouseDown(const juce::MouseEvent&) override;
-    void mouseUp(const juce::MouseEvent&) override;
-    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
-    bool keyPressed(const juce::KeyPress&) override;
-
-private:
-    int pageAt(juce::Point<int>) const noexcept;
-    void choosePage(int page);
-
-    int selectedPage = 0;
-    int hoveredPage = -1;
-    int pressedPage = -1;
-};
 }

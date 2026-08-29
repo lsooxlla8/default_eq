@@ -1,4 +1,6 @@
 #pragma once
+
+#include <limits>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "Config.h"
@@ -9,6 +11,18 @@
 class ResettableSlider : public juce::Slider
 {
 public:
+    void setPersistentTextFormatter(std::function<juce::String(double)> formatter)
+    {
+        persistentTextFormatter = std::move(formatter);
+        updateText();
+    }
+
+    juce::String getTextFromValue(double value) override
+    {
+        return persistentTextFormatter ? persistentTextFormatter(value)
+                                       : juce::Slider::getTextFromValue(value);
+    }
+
     void mouseDown(const juce::MouseEvent& event) override
     {
         if ((event.mods.isPopupMenu() || event.mods.isRightButtonDown()) && isEnabled())
@@ -18,6 +32,56 @@ public:
         }
         juce::Slider::mouseDown(event);
     }
+
+private:
+    std::function<juce::String(double)> persistentTextFormatter;
+};
+
+class VerticalDragSlider : public ResettableSlider
+{
+public:
+    void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDrag(const juce::MouseEvent& event) override;
+
+private:
+    double dragStartValue = 0.0;
+};
+
+class TwoAxisDragSlider final : public ResettableSlider
+{
+public:
+    void mouseDown(const juce::MouseEvent& event) override;
+    void mouseDrag(const juce::MouseEvent& event) override;
+
+private:
+    double dragStartValue = 0.0;
+};
+
+class DriveCharacterSlider final : public ResettableSlider
+{
+public:
+    void setSaturationMode(int newMode);
+    juce::String getTextFromValue(double value) override;
+
+private:
+    int saturationMode = 0;
+};
+
+class ThresholdMeterSlider final : public VerticalDragSlider
+{
+public:
+    ThresholdMeterSlider();
+    void setInputLevelsDb(float leftDb, float rightDb);
+    void paint(juce::Graphics&) override;
+    void resized() override;
+    void mouseDoubleClick(const juce::MouseEvent&) override;
+    void lookAndFeelChanged() override;
+
+private:
+    void updateText();
+    float displayedLevelDbL = -60.0f, displayedLevelDbR = -60.0f;
+    juce::Label valueLabel;
+    bool updating = false;
 };
 
 class NumericValueControl final : public ResettableSlider
@@ -27,6 +91,7 @@ public:
     void setFormatter(std::function<juce::String(double)> formatter,
                       std::function<double(const juce::String&)> parser);
     void setValueVisible(bool shouldShowValue);
+    void refreshText() { updateText(); }
     void paint(juce::Graphics&) override;
     void resized() override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
@@ -44,7 +109,8 @@ private:
 using FamilyLookAndFeel = default_family::LookAndFeel;
 
 class DefaultEqualizerAudioProcessorEditor final : public juce::AudioProcessorEditor,
-                                                    private juce::Timer
+                                                    private juce::Timer,
+                                                    private juce::Slider::Listener
 {
 public:
     explicit DefaultEqualizerAudioProcessorEditor(DefaultEqualizerAudioProcessor&);
@@ -54,22 +120,26 @@ public:
     void visibilityChanged() override;
     bool keyPressed(const juce::KeyPress&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    int getControlParameterIndex(juce::Component&) override;
 
 private:
-    enum class WorkspacePage { Band, Match };
     void timerCallback() override;
     void selectBand(int, bool updateGraphSelection = true);
     void rebindBandControls();
     void updateBandControlEnablement(bool bandSelected);
-    void setWorkspacePage(WorkspacePage);
-    void setWorkspaceExpanded(bool, bool);
     void updateHeaderText();
     void initParameter(juce::Slider&, const juce::String& name);
     void applySliderPalette();
     void updateDriveControls(bool resetModeDefaults = false);
-    void applyMatchToBands();
-    void updateAnalyzerSettings();
     void updateAnalyzerLifecycle();
+    void sliderValueChanged(juce::Slider*) override;
+    void sliderDragStarted(juce::Slider*) override;
+    void sliderDragEnded(juce::Slider*) override;
+    juce::String groupSuffixForSlider(const juce::Slider*) const;
+    void applyAbsoluteToSelectedBands(const juce::String& suffix, float value,
+                                      bool includePrimary = true);
+    void beginGroupSliderEdit(juce::Slider&);
+    void endGroupSliderEdit(juce::Slider&);
 
     DefaultEqualizerAudioProcessor& proc;
     ResponseCurveComponent responseCurve;
@@ -77,60 +147,60 @@ private:
     std::unique_ptr<juce::PropertiesFile> uiPreferences;
     bool darkTheme = false;
     int selectedBand = 0;
-    WorkspacePage workspacePage = WorkspacePage::Band;
     juce::Random brandRandom;
     double nextBrandGlitchTimeMs = 0.0;
     int displayedDriveMode = -1;
+    int displayedFilterType = -1;
     bool saturationMouseInteraction = false;
+    bool typeMouseInteraction = false;
+    bool placementModeMouseInteraction = false;
+    bool applyingGroupEdit = false;
+    juce::Slider* activeGroupSlider = nullptr;
+    juce::String activeGroupSuffix;
+    float groupPrimaryStart = 0.0f;
+    std::array<float, kNumBands> groupParameterStarts {};
+    std::array<juce::RangedAudioParameter*, kNumBands> groupParameters {};
     bool driveFormatPending = false;
-    bool workspaceExpanded = true;
     std::uint64_t lastTransportStartGeneration = 0;
-    int expandedWindowHeight = 464;
+    float displayedShiftSemitones = std::numeric_limits<float>::quiet_NaN();
 
     // Header: product identity, selected object, global actions and power.
-    default_family::WordmarkButton themeBtn { "default_eq8" };
-    default_family::SmartGainButton autoGainBtn { "AUTO GAIN: OFF" };
+    default_family::WordmarkButton themeBtn { "default_eq" };
+    default_family::SmartGainButton autoGainBtn { "AUTO GAIN" };
     juce::ToggleButton powerBtn { "ON" };
-    juce::TextButton workspaceToggleBtn { "MATCH / RTA" };
 
     // Band page. Frequency/gain/Q intentionally live on the graph only.
     juce::ToggleButton bandOn { "ON" }, bandSolo { "SOLO" }, adaptiveQBtn { "ADAPTIVE Q" };
-    juce::ToggleButton placementModeBtn { "L/R" };
-    juce::ComboBox typeBox;
-    ResettableSlider placementSlider;
+    juce::ComboBox placementModeBox, typeBox;
+    TwoAxisDragSlider placementSlider;
     NumericValueControl freqField { "FREQ" }, gainField { "GAIN" },
                         qField { "Q" }, slopeField { "SLOPE" };
 
     // Dynamic page.
-    juce::ToggleButton sidechainAudition { "SC LISTEN" };
-    ResettableSlider dynLookahead, dynThreshold, dynRange, dynRatio, dynAttack, dynRelease;
-    juce::TextButton dynModeBtn { "DOWN" }, sidechainBtn { "INT SC" };
+    ResettableSlider dynLookahead, dynRange, dynSpeed;
+    NumericValueControl dynRatio { "RATIO" };
+    ThresholdMeterSlider dynThreshold;
+    juce::TextButton dynModeBtn { "DOWN" }, sidechainBtn { "IN SC" };
 
     // Drive controls share the Band workspace.
-    ResettableSlider driveSlider, driveCharacterSlider;
+    ResettableSlider driveSlider;
+    DriveCharacterSlider driveCharacterSlider;
     juce::ComboBox saturationBox;
     ResettableSlider oversamplingSlider;
 
-    // Analyzer/global page.
-    ResettableSlider analyzerFloor, analyzerAveraging, analyzerTilt;
+    // Global controls. Analyzer settings remain internal preferences.
     juce::ComboBox phaseModeBox;
-    juce::ToggleButton linearPhaseBtn { "LINEAR PHASE" };
-    juce::ToggleButton matchSidechainBtn { "SC INPUT" };
-    juce::TextButton matchCaptureBtn { "LEARN TARGET" }, matchApplyBtn { "ANALYZE INPUT" },
-                     matchCommitBtn { "APPLY 8 BANDS" }, matchClearBtn { "RESET MATCH" };
-    ResettableSlider matchAmount, matchSmoothing, matchLow, matchHigh, matchTime;
-    NumericValueControl amountSlider { "AMOUNT" }, outputSlider { "OUT" };
+    NumericValueControl amountSlider { "AMOUNT" }, shiftSlider { "SHIFT" }, outputSlider { "OUT" };
 
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<ButtonAttachment> powerAtt, bandOnAtt, placementModeAtt,
-        adaptiveQAtt, linearPhaseAtt;
-    std::unique_ptr<ComboAttachment> typeAtt, saturationAtt;
+    std::unique_ptr<ButtonAttachment> powerAtt, bandOnAtt, adaptiveQAtt;
+    std::unique_ptr<ComboAttachment> typeAtt, placementModeAtt, saturationAtt;
     std::unique_ptr<SliderAttachment> freqAtt, gainAtt, qAtt, slopeAtt, placementAtt,
         dynLookaheadAtt, dynThresholdAtt, dynRangeAtt,
-        dynRatioAtt, dynAttackAtt, dynReleaseAtt, driveAtt, driveCharacterAtt,
-        amountAtt, outputAtt, oversamplingAtt;
+        dynRatioAtt, dynSpeedAtt, driveAtt, driveCharacterAtt,
+        amountAtt, shiftAtt, outputAtt, oversamplingAtt;
 
     juce::TooltipWindow tooltipWindow { this, 450 };
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DefaultEqualizerAudioProcessorEditor)

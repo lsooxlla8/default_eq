@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in default_equalizer
+about: Report a bug in default_eq
 title: '[BUG] '
 labels: bug
 assignees: ''

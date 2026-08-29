@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest an idea for default_equalizer
+about: Suggest an idea for default_eq
 title: '[FEATURE] '
 labels: enhancement
 assignees: ''
