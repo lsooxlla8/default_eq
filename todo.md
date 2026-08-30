@@ -37,6 +37,8 @@
   default and maximum editor sizes, multiple aspect ratios, and 1x/2x DPI.
 - Add keyboard shortcuts for **Delete/Backspace** to delete the selected bands
   and **Cmd/Ctrl-A** to select every present band.
+- Make right-click reset Q to **0.75** for resonant Low Cut and High Cut filters,
+  while preserving the existing Q reset default for every other filter type.
 - Remove the configure-time patch to JUCE popup-menu internals and replace it
   with a project-owned, upstream-compatible submenu-positioning solution.
 - Update or explicitly archive stale pre-0.3 documentation, screenshots,
