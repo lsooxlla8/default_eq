@@ -13,10 +13,7 @@
   parameter-derived estimate based on the exact combined EQ response. Keep it
   independent of programme audio and recompute only when relevant parameters
   change.
-- Make Smart Gain compare latency-aligned input and output loudness in LUFS,
-  with a separate true-peak guard. Add a regression matrix covering different
-  programme spectra, filter types, gains, Q values, Amount values, routing and
-  multi-band combinations, with explicit LUFS and peak tolerances.
+- Make Smart Gain compare latency-aligned input and output loudness in LUFS.
 - Reduce idle and editor-open CPU without changing the visible RTA cadence:
   drive UI updates from dirty/new-frame events, move spectrum smoothing out of
   paint(), cache static drawing, and avoid repainting unchanged content.
@@ -26,6 +23,11 @@
 - Introduce per-band dirty state so parameter snapshots, coefficient setup and
   routing configuration are refreshed only for bands whose relevant state has
   changed.
+- Split the monolithic processor, editor, response-curve and band files by
+  responsibility as a behaviour-preserving refactor only. Do not combine it
+  with DSP, UI, parameter, state or interaction changes; move one subsystem at
+  a time and require sample-equivalent DSP checks, all CTest targets and
+  plug-in validation to pass after every step.
 - Measure both fixed object size and prepared runtime memory per plug-in
   instance, including the oversampling pool, T/S splitters, linear-phase and
   lookahead workspaces; set regression budgets before optimising allocations.
