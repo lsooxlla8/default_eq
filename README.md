@@ -17,8 +17,6 @@ Most editing happens directly on the analyzer:
   or Low Cut in the lower right.
 - **Shift-click empty space** to create Tilt, except in the lower far-left and
   far-right areas, which create resonant High Cut and Low Cut respectively.
-- **Drag** a band horizontally to adjust frequency. Vertical movement adjusts
-  Gain, except for Cut, Notch, and Band Pass filters, where it adjusts Q.
 - **Cmd-drag** a band to adjust Drive; **Shift-drag** it to adjust the dynamic
   Threshold.
 - Use the **mouse wheel** for Q (or Slope on non-resonant Cut filters),
