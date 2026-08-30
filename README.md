@@ -14,26 +14,19 @@ Most editing happens directly on the analyzer:
   control Drive, or **Shift** to adjust the dynamics Threshold.
 - Use the **mouse wheel** for Q, **Shift + wheel** for placement,
   **Alt + wheel** for Slope, and **Cmd + wheel** for Character.
-- **Shift-click** bands or drag a marquee over empty graph space to select and
+- **Shift-click** bands or **Shift-drag** or **Right-click-drag** a marquee over empty graph space to select and
   edit multiple bands relatively.
-- Use global **Shift** to move every band by the same musical interval while
-  preserving ratios between fundamentals and harmonics.
+- Use global **Shift** to move every band by the same musical interval.
 - For precise adjustments, **Freq, Gain, Q, and Slope** can also be entered
   directly in the parameter fields below.
 - **Alt-click** a band to momentarily solo it; **Cmd-click** toggles bypass.
+- **Shift + Cmd + click** a band to reset it's placement.
+- **Cmd + Right-click** a band to reset it's drive and character.
+- **Shift + Right-click** a band to reset it's threshold.
 
 There is deliberately no internal preset system. Plugin state is handled
 through the host, with complete project recall, versioned state, and Undo/Redo
 support.
-
-See [implementation status](docs/implementation-status.md) for verified scope
-and [CHANGELOG.md](CHANGELOG.md) for release changes.
-
-## Downloads
-
-Release packages are built for macOS (AU, VST3, Standalone), Windows (VST3,
-Standalone), and Linux (VST3, Standalone). See
-[GitHub Releases](https://github.com/lsooxlla8/default_eq/releases).
 
 ## Thanks and third-party code
 
@@ -43,9 +36,6 @@ Standalone), and Linux (VST3, Standalone). See
   AGPLv3 filter design and analyzer architecture.
 - [ZLSplitter](https://github.com/ZL-Audio/ZLSplitter) by ZL-Audio, providing
   AGPLv3 transient/sustain separation.
-- [default_distortion](https://github.com/lsooxlla8/default_distortion),
-  providing the `default_*` UI language, bypass and Auto Gain interaction, and
-  drive algorithm semantics.
 - [Faust Libraries `vaeffects.lib`](https://github.com/grame-cncm/faustlibraries/blob/ccc6030e60806011ae73c9502d9bca85ff2b79fa/vaeffects.lib)
   by Dario Sanfilippo and Faust Libraries contributors, providing MIT-licensed
   matched-filter coefficient code used by de-cramping.
