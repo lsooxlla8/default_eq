@@ -26,19 +26,14 @@ Most editing happens directly on the analyzer:
   Character.
 - **Shift-click** individual bands to add or remove them from the selection.
   **Shift-drag** or **right-drag** a marquee over empty graph space to select
-  multiple bands. Their parameters then move relatively.
-- Drag the selected band's **square dynamic-range handle** to set its maximum
-  dynamic range.
+  multiple bands.
 - **Alt-click** a band to momentarily solo it; **Cmd-click** toggles bypass.
 - **Right-click** a band to choose its filter, L/R–M/S–T/S placement,
-  saturation mode, or equalizer reset. **Double-click** a band to delete it.
+  saturation mode, or reset the equalizer. **Double-click** a band to delete it.
 - **Shift-Cmd-click** a band to reset its placement. **Alt-right-click** resets
   its Slope; **Cmd-right-click** resets its Drive and Character.
-- Use global **Shift** to move every band by the same musical interval.
-- For precise adjustments, **Freq, Gain, Q, and Slope** can also be entered
-  directly in the parameter fields below. Double-click a displayed value to
-  type it; right-click a slider to restore its default.
-- **Cmd-Z** undoes the last edit; **Shift-Cmd-Z** redoes it.
+- For precise adjustments, **Freq, Gain, Q, and Slope** can also be entered via double-click
+  directly in the parameter fields below. 
 
 There is deliberately no internal preset system. Plugin state is handled
 through the host, with complete project recall, versioned state, and Undo/Redo
