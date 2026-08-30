@@ -2,8 +2,7 @@
 
 ![default_eq plug-in interface](docs/screenshots/ui-aligned-rail-tooltip-860.png)
 
-**default_eq** is designed to be your go-to EQ for shaping, balancing, and
-dynamically controlling audio.
+**default_eq** is designed to be your go-to EQ for tonal shaping, dynamic control, and adding harmonic character exactly where you need it.
 
 Built around eight fully independent bands, it combines parametric and dynamic
 EQ, per-band saturation, Linear Phase processing, two Auto Gain modes,
