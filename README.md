@@ -1,5 +1,7 @@
 # default_eq
 
+![default_eq plug-in interface](docs/screenshots/ui-aligned-rail-tooltip-860.png)
+
 **default_eq** is designed to be your go-to EQ for shaping, balancing, and
 dynamically controlling audio.
 
@@ -10,19 +12,33 @@ compact interface.
 
 Most editing happens directly on the analyzer:
 
-- **Drag** a band to adjust frequency and gain. Hold **Cmd** while dragging to
-  control Drive, or **Shift** to adjust the dynamics Threshold.
-- Use the **mouse wheel** for Q, **Shift + wheel** for placement,
-  **Alt + wheel** for Slope, and **Cmd + wheel** for Character.
-- **Shift-click** bands or **Shift-drag** or **Right-click-drag** a marquee over empty graph space to select and
-  edit multiple bands relatively.
+- **Click empty space** to create a filter: Bell in the middle, Low Shelf in
+  the upper left, High Shelf in the upper right, High Cut in the lower left,
+  or Low Cut in the lower right.
+- **Shift-click empty space** to create Tilt, except in the lower far-left and
+  far-right areas, which create resonant High Cut and Low Cut respectively.
+- **Drag** a band horizontally to adjust frequency. Vertical movement adjusts
+  Gain, except for Cut, Notch, and Band Pass filters, where it adjusts Q.
+- **Cmd-drag** a band to adjust Drive; **Shift-drag** it to adjust the dynamic
+  Threshold.
+- Use the **mouse wheel** for Q (or Slope on non-resonant Cut filters),
+  **Shift-wheel** for placement, **Alt-wheel** for Slope, and **Cmd-wheel** for
+  Character.
+- **Shift-click** individual bands to add or remove them from the selection.
+  **Shift-drag** or **right-drag** a marquee over empty graph space to select
+  multiple bands. Their parameters then move relatively.
+- Drag the selected band's **square dynamic-range handle** to set its maximum
+  dynamic range.
+- **Alt-click** a band to momentarily solo it; **Cmd-click** toggles bypass.
+- **Right-click** a band to choose its filter, L/R–M/S–T/S placement,
+  saturation mode, or equalizer reset. **Double-click** a band to delete it.
+- **Shift-Cmd-click** a band to reset its placement. **Alt-right-click** resets
+  its Slope; **Cmd-right-click** resets its Drive and Character.
 - Use global **Shift** to move every band by the same musical interval.
 - For precise adjustments, **Freq, Gain, Q, and Slope** can also be entered
-  directly in the parameter fields below.
-- **Alt-click** a band to momentarily solo it; **Cmd-click** toggles bypass.
-- **Shift + Cmd + click** a band to reset it's placement.
-- **Cmd + Right-click** a band to reset it's drive and character.
-- **Shift + Right-click** a band to reset it's threshold.
+  directly in the parameter fields below. Double-click a displayed value to
+  type it; right-click a slider to restore its default.
+- **Cmd-Z** undoes the last edit; **Shift-Cmd-Z** redoes it.
 
 There is deliberately no internal preset system. Plugin state is handled
 through the host, with complete project recall, versioned state, and Undo/Redo
@@ -39,9 +55,6 @@ support.
 - [Faust Libraries `vaeffects.lib`](https://github.com/grame-cncm/faustlibraries/blob/ccc6030e60806011ae73c9502d9bca85ff2b79fa/vaeffects.lib)
   by Dario Sanfilippo and Faust Libraries contributors, providing MIT-licensed
   matched-filter coefficient code used by de-cramping.
-- [Vital](https://github.com/mtytel/vital/tree/636ca0ef517a4db087a6a08a6a8a5e704e21f836),
-  providing the disclosed GPLv3 upstream lineage of Soft Clip inherited
-  through `default_distortion`.
 
 Exact repositories, revisions, licences, modifications, and code boundaries
 are documented in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Included

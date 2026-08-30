@@ -15,9 +15,7 @@ filters, dynamic processing, interaction, and UI. Original history is retained.
 
 ## default_distortion
 
-Reused author-owned family design, click-free latency-aligned bypass, Smart
-Auto Gain interaction, and the retained user-facing drive algorithms/control
-semantics (Soft Clip through Sine Erosion):
+Reused author-owned family infrastructure and interaction conventions:
 
 - repository: https://github.com/lsooxlla8/default_distortion
 - revision: `d145fab57e943869939d6a987cc69f90d676a4ae`
@@ -26,31 +24,11 @@ semantics (Soft Clip through Sine Erosion):
 - copyright: icanseesounds
 - license: GNU AGPL version 3 only
 
-The bypass was moved to `Source/DSP/GlobalBypass.h`, detached from distortion
-parameters, and integrated with equalizer latency reporting.
-
-### Indirect drive-algorithm provenance
-
-`default_distortion` itself contains a third-party-derived implementation. The
-following provenance is retained here because the corresponding user-facing
-drive modes reached `default_eq` through that project.
-
-#### Vital Soft Clip lineage
-
-- repository: https://github.com/mtytel/vital
-- revision: `636ca0ef517a4db087a6a08a6a8a5e704e21f836`
-- original files: `src/synthesis/effects/distortion.cpp` and
-  `src/synthesis/framework/futils.h`
-- copyright: Copyright (C) 2013-2019 Matt Tytel
-- license: GNU GPL version 3 or later
-
-The referenced `default_distortion` revision contains scalar adaptations of
-Vital's Soft Clip, Hard Clip, and rational `futils::tanh`. `default_eq` retains
-only the Soft Clip lineage, subsequently modified in `Source/DSP/EQBand.h` to
-use the C++ standard-library `std::tanh` and a bounded cubic morph. The Hard
-Clip mode and Vital's rational `futils::tanh` implementation are **not**
-present in this repository. The remaining mode lineage is nevertheless
-disclosed, and the GPLv3 text is included at `LICENSES/GPL-3.0.txt`.
+The bypass was copied into `Source/DSP/GlobalBypass.h`, detached from distortion
+parameters, and integrated with equalizer latency reporting. The family theme
+preferences, drive control semantics, and deterministic lookup-table approach
+were also carried over, while the current EQ-specific tables were generated
+against `default_eq` itself.
 
 ## Faust vaeffects.lib matched filters
 

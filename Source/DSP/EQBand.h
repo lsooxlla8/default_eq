@@ -9,10 +9,9 @@
 #include <limits>
 #include <vector>
 
-// Saturation / waveshaper modes retained and expanded from the FreeEQ8 base
-// and default_distortion. Soft Clip has indirect Vital lineage but uses a
-// modified replacement rather than Vital's rational tanh. Other current
-// implementations are author-owned; see THIRD_PARTY_NOTICES.md.
+// Saturation / waveshaper processing evolved from the FreeEQ8 base and the
+// author-owned default_distortion project; see THIRD_PARTY_NOTICES.md for the
+// reused code boundaries.
 enum class SaturationType
 {
     SoftClip = 0, DiodeClipper, TriodeStage, FET,
