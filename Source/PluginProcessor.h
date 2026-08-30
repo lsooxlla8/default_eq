@@ -55,12 +55,6 @@ public:
     SpectrumFIFO preSpectrumFifo;
     void setAnalyzerEnabled(bool enabled) noexcept { analyzerEnabled.store(enabled, std::memory_order_release); }
 
-    // Output metering (read from UI thread)
-    std::atomic<float> meterPeakL { 0.0f };
-    std::atomic<float> meterPeakR { 0.0f };
-    std::atomic<float> meterRmsL  { 0.0f };
-    std::atomic<float> meterRmsR  { 0.0f };
-
     // Linear phase engine (public for UI to check state)
     LinearPhaseEngine linearPhaseEngine;
 

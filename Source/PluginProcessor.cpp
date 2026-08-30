@@ -1333,25 +1333,6 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
 
     const bool pluginEnabled = pluginEnabledParam->load(std::memory_order_relaxed) > 0.5f;
     globalBypass.processOutput(mainBuffer, getLatencySamples(), pluginEnabled);
-
-    // --- Output metering ---
-    {
-        float peakL = 0.0f, peakR = 0.0f;
-        float sumSqL = 0.0f, sumSqR = 0.0f;
-        for (int i = 0; i < n; ++i)
-        {
-            const float al = std::abs(L[i]);
-            const float ar = std::abs(R[i]);
-            if (al > peakL) peakL = al;
-            if (ar > peakR) peakR = ar;
-            sumSqL += L[i] * L[i];
-            sumSqR += R[i] * R[i];
-        }
-        meterPeakL.store(peakL, std::memory_order_relaxed);
-        meterPeakR.store(peakR, std::memory_order_relaxed);
-        meterRmsL.store(std::sqrt(sumSqL / (float) n), std::memory_order_relaxed);
-        meterRmsR.store(std::sqrt(sumSqR / (float) n), std::memory_order_relaxed);
-    }
 }
 
 void DefaultEqualizerAudioProcessor::updateReportedLatency() noexcept

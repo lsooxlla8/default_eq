@@ -102,7 +102,6 @@ target_sources(DefaultEQ PRIVATE
     Source/UI/DefaultFamilyUI.h
     Source/UI/DefaultFamilyUI.cpp
     Source/UI/DriveCharacterFormatting.h
-    Source/UI/LevelMeter.h
 )
 
 target_compile_definitions(DefaultEQ PRIVATE
@@ -116,7 +115,6 @@ target_compile_definitions(DefaultEQ PRIVATE
 target_link_libraries(DefaultEQ PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
-    juce::juce_cryptography
     juce::juce_recommended_config_flags
 )
 
