@@ -11,8 +11,7 @@
 
 class DefaultEqualizerAudioProcessor;
 
-class ResponseCurveComponent : public juce::Component,
-                               public juce::Timer
+class ResponseCurveComponent : public juce::Component
 {
 public:
     explicit ResponseCurveComponent(DefaultEqualizerAudioProcessor& processor);
@@ -20,7 +19,7 @@ public:
 
     void paint(juce::Graphics& g) override;
     void resized() override;
-    void timerCallback() override;
+    bool refreshForTimer(bool spectrumFrameArrived);
 
     // Mouse interaction for draggable nodes
     void mouseDown(const juce::MouseEvent& e) override;
@@ -41,8 +40,22 @@ public:
     bool isBandSelected(int band) const noexcept
     { return band >= 0 && band < kNumBands && selection[(size_t)band]; }
     void setSelectedBand(int band);
-    void setDarkMode(bool shouldBeDark) { darkMode = shouldBeDark; repaint(); }
-    void setAnalyzerSources(bool input, bool output) { showInputSpectrum = input; showOutputSpectrum = output; repaint(); }
+    bool deleteSelectedBands();
+    bool resetBandThreshold(int band);
+    void setDarkMode(bool shouldBeDark)
+    {
+        if (darkMode == shouldBeDark) return;
+        darkMode = shouldBeDark;
+        staticLayerDirty = true;
+        repaint();
+    }
+    void setAnalyzerSources(bool input, bool output)
+    {
+        if (showInputSpectrum == input && showOutputSpectrum == output) return;
+        showInputSpectrum = input;
+        showOutputSpectrum = output;
+        repaint();
+    }
     void resetPeakHold()
     {
         std::fill(std::begin(peakInputSpectrum), std::end(peakInputSpectrum), -120.0f);
@@ -58,9 +71,7 @@ public:
     {
         analyzerFloorDb = floorDb;
         analyzerDecayDb = 1.5f;
-        analyzerAveraging = averagingSeconds <= 0.0f
-            ? 1.0f
-            : 1.0f - std::exp(-1.0f / (30.0f * averagingSeconds));
+        analyzerAveragingSeconds = averagingSeconds;
         analyzerTiltDbPerOct = tilt;
         repaint();
     }
@@ -81,6 +92,48 @@ public:
     static bool isClassicCutType(int type) noexcept { return type == 8 || type == 9; }
     static bool usesQVerticalDrag(int type) noexcept { return isCutType(type) || type == 2 || type == 4; }
     static bool usesGainVerticalDrag(int type) noexcept { return !usesQVerticalDrag(type); }
+    enum class WheelAction { widthOrClassicSlope, slope, character, placement };
+    static WheelAction wheelActionForModifiers(bool commandDown, bool altDown,
+                                               bool shiftDown) noexcept
+    {
+        if (commandDown) return WheelAction::slope;
+        if (altDown) return WheelAction::character;
+        if (shiftDown) return WheelAction::placement;
+        return WheelAction::widthOrClassicSlope;
+    }
+    static float increasingSlopeWheelStep(float platformDeltaY) noexcept
+    {
+        // JUCE reports an upward wheel gesture as a negative delta on the
+        // host/platform combination used by this plug-in.
+        return -platformDeltaY;
+    }
+    static float slopeAfterWheelStep(int type, float slope,
+                                     float increasingStep) noexcept
+    {
+        if (isClassicCutType(type))
+            return juce::jlimit(3.0f, 96.0f, slope + increasingStep * 18.0f);
+
+        static constexpr float discrete[] { 6, 12, 24, 36, 48, 72, 96 };
+        const int first = (type == 2 || type == 4 || type == 5) ? 1 : 0;
+        int currentIndex = first;
+        for (int index = first + 1; index < 7; ++index)
+            if (std::abs(slope - discrete[index])
+                < std::abs(slope - discrete[currentIndex]))
+                currentIndex = index;
+        return discrete[juce::jlimit(first, 6,
+            currentIndex + (increasingStep > 0.0f ? 1 : -1))];
+    }
+    static float qResetValueForType(int type) noexcept
+    {
+        return deq::filter_types::isResonantCutIndex(type)
+            ? deq::filter_types::resonantCutDefaultQ : 1.0f;
+    }
+    static constexpr float bandHitRadius() noexcept { return 20.0f; }
+    static bool isWithinBandHitArea(float deltaX, float deltaY) noexcept
+    {
+        const float radius = bandHitRadius();
+        return deltaX * deltaX + deltaY * deltaY <= radius * radius;
+    }
     static float cutQFromVerticalDrag(float startQ, float deltaY) noexcept
     {
         return std::clamp(startQ * std::pow(2.0f, -deltaY / 80.0f), 0.1f, 24.0f);
@@ -142,7 +195,9 @@ private:
     bool darkMode = true;
     bool showInputSpectrum = true, showOutputSpectrum = true;
     float analyzerFloorDb = -90.0f, analyzerDecayDb = 1.5f;
-    float analyzerAveraging = 0.402f, analyzerTiltDbPerOct = 4.5f;
+    float analyzerAveragingSeconds = 0.065f, analyzerTiltDbPerOct = 4.5f;
+    juce::Image staticLayer;
+    bool staticLayerDirty = true;
 
     // Coordinate mapping
     float freqToX(float freqHz) const;
@@ -156,7 +211,9 @@ private:
     static float computeMagnitudeDb(const Biquad& bq, double freq, double sampleRate);
 
     // Update all magnitude arrays from current processor state
-    void updateResponseCurve();
+    bool updateResponseCurve();
+    void advanceSpectrumFrame();
+    void ensureStaticLayer();
 
     // Paint helpers
     void paintGrid(juce::Graphics& g);

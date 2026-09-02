@@ -2,6 +2,11 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+ #include <arm_neon.h>
+#elif defined(__SSE2__) || defined(_M_X64)
+ #include <emmintrin.h>
+#endif
 
 // C++17 constant — replaces the fragile #ifndef M_PI / #define M_PI pattern.
 constexpr double kPi = 3.14159265358979323846;
@@ -72,6 +77,92 @@ struct Biquad
         z1R = b1 * x - a1 * y + z2R;
         z2R = b2 * x - a2 * y;
         return (float)y;
+    }
+
+    inline void processStereo(float& left, float& right)
+    {
+        const double yLeft = b0 * left + z1L;
+        z1L = b1 * left - a1 * yLeft + z2L;
+        z2L = b2 * left - a2 * yLeft;
+        left = (float)yLeft;
+
+        const double yRight = b0 * right + z1R;
+        z1R = b1 * right - a1 * yRight + z2R;
+        z2R = b2 * right - a2 * yRight;
+        right = (float)yRight;
+    }
+
+    inline void processStereoBlock(float* left, float* right, int numSamples)
+    {
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+        const float64x2_t vectorB0 = vdupq_n_f64(b0);
+        const float64x2_t vectorB1 = vdupq_n_f64(b1);
+        const float64x2_t vectorB2 = vdupq_n_f64(b2);
+        const float64x2_t vectorA1 = vdupq_n_f64(a1);
+        const float64x2_t vectorA2 = vdupq_n_f64(a2);
+        float64x2_t vectorZ1 { z1L, z1R };
+        float64x2_t vectorZ2 { z2L, z2R };
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const float64x2_t input { (double)left[sample], (double)right[sample] };
+            const auto output = vaddq_f64(vmulq_f64(vectorB0, input), vectorZ1);
+            vectorZ1 = vaddq_f64(vsubq_f64(vmulq_f64(vectorB1, input),
+                                           vmulq_f64(vectorA1, output)), vectorZ2);
+            vectorZ2 = vsubq_f64(vmulq_f64(vectorB2, input),
+                                 vmulq_f64(vectorA2, output));
+            left[sample] = (float)vgetq_lane_f64(output, 0);
+            right[sample] = (float)vgetq_lane_f64(output, 1);
+        }
+        z1L = vgetq_lane_f64(vectorZ1, 0); z1R = vgetq_lane_f64(vectorZ1, 1);
+        z2L = vgetq_lane_f64(vectorZ2, 0); z2R = vgetq_lane_f64(vectorZ2, 1);
+#elif defined(__SSE2__) || defined(_M_X64)
+        const __m128d vectorB0 = _mm_set1_pd(b0);
+        const __m128d vectorB1 = _mm_set1_pd(b1);
+        const __m128d vectorB2 = _mm_set1_pd(b2);
+        const __m128d vectorA1 = _mm_set1_pd(a1);
+        const __m128d vectorA2 = _mm_set1_pd(a2);
+        __m128d vectorZ1 = _mm_set_pd(z1R, z1L);
+        __m128d vectorZ2 = _mm_set_pd(z2R, z2L);
+        alignas(16) double outputValues[2];
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const __m128d input = _mm_set_pd((double)right[sample], (double)left[sample]);
+            const auto output = _mm_add_pd(_mm_mul_pd(vectorB0, input), vectorZ1);
+            vectorZ1 = _mm_add_pd(_mm_sub_pd(_mm_mul_pd(vectorB1, input),
+                                             _mm_mul_pd(vectorA1, output)), vectorZ2);
+            vectorZ2 = _mm_sub_pd(_mm_mul_pd(vectorB2, input),
+                                  _mm_mul_pd(vectorA2, output));
+            _mm_store_pd(outputValues, output);
+            left[sample] = (float)outputValues[0];
+            right[sample] = (float)outputValues[1];
+        }
+        alignas(16) double stateValues[2];
+        _mm_store_pd(stateValues, vectorZ1);
+        z1L = stateValues[0]; z1R = stateValues[1];
+        _mm_store_pd(stateValues, vectorZ2);
+        z2L = stateValues[0]; z2R = stateValues[1];
+#else
+        const double localB0 = b0, localB1 = b1, localB2 = b2;
+        const double localA1 = a1, localA2 = a2;
+        double localZ1L = z1L, localZ2L = z2L;
+        double localZ1R = z1R, localZ2R = z2R;
+        for (int sample = 0; sample < numSamples; ++sample)
+        {
+            const double inputL = left[sample];
+            const double yLeft = localB0 * inputL + localZ1L;
+            localZ1L = localB1 * inputL - localA1 * yLeft + localZ2L;
+            localZ2L = localB2 * inputL - localA2 * yLeft;
+            left[sample] = (float)yLeft;
+
+            const double inputR = right[sample];
+            const double yRight = localB0 * inputR + localZ1R;
+            localZ1R = localB1 * inputR - localA1 * yRight + localZ2R;
+            localZ2R = localB2 * inputR - localA2 * yRight;
+            right[sample] = (float)yRight;
+        }
+        z1L = localZ1L; z2L = localZ2L;
+        z1R = localZ1R; z2R = localZ2R;
+#endif
     }
 
     enum class Type { Bell, LowShelf, HighShelf, HighPass, LowPass, Bandpass, Notch, Tilt,

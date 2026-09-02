@@ -1,54 +1,96 @@
 #include "PluginProcessor.h"
 #include "DSP/DriveAutoGainTable.h"
 #include "DSP/FilterTypes.h"
-#include "DSP/EQAutoGainTable.h"
+#include "DSP/EQAutoGain.h"
 #include "DSP/VariableSlope.h"
 #include "PluginEditor.h"
 #include <complex>
+#include <limits>
 
 static juce::String bandId(int idx, const char* suffix)
 {
     return "b" + juce::String(idx) + "_" + suffix;
 }
 
-namespace
-{
-juce::ValueTree findStateParameter(juce::ValueTree state, const juce::String& id)
-{
-    for (auto child : state)
-        if (child.getProperty("id").toString() == id)
-            return child;
-    return {};
-}
+static constexpr std::array<const char*, 19> observedBandParameterSuffixes {
+    "present", "on", "type", "slope", "placement_mode", "placement",
+    "freq", "q", "gain", "drive", "drive_character", "drive_secondary",
+    "sat_mode", "dyn_mode", "sc_source", "dyn_lookahead", "dyn_thresh",
+    "dyn_range", "dyn_ratio"
+};
 
-float readStateParameter(juce::ValueTree state, const juce::String& id, float fallback)
+static inline void sanitizeAndClamp(float* samples, int count,
+                                    float minimum, float maximum) noexcept
 {
-    if (auto child = findStateParameter(state, id); child.isValid())
-        return (float)child.getProperty("value", fallback);
-    return (float)state.getProperty(id, fallback);
-}
-
-void writeStateParameter(juce::ValueTree state, const juce::String& id, float value)
-{
-    if (auto child = findStateParameter(state, id); child.isValid())
-        child.setProperty("value", value, nullptr);
-    else
+    int sample = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    const auto low = vdupq_n_f32(minimum);
+    const auto high = vdupq_n_f32(maximum);
+    const auto zero = vdupq_n_f32(0.0f);
+    const auto maximumFinite = vdupq_n_f32(std::numeric_limits<float>::max());
+    for (; sample + 4 <= count; sample += 4)
     {
-        juce::ValueTree parameter("PARAM");
-        parameter.setProperty("id", id, nullptr);
-        parameter.setProperty("value", value, nullptr);
-        state.appendChild(parameter, nullptr);
+        const auto input = vld1q_f32(samples + sample);
+        const auto finite = vcleq_f32(vabsq_f32(input), maximumFinite);
+        const auto clamped = vmaxq_f32(low, vminq_f32(high, input));
+        vst1q_f32(samples + sample, vbslq_f32(finite, clamped, zero));
     }
-    state.removeProperty(id, nullptr);
+#elif defined(__SSE2__) || defined(_M_X64)
+    const auto low = _mm_set1_ps(minimum);
+    const auto high = _mm_set1_ps(maximum);
+    const auto signBit = _mm_set1_ps(-0.0f);
+    const auto maximumFinite = _mm_set1_ps(std::numeric_limits<float>::max());
+    for (; sample + 4 <= count; sample += 4)
+    {
+        const auto input = _mm_loadu_ps(samples + sample);
+        const auto finite = _mm_cmple_ps(_mm_andnot_ps(signBit, input), maximumFinite);
+        const auto clamped = _mm_max_ps(low, _mm_min_ps(high, input));
+        _mm_storeu_ps(samples + sample, _mm_and_ps(finite, clamped));
+    }
+#endif
+    for (; sample < count; ++sample)
+        samples[sample] = std::isfinite(samples[sample])
+            ? std::clamp(samples[sample], minimum, maximum) : 0.0f;
 }
 
-void removeStateParameter(juce::ValueTree state, const juce::String& id)
+static inline void scaleSanitizeAndClamp(float* samples, int count, float gain,
+                                         float minimum, float maximum) noexcept
 {
-    state.removeProperty(id, nullptr);
-    if (auto child = findStateParameter(state, id); child.isValid())
-        state.removeChild(child, nullptr);
+    int sample = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    const auto vectorGain = vdupq_n_f32(gain);
+    const auto low = vdupq_n_f32(minimum);
+    const auto high = vdupq_n_f32(maximum);
+    const auto zero = vdupq_n_f32(0.0f);
+    const auto maximumFinite = vdupq_n_f32(std::numeric_limits<float>::max());
+    for (; sample + 4 <= count; sample += 4)
+    {
+        const auto input = vld1q_f32(samples + sample);
+        const auto finite = vcleq_f32(vabsq_f32(input), maximumFinite);
+        const auto scaled = vmulq_f32(input, vectorGain);
+        const auto clamped = vmaxq_f32(low, vminq_f32(high, scaled));
+        vst1q_f32(samples + sample, vbslq_f32(finite, clamped, zero));
+    }
+#elif defined(__SSE2__) || defined(_M_X64)
+    const auto vectorGain = _mm_set1_ps(gain);
+    const auto low = _mm_set1_ps(minimum);
+    const auto high = _mm_set1_ps(maximum);
+    const auto signBit = _mm_set1_ps(-0.0f);
+    const auto maximumFinite = _mm_set1_ps(std::numeric_limits<float>::max());
+    for (; sample + 4 <= count; sample += 4)
+    {
+        const auto input = _mm_loadu_ps(samples + sample);
+        const auto finite = _mm_cmple_ps(_mm_andnot_ps(signBit, input), maximumFinite);
+        const auto scaled = _mm_mul_ps(input, vectorGain);
+        const auto clamped = _mm_max_ps(low, _mm_min_ps(high, scaled));
+        _mm_storeu_ps(samples + sample, _mm_and_ps(finite, clamped));
+    }
+#endif
+    for (; sample < count; ++sample)
+        samples[sample] = std::isfinite(samples[sample])
+            ? std::clamp(samples[sample] * gain, minimum, maximum) : 0.0f;
 }
-}
+
 
 std::pair<float, float> DefaultEqualizerAudioProcessor::dynamicsTimingForSpeed(float speed) noexcept
 {
@@ -108,20 +150,10 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
 
     // Register for latency updates and background linear-phase rebuilds.
     for (int i = 1; i <= kNumBands; ++i)
-    {
-        apvts.addParameterListener(bandId(i, "freq"),  this);
-        apvts.addParameterListener(bandId(i, "gain"),  this);
-        apvts.addParameterListener(bandId(i, "q"),     this);
-        apvts.addParameterListener(bandId(i, "present"), this);
-        apvts.addParameterListener(bandId(i, "on"),    this);
-        apvts.addParameterListener(bandId(i, "type"),  this);
-        apvts.addParameterListener(bandId(i, "slope"), this);
-        apvts.addParameterListener(bandId(i, "placement"), this);
-        apvts.addParameterListener(bandId(i, "placement_mode"), this);
-        apvts.addParameterListener(bandId(i, "drive"), this);
-        apvts.addParameterListener(bandId(i, "dyn_lookahead"), this);
-        apvts.addParameterListener(bandId(i, "dyn_thresh"), this);
-    }
+        for (auto* suffix : observedBandParameterSuffixes)
+            apvts.addParameterListener(bandId(i, suffix), this);
+    for (int i = 1; i <= kNumBands; ++i)
+        apvts.addParameterListener(bandId(i, "dyn_speed"), this);
     apvts.addParameterListener("linear_phase", this);
     apvts.addParameterListener("linear_quality", this);
     apvts.addParameterListener("scale", this);
@@ -129,37 +161,14 @@ DefaultEqualizerAudioProcessor::DefaultEqualizerAudioProcessor()
     apvts.addParameterListener("adaptive_q", this);
     apvts.addParameterListener("oversampling", this);
     apvts.addParameterListener("auto_gain_mode", this);
+    for (auto* id : { "transient_split_strength", "transient_split_balance",
+                      "transient_split_hold", "transient_split_smooth" })
+        apvts.addParameterListener(id, this);
 
     linPhaseRebuildThread = std::make_unique<LinPhaseRebuildThread>(*this);
 
 }
 
-void DefaultEqualizerAudioProcessor::cacheParameterPointers()
-{
-    const auto raw = [this](const juce::String& id) { return apvts.getRawParameterValue(id); };
-    outputGainParam = raw("output_gain"); amountParam = raw("scale"); shiftParam = raw("shift");
-    adaptiveQParam = raw("adaptive_q");
-    linearPhaseParam = raw("linear_phase"); linearQualityParam = raw("linear_quality");
-    oversamplingParam = raw("oversampling"); autoGainModeParam = raw("auto_gain_mode");
-    pluginEnabledParam = raw("plugin_enabled");
-    transientStrengthParam=raw("transient_split_strength"); transientBalanceParam=raw("transient_split_balance");
-    transientHoldParam=raw("transient_split_hold"); transientSmoothParam=raw("transient_split_smooth");
-    for (int i = 0; i < kNumBands; ++i)
-    {
-        auto& p = bandParams[(size_t)i]; const int b = i + 1;
-        p.present = raw(bandId(b,"present")); p.on = raw(bandId(b,"on"));
-        p.type = raw(bandId(b,"type")); p.slope = raw(bandId(b,"slope"));
-        p.placementMode = raw(bandId(b,"placement_mode")); p.placement = raw(bandId(b,"placement"));
-        p.freq = raw(bandId(b,"freq")); p.q = raw(bandId(b,"q")); p.gain = raw(bandId(b,"gain"));
-        p.drive = raw(bandId(b,"drive"));
-        p.driveCharacter = raw(bandId(b,"drive_character")); p.driveSecondary = raw(bandId(b,"drive_secondary"));
-        p.satMode = raw(bandId(b,"sat_mode"));
-        p.dynMode = raw(bandId(b,"dyn_mode")); p.scSource = raw(bandId(b,"sc_source"));
-        p.dynLookahead = raw(bandId(b,"dyn_lookahead")); p.dynThresh = raw(bandId(b,"dyn_thresh"));
-        p.dynRange = raw(bandId(b,"dyn_range")); p.dynRatio = raw(bandId(b,"dyn_ratio"));
-        p.dynSpeed = raw(bandId(b,"dyn_speed"));
-    }
-}
 
 DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
 {
@@ -175,24 +184,18 @@ DefaultEqualizerAudioProcessor::~DefaultEqualizerAudioProcessor()
     apvts.removeParameterListener("adaptive_q", this);
     apvts.removeParameterListener("oversampling", this);
     apvts.removeParameterListener("auto_gain_mode", this);
+    for (auto* id : { "transient_split_strength", "transient_split_balance",
+                      "transient_split_hold", "transient_split_smooth" })
+        apvts.removeParameterListener(id, this);
     apvts.removeParameterListener("scale", this);
     apvts.removeParameterListener("shift", this);
     apvts.removeParameterListener("linear_phase", this);
     apvts.removeParameterListener("linear_quality", this);
     for (int i = 1; i <= kNumBands; ++i)
     {
-        apvts.removeParameterListener(bandId(i, "slope"), this);
-        apvts.removeParameterListener(bandId(i, "placement"), this);
-        apvts.removeParameterListener(bandId(i, "placement_mode"), this);
-        apvts.removeParameterListener(bandId(i, "drive"), this);
-        apvts.removeParameterListener(bandId(i, "dyn_lookahead"), this);
-        apvts.removeParameterListener(bandId(i, "dyn_thresh"), this);
-        apvts.removeParameterListener(bandId(i, "type"),  this);
-        apvts.removeParameterListener(bandId(i, "on"),    this);
-        apvts.removeParameterListener(bandId(i, "present"), this);
-        apvts.removeParameterListener(bandId(i, "q"),     this);
-        apvts.removeParameterListener(bandId(i, "gain"),  this);
-        apvts.removeParameterListener(bandId(i, "freq"),  this);
+        for (auto* suffix : observedBandParameterSuffixes)
+            apvts.removeParameterListener(bandId(i, suffix), this);
+        apvts.removeParameterListener(bandId(i, "dyn_speed"), this);
     }
 }
 
@@ -203,259 +206,6 @@ void DefaultEqualizerAudioProcessor::requestLinearPhaseRebuild()
         linPhaseRebuildThread->notify();
 }
 
-void DefaultEqualizerAudioProcessor::resetBandToDefaults(int zeroBasedBand, bool enable,
-                                                          float frequency, float gainDb)
-{
-    if (zeroBasedBand < 0 || zeroBasedBand >= kNumBands)
-        return;
-
-    const auto prefix = "b" + juce::String(zeroBasedBand + 1) + "_";
-    for (auto* base : getParameters())
-        if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*>(base))
-            if (parameter->paramID.startsWith(prefix))
-            {
-                parameter->beginChangeGesture();
-                parameter->setValueNotifyingHost(parameter->getDefaultValue());
-                parameter->endChangeGesture();
-            }
-
-    const auto setPlain = [this, zeroBasedBand](const char* suffix, float value)
-    {
-        if (auto* parameter = apvts.getParameter(bandId(zeroBasedBand + 1, suffix)))
-        {
-            parameter->beginChangeGesture();
-            parameter->setValueNotifyingHost(parameter->convertTo0to1(value));
-            parameter->endChangeGesture();
-        }
-    };
-    if (frequency > 0.0f) setPlain("freq", frequency);
-    setPlain("gain", gainDb);
-    setPlain("present", enable ? 1.0f : 0.0f);
-    setPlain("on", enable ? 1.0f : 0.0f);
-    if (soloBand.load(std::memory_order_acquire) == zeroBasedBand)
-        soloBand.store(-1, std::memory_order_release);
-}
-
-void DefaultEqualizerAudioProcessor::parameterChanged(const juce::String& parameterID, float newValue)
-{
-    juce::ignoreUnused(newValue);
-    const bool affectsLinearMagnitude = parameterID == "scale" || parameterID == "shift"
-        || parameterID == "adaptive_q"
-        || parameterID.endsWith("_freq")
-        || parameterID.endsWith("_gain") || parameterID.endsWith("_q")
-        || parameterID.endsWith("_present")
-        || parameterID.endsWith("_on")
-        || parameterID.endsWith("_type")
-        || parameterID.endsWith("_slope") || parameterID.endsWith("_placement")
-        || parameterID.endsWith("_placement_mode");
-    if (parameterID == "linear_phase" || parameterID == "linear_quality"
-        || (affectsLinearMagnitude
-            && linearPhaseParam->load(std::memory_order_relaxed) > 0.5f))
-        requestLinearPhaseRebuild();
-    if (affectsLinearMagnitude || parameterID == "auto_gain_mode")
-        regularAutoGainDirty.store(true, std::memory_order_release);
-
-    // Handle linear phase latency update (safe: parameterChanged is called on message thread)
-    if (parameterID == "linear_phase" || parameterID == "linear_quality")
-    {
-        updateReportedLatency();
-        return;
-    }
-
-    if (parameterID == "oversampling" || parameterID.endsWith("_drive")
-        || parameterID.endsWith("_present")
-        || parameterID.endsWith("_on")
-        || parameterID.endsWith("_placement_mode")
-        || parameterID.endsWith("_dyn_lookahead")
-        || parameterID.endsWith("_dyn_thresh"))
-    {
-        updateReportedLatency();
-        return;
-    }
-
-}
-
-juce::AudioProcessorValueTreeState::ParameterLayout DefaultEqualizerAudioProcessor::createParams()
-{
-    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
-    params.reserve(kNumBands * 24 + 8);
-
-    // Global parameters
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "output_gain", "Output Gain",
-        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f, 1.0f),
-        0.0f,
-        juce::AudioParameterFloatAttributes{}.withLabel("dB")
-            .withStringFromValueFunction([](float value, int)
-            {
-                const auto clean = std::abs(value) < 0.005f ? 0.0f : value;
-                return juce::String(clean, 2) + " dB";
-            })));
-    
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "scale", "Amount",
-        juce::NormalisableRange<float>(-2.0f, 2.0f, 0.01f, 1.0f),
-        1.0f,
-        juce::AudioParameterFloatAttributes{}.withLabel("%")
-            .withStringFromValueFunction([](float value, int)
-            {
-                const auto percent = std::abs(value) < 0.005f ? 0.0f : value * 100.0f;
-                return juce::String(juce::roundToInt(percent)) + "%";
-            })));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "shift", "Shift",
-        juce::NormalisableRange<float>(-48.0f, 48.0f, 0.01f, 1.0f),
-        0.0f,
-        juce::AudioParameterFloatAttributes{}
-            .withStringFromValueFunction([](float value, int)
-            {
-                const float clean = std::abs(value) < 0.005f ? 0.0f : value;
-                return (clean > 0.0f ? "+" : "") + juce::String(clean, 2);
-            })));
-    
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "adaptive_q", "Adaptive Q", false));
-
-    // Oversampling: 1x / 2x / 4x / 8x
-    params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        "oversampling", "Oversampling",
-        juce::StringArray { "1x", "2x", "4x", "8x" }, 0));
-
-    // Linear phase mode
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "linear_phase", "Linear Phase", false));
-    params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        "linear_quality", "Linear Phase Quality",
-        juce::StringArray { "Eco 1024", "Medium 2048", "High 4096" }, 2));
-
-    params.push_back(std::make_unique<juce::AudioParameterChoice>(
-        "auto_gain_mode", "Auto Gain Mode",
-        juce::StringArray { "Off", "Regular", "Smart" }, 1));
-
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "plugin_enabled", "Plugin Enabled", true));
-
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "transient_split_strength", "Transient Split Strength",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f), 100.0f,
-        juce::AudioParameterFloatAttributes{}.withLabel("%")));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "transient_split_balance", "Transient Split Balance",
-        juce::NormalisableRange<float>(-50.0f, 50.0f, 0.1f), 0.0f,
-        juce::AudioParameterFloatAttributes{}.withLabel("%")));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "transient_split_hold", "Transient Split Hold",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f), 50.0f,
-        juce::AudioParameterFloatAttributes{}.withLabel("%")));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "transient_split_smooth", "Transient Split Smooth",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 0.1f), 50.0f,
-        juce::AudioParameterFloatAttributes{}.withLabel("%")));
-
-    auto typeChoices = juce::StringArray { "Res Low Cut", "Res High Cut", "Notch", "Tilt",
-                                            "Band Pass", "Bell", "Low Shelf", "High Shelf",
-                                            "Low Cut", "High Cut" };
-    for (int i = 1; i <= kNumBands; ++i)
-    {
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            bandId(i,"present"), "Band " + juce::String(i) + " Present", false));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(bandId(i,"on"), "Band " + juce::String(i) + " On", false));
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(bandId(i,"type"), "Band " + juce::String(i) + " Type", typeChoices, 5));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"slope"), "Band " + juce::String(i) + " Slope",
-            juce::NormalisableRange<float>(3.0f, 96.0f, 0.1f, 1.0f), 12.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("dB/oct")));
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(
-            bandId(i,"placement_mode"), "Band " + juce::String(i) + " Placement Mode",
-            juce::StringArray { "L/R", "M/S", "T/S" }, 0));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"placement"), "Band " + juce::String(i) + " Placement",
-            juce::NormalisableRange<float>(-100.0f, 100.0f, 0.1f), 0.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("%")));
-
-        // Default frequencies spread logarithmically across the spectrum
-        // First 8 use classic fixed defaults; additional Pro bands use log spacing
-        static const float defaultFreqs8[] = { 0.f, 80.f, 250.f, 500.f, 1000.f, 2000.f, 4000.f, 8000.f, 12000.f };
-        float defaultFreq = (i <= 8) ? defaultFreqs8[i]
-            : 20.0f * std::pow(20000.0f / 20.0f, (float)(i - 1) / (float)(kNumBands - 1));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"freq"), "Band " + juce::String(i) + " Freq",
-            juce::NormalisableRange<float>(20.0f, 20000.0f, 0.001f, 0.5f),
-            defaultFreq));
-
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"q"), "Band " + juce::String(i) + " Q",
-            juce::NormalisableRange<float>(0.1f, 24.0f, 0.001f, 0.5f),
-            1.0f));
-
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"gain"), "Band " + juce::String(i) + " Gain",
-            juce::NormalisableRange<float>(-36.0f, 36.0f, 0.01f, 1.0f),
-            0.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("dB")
-                .withStringFromValueFunction([](float value, int)
-                {
-                    const auto clean = std::abs(value) < 0.005f ? 0.0f : value;
-                    return juce::String(clean, 2) + " dB";
-                })));
-
-        // Drive / saturation per band
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"drive"), "Band " + juce::String(i) + " Drive",
-            juce::NormalisableRange<float>(0.0f, 36.0f, 0.01f, 1.0f), 0.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("dB")
-                .withStringFromValueFunction([](float value, int)
-                { return juce::String(std::abs(value) < 0.005f ? 0.0f : value, 1) + " dB"; })));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"drive_character"), "Band " + juce::String(i) + " Drive Character",
-            juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f), 0.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"drive_secondary"), "Band " + juce::String(i) + " Drive Secondary",
-            juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
-
-#if DEFAULT_EQ_FULL
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(
-            bandId(i,"sat_mode"), "Band " + juce::String(i) + " Sat Mode",
-            juce::StringArray { "Soft Clip", "Diode", "Triode", "Transistor",
-                                "Tape", "Odd / Even", "Phase Distortion", "Sine Erosion" }, 0));
-#endif
-
-        // Dynamic EQ per band
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(
-            bandId(i,"dyn_mode"), "Band " + juce::String(i) + " Dynamic Mode",
-            juce::StringArray { "Downward", "Upward" }, 0));
-        params.push_back(std::make_unique<juce::AudioParameterChoice>(
-            bandId(i,"sc_source"), "Band " + juce::String(i) + " Sidechain Source",
-            juce::StringArray { "Internal", "External" }, 0));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"dyn_lookahead"), "Band " + juce::String(i) + " Lookahead",
-            juce::NormalisableRange<float>(0.0f, 5.0f, 0.01f), 0.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("ms")));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"dyn_thresh"), "Band " + juce::String(i) + " Threshold",
-            juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f, 1.0f),
-            0.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"dyn_range"), "Band " + juce::String(i) + " Range",
-            juce::NormalisableRange<float>(0.0f, 24.0f, 0.1f), 6.0f,
-            juce::AudioParameterFloatAttributes{}.withLabel("dB")));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"dyn_ratio"), "Band " + juce::String(i) + " Ratio",
-            juce::NormalisableRange<float>(1.0f, 20.0f, 0.1f, 0.5f),
-            4.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            bandId(i,"dyn_speed"), "Band " + juce::String(i) + " Speed",
-            juce::NormalisableRange<float>(0.0f, 100.0f, 0.01f),
-            75.0f,
-            juce::AudioParameterFloatAttributes{}.withStringFromValueFunction([](float value, int)
-            {
-                return juce::String(juce::roundToInt(value)) + "%";
-            })));
-    }
-
-    return { params.begin(), params.end() };
-}
 
 bool DefaultEqualizerAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
@@ -481,6 +231,7 @@ void DefaultEqualizerAudioProcessor::prepareToPlay(double sampleRate, int sample
     externalDetectorTransientSplitter.prepare(sampleRate,samplesPerBlock);
     transientBuffer.setSize(2,samplesPerBlock,false,true,false);
     sustainBuffer.setSize(2,samplesPerBlock,false,true,false);
+    staticRoutingScratch.setSize(2,samplesPerBlock,false,true,false);
     internalDetectorTransientBuffer.setSize(2,samplesPerBlock,false,true,false);
     internalDetectorSustainBuffer.setSize(2,samplesPerBlock,false,true,false);
     externalDetectorTransientBuffer.setSize(2,samplesPerBlock,false,true,false);
@@ -547,14 +298,25 @@ void DefaultEqualizerAudioProcessor::prepareToPlay(double sampleRate, int sample
     latencyFadingOut = false;
     regularAutoGainDirty.store(true, std::memory_order_release);
     regularTargetCompDb = 0.0f;
+    regularCompensationLinear = 1.0f;
+    cachedOutputGainDb = std::numeric_limits<float>::quiet_NaN();
+    cachedOutputGainLinear = 1.0f;
     autoGainLinearSm.reset(sampleRate, 0.01);
     autoGainLinearSm.setCurrentAndTargetValue(1.0f);
-    smartInputEnergy = smartOutputEnergy = 0.0;
-    smartInputPeak = smartOutputPeak = 0.0f;
-    smartEnergySamples = 0;
+    smartInputLoudness.prepare(sampleRate);
+    smartOutputLoudness.prepare(sampleRate);
     smartWarmupSamplesRemaining = 0;
-    smartParameterSignature = 0;
+    smartLoudnessRevision = 0;
+    smartLoudnessUpdateCount = 0;
+    smartObservationDirty.store(true, std::memory_order_release);
     smartTargetCompDb = 0.0f;
+    processedAutoGainMode = -1;
+    bandDirtyMask.store((1u << kNumBands) - 1u, std::memory_order_release);
+    runtimeBandsConfigured = false;
+    lastSidechainConnected = false;
+    lastMainChannelCount = 0;
+    cachedActiveBandCount = cachedDrivenBandCount = cachedTsActiveBandCount = 0;
+    cachedTsDriveActive = cachedTsDetectorNeeded = cachedTsExternalDetectorNeeded = false;
     smartAutoGainLocked.store(false, std::memory_order_release);
     smartAutoGainProgress.store(0.0f, std::memory_order_release);
     updateReportedLatency();
@@ -597,53 +359,76 @@ juce::dsp::Oversampling<float>* DefaultEqualizerAudioProcessor::currentOversampl
     return oversamplers[(size_t)(order - 1)].get();
 }
 
-void DefaultEqualizerAudioProcessor::syncBandsFromParams()
+std::uint32_t DefaultEqualizerAudioProcessor::syncBandsFromParams()
 {
+    const auto dirty = bandDirtyMask.exchange(0u, std::memory_order_acq_rel);
+    if (dirty == 0u)
+        return 0u;
     for (int index = 0; index < kNumBands; ++index)
     {
-        auto& b = bands[(size_t)index];
+        if ((dirty & (1u << index)) == 0u)
+            continue;
         const auto& p = bandParams[(size_t)index];
-        const bool on = p.present->load(std::memory_order_relaxed) > 0.5f
-            && p.on->load(std::memory_order_relaxed) > 0.5f;
-        const int t = (int)p.type->load(std::memory_order_relaxed);
-        const auto tp = deq::filter_types::fromParameterIndex(t);
+        auto& snapshot = bandSnapshots[(size_t)index];
+        snapshot.present = p.present->load(std::memory_order_relaxed) > 0.5f;
+        snapshot.on = p.on->load(std::memory_order_relaxed) > 0.5f;
+        snapshot.type = (int)p.type->load(std::memory_order_relaxed);
+        snapshot.slope = p.slope->load(std::memory_order_relaxed);
+        snapshot.placementMode = (int)p.placementMode->load(std::memory_order_relaxed);
+        snapshot.placement = p.placement->load(std::memory_order_relaxed);
+        snapshot.freq = p.freq->load(std::memory_order_relaxed);
+        snapshot.q = p.q->load(std::memory_order_relaxed);
+        snapshot.gain = p.gain->load(std::memory_order_relaxed);
+        snapshot.drive = p.drive->load(std::memory_order_relaxed);
+        snapshot.driveCharacter = p.driveCharacter->load(std::memory_order_relaxed);
+        snapshot.driveSecondary = p.driveSecondary->load(std::memory_order_relaxed);
+        snapshot.satMode = (int)p.satMode->load(std::memory_order_relaxed);
+        snapshot.dynMode = (int)p.dynMode->load(std::memory_order_relaxed);
+        snapshot.scSource = (int)p.scSource->load(std::memory_order_relaxed);
+        snapshot.dynLookahead = p.dynLookahead->load(std::memory_order_relaxed);
+        snapshot.dynThresh = p.dynThresh->load(std::memory_order_relaxed);
+        snapshot.dynRange = p.dynRange->load(std::memory_order_relaxed);
+        snapshot.dynRatio = p.dynRatio->load(std::memory_order_relaxed);
+        snapshot.dynSpeed = p.dynSpeed->load(std::memory_order_relaxed);
 
-        const float freq = p.freq->load(std::memory_order_relaxed);
-        const float q = p.q->load(std::memory_order_relaxed);
-        const float gain = p.gain->load(std::memory_order_relaxed);
-
-        b.enabled = on;
-        b.parameterType = tp;
-        b.targetFreqHz = freq;
-        b.targetQ = q;
-        b.targetGainDb = gain;
     }
+    cachedAnyEnabledBand = std::any_of(bandSnapshots.begin(), bandSnapshots.end(),
+        [](const auto& snapshot) { return snapshot.enabled(); });
+    cachedAnyDynamicBand = false;
+    cachedMaxDynamicLookaheadMs = 0.0f;
+    for (const auto& snapshot : bandSnapshots)
+        if (snapshot.enabled() && snapshot.dynThresh < -0.05f)
+        {
+            cachedAnyDynamicBand = true;
+            cachedMaxDynamicLookaheadMs = std::max(cachedMaxDynamicLookaheadMs,
+                                                   snapshot.dynLookahead);
+        }
+    return dirty;
 }
 
 void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    bool transportPlaying = false;
-    if (auto* playHead = getPlayHead())
-        if (const auto position = playHead->getPosition())
-            transportPlaying = position->getIsPlaying();
-    if (transportPlaying && !transportWasPlaying)
-        transportStartGeneration.fetch_add(1, std::memory_order_release);
-    transportWasPlaying = transportPlaying;
+    const bool shouldAnalyze = analyzerEnabled.load(std::memory_order_acquire);
+    if (shouldAnalyze)
+    {
+        bool transportPlaying = false;
+        if (auto* playHead = getPlayHead())
+            if (const auto position = playHead->getPosition())
+                transportPlaying = position->getIsPlaying();
+        if (transportPlaying && !transportWasPlaying)
+            transportStartGeneration.fetch_add(1, std::memory_order_release);
+        transportWasPlaying = transportPlaying;
+    }
 
     auto mainBuffer = getBusBuffer(buffer, false, 0);
     const int mainChannels = mainBuffer.getNumChannels();
     if (mainChannels < 1) return;
 
     for (int channel = 0; channel < mainChannels; ++channel)
-    {
-        auto* samples = mainBuffer.getWritePointer(channel);
-        for (int i = 0; i < mainBuffer.getNumSamples(); ++i)
-            samples[i] = std::isfinite(samples[i]) ? std::clamp(samples[i], -64.0f, 64.0f) : 0.0f;
-    }
-
-    globalBypass.captureInput(mainBuffer);
+        sanitizeAndClamp(mainBuffer.getWritePointer(channel),
+                         mainBuffer.getNumSamples(), -64.0f, 64.0f);
 
     const int n = mainBuffer.getNumSamples();
     if (processedLatency != getLatencySamples())
@@ -651,25 +436,64 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         processedLatency = getLatencySamples();
         latencyTransitionGain.setTargetValue(0.0f);
         latencyFadingOut = true;
-        smartInputEnergy = smartOutputEnergy = 0.0;
-        smartInputPeak = smartOutputPeak = 0.0f;
-        smartEnergySamples = 0;
+        smartInputLoudness.reset();
+        smartOutputLoudness.reset();
         smartWarmupSamplesRemaining = processedLatency;
+        smartLoudnessRevision = 0;
+        smartLoudnessUpdateCount = 0;
         smartAutoGainLocked.store(false, std::memory_order_release);
         smartAutoGainProgress.store(0.0f, std::memory_order_release);
     }
+    const int autoGainMode = (int)autoGainModeParam->load(std::memory_order_relaxed);
+    const bool autoGainModeChanged = autoGainMode != processedAutoGainMode;
+    processedAutoGainMode = autoGainMode;
+    if (autoGainMode == 2
+        && smartObservationDirty.exchange(false, std::memory_order_acq_rel))
+    {
+        // Keep the audible value while one new finite observation is taken.
+        smartTargetCompDb = autoGainCompDb.load(std::memory_order_relaxed);
+        smartInputLoudness.reset();
+        smartOutputLoudness.reset();
+        smartWarmupSamplesRemaining = std::max(getLatencySamples(), n);
+        smartLoudnessRevision = 0;
+        smartLoudnessUpdateCount = 0;
+        smartAutoGainLocked.store(false, std::memory_order_release);
+        smartAutoGainProgress.store(0.0f, std::memory_order_release);
+    }
+
+    const auto dirtyBands = syncBandsFromParams();
+
+    const bool pluginEnabled = pluginEnabledParam->load(std::memory_order_relaxed) > 0.5f;
+    const bool cleanUnityPath = !cachedAnyEnabledBand && autoGainMode != 2
+        && std::abs(outputGainParam->load(std::memory_order_relaxed)) < 0.0001f
+        && linearPhaseParam->load(std::memory_order_relaxed) < 0.5f
+        && soloBand.load(std::memory_order_relaxed) < 0
+        && !shouldAnalyze && getLatencySamples() == 0 && !latencyFadingOut
+        && std::abs(autoGainCompDb.load(std::memory_order_relaxed)) < 0.0001f
+        && !autoGainLinearSm.isSmoothing()
+        && globalBypass.isTransparentEnabledPath(0, pluginEnabled);
+    if (cleanUnityPath)
+        return;
+
+    const bool transparentBypassPath = globalBypass.isTransparentEnabledPath(
+        getLatencySamples(), pluginEnabled);
+    if (!transparentBypassPath)
+        globalBypass.captureInput(mainBuffer);
+
     const auto sidechain = getBusCount(true) > 1 ? getBusBuffer(buffer, true, 1)
                                                  : juce::AudioBuffer<float>();
     const float* sidechainL = sidechain.getNumChannels() > 0 ? sidechain.getReadPointer(0) : nullptr;
     const float* sidechainR = sidechain.getNumChannels() > 1 ? sidechain.getReadPointer(1) : sidechainL;
-    const int autoGainMode = (int)autoGainModeParam->load(std::memory_order_relaxed);
+    const bool sidechainConnected = sidechainL != nullptr;
+    std::uint32_t configurationDirtyBands = dirtyBands;
+    if (!runtimeBandsConfigured || sidechainConnected != lastSidechainConnected
+        || mainChannels != lastMainChannelCount)
+        configurationDirtyBands = (1u << kNumBands) - 1u;
+    runtimeBandsConfigured = true;
+    lastSidechainConnected = sidechainConnected;
+    lastMainChannelCount = mainChannels;
     const int meterBand = uiMeterBand.load(std::memory_order_relaxed);
-    bool anyDynamicBand = false;
-    for (const auto& p : bandParams)
-        anyDynamicBand = anyDynamicBand
-            || (p.present->load(std::memory_order_relaxed) > 0.5f
-                && p.on->load(std::memory_order_relaxed) > 0.5f
-                && p.dynThresh->load(std::memory_order_relaxed) < -0.05f);
+    const bool anyDynamicBand = cachedAnyDynamicBand;
     const bool needsDetectorInput = autoGainMode == 2 || anyDynamicBand || meterBand >= 0;
     if (needsDetectorInput)
         for (int channel = 0; channel < 2; ++channel)
@@ -683,14 +507,13 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             else externalDetectorInputBuffer.clear(channel,0,n);
         }
 
-    // Smart Gain alone needs a latency-aligned measurement stream. Regular is
-    // a parameter lookup and never touches this per-sample path.
-    double autoGainBlockInputEnergy = 0.0;
-    float autoGainBlockInputPeak = 0.0f;
+    // Smart Gain alone needs a latency-aligned K-weighted reference stream.
+    // Regular is parameter-derived and never touches this per-sample path.
     const int smartReferenceCapacity = smartReferenceDelayBuffer.getNumSamples();
     const int smartReferenceDelay = smartReferenceCapacity > 0
         ? std::clamp(getLatencySamples(), 0, smartReferenceCapacity - 1) : 0;
-    if (autoGainMode == 2)
+    if (autoGainMode == 2
+        && !smartAutoGainLocked.load(std::memory_order_acquire))
     {
         for (int i = 0; i < n && smartReferenceCapacity > 0; ++i)
         {
@@ -706,27 +529,25 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
             smartReferenceDelayBuffer.setSample(1, smartReferenceDelayPosition, currentR);
             if (++smartReferenceDelayPosition >= smartReferenceCapacity)
                 smartReferenceDelayPosition = 0;
-            autoGainBlockInputEnergy += (double)alignedL * alignedL + (double)alignedR * alignedR;
-            autoGainBlockInputPeak = std::max(autoGainBlockInputPeak,
-                                              std::max(std::abs(alignedL), std::abs(alignedR)));
+            smartInputLoudness.pushSample(alignedL, alignedR);
         }
     }
-    const float alignedInputRms = autoGainMode == 2
-        ? std::sqrt((float)(autoGainBlockInputEnergy / (double)std::max(1, n * 2))) : 0.0f;
 
-    const int lookahead = requestedLookaheadSamples();
+    const int lookahead = juce::roundToInt(sr * cachedMaxDynamicLookaheadMs * 0.001);
     lookaheadMix.setTargetValue(lookahead > 0 ? 1.0f : 0.0f);
     if (lookahead > 0)
         routeLookahead(mainBuffer,sidechainL,sidechainR,lookahead);
 
-    // Pull params each block
-    syncBandsFromParams();
-    
     // Get global parameters
     const float amount = amountParam->load(std::memory_order_relaxed);
     const float shiftSemitones = shiftParam->load(std::memory_order_relaxed);
     const float outputGainDb = outputGainParam->load(std::memory_order_relaxed);
-    const float outputGain = std::pow(10.0f, outputGainDb / 20.0f);
+    if (outputGainDb != cachedOutputGainDb)
+    {
+        cachedOutputGainDb = outputGainDb;
+        cachedOutputGainLinear = std::pow(10.0f, outputGainDb / 20.0f);
+    }
+    const float outputGain = cachedOutputGainLinear;
     const bool adaptiveQ = adaptiveQParam->load(std::memory_order_relaxed) > 0.5f;
     constexpr bool decramp = true;
     const bool linearPhase = linearPhaseParam->load(std::memory_order_relaxed) > 0.5f;
@@ -765,159 +586,168 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     const double effectiveSR = (configuredOS != nullptr)
         ? sr * std::pow(2.0, currentOversamplingOrder)
         : sr;
-    std::array<int, kNumBands> activeBands {};
-    std::array<int, kNumBands> drivenBands {};
-    std::array<int, kNumBands> tsActiveBands {};
-    int activeBandCount = 0;
-    int drivenBandCount = 0;
-    int tsActiveBandCount = 0;
-    bool tsDriveActive = false;
-    bool tsDetectorNeeded = false;
-    bool tsExternalDetectorNeeded = false;
+    auto& activeBands = cachedActiveBands;
+    auto& drivenBands = cachedDrivenBands;
+    auto& tsActiveBands = cachedTsActiveBands;
+    auto& activeBandCount = cachedActiveBandCount;
+    auto& drivenBandCount = cachedDrivenBandCount;
+    auto& tsActiveBandCount = cachedTsActiveBandCount;
+    auto& tsDriveActive = cachedTsDriveActive;
+    auto& tsDetectorNeeded = cachedTsDetectorNeeded;
+    auto& tsExternalDetectorNeeded = cachedTsExternalDetectorNeeded;
 
-    for (int i = 0; i < kNumBands; ++i)
+    if (configurationDirtyBands != 0u)
     {
-        auto& b = bands[(size_t)i];
-        const auto& p = bandParams[(size_t)i];
+        activeBandCount = drivenBandCount = tsActiveBandCount = 0;
+        tsDriveActive = tsDetectorNeeded = tsExternalDetectorNeeded = false;
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            auto& b = bands[(size_t)i];
+            const auto& p = bandSnapshots[(size_t)i];
+            const bool effectiveEnabled = p.enabled();
+            const int placementMode = mainChannels > 1
+                ? std::clamp(p.placementMode, 0, 2) : 0;
+            const float placement = mainChannels > 1
+                ? p.placement * 0.01f : 0.0f;
+            const bool configurationDirty = (configurationDirtyBands & (1u << i)) != 0u;
 
-        const bool isCut = zl_filter::isClassicCut(b.parameterType)
-            || zl_filter::isResonantCut(b.parameterType);
-        const bool effectiveEnabled = b.enabled;
-
-        const float bandGain = b.targetGainDb;
-
-        float effectiveQ = b.targetQ;
-        if (adaptiveQ)
-            effectiveQ = calculateAdaptiveQ(b.targetQ, bandGain);
-        if (zl_filter::isResonantCut(b.parameterType))
-            effectiveQ = EQBand::amountResonantCutQ(effectiveQ, amount);
-
-        const float slope = p.slope->load(std::memory_order_relaxed);
-        const bool gainBearing = variable_slope::distributesGain(b.parameterType);
-
-        const int placementMode = mainChannels > 1
-            ? std::clamp((int)p.placementMode->load(std::memory_order_relaxed), 0, 2) : 0;
-        const bool placementMS = placementMode == 1;
-        const float placement = mainChannels > 1
-            ? p.placement->load(std::memory_order_relaxed) * 0.01f : 0.0f;
-
-        // Drive
-        const float driveDb = p.drive->load(std::memory_order_relaxed);
-        const float drive = driveDb / 36.0f;
-        const float driveCharacterRaw = p.driveCharacter->load(std::memory_order_relaxed);
-        const float driveSecondary = p.driveSecondary->load(std::memory_order_relaxed);
-        const int satIdx = (int)p.satMode->load(std::memory_order_relaxed);
+            if (configurationDirty)
+            {
+                const auto parameterType = deq::filter_types::fromParameterIndex(p.type);
+                b.parameterType = parameterType;
+                const bool isCut = zl_filter::isClassicCut(parameterType)
+                    || zl_filter::isResonantCut(parameterType);
+                const float bandGain = p.gain;
+                float effectiveQ = p.q;
+                if (adaptiveQ)
+                    effectiveQ = calculateAdaptiveQ(p.q, bandGain);
+                if (zl_filter::isResonantCut(parameterType))
+                    effectiveQ = EQBand::amountResonantCutQ(effectiveQ, amount);
+                const bool gainBearing = variable_slope::distributesGain(parameterType);
+                const float driveDb = p.drive;
+                const float driveCharacterRaw = p.driveCharacter;
 #if DEFAULT_EQ_FULL
-        b.satType = static_cast<SaturationType>(std::clamp(satIdx, 0, kSaturationModeCount - 1));
+                b.satType = static_cast<SaturationType>(
+                    std::clamp(p.satMode, 0, kSaturationModeCount - 1));
 #endif
-        const bool bipolarCharacter = saturationModeUsesBipolarCharacter(satIdx);
-        const float driveCharacter = bipolarCharacter
-            ? 0.5f * (std::clamp(driveCharacterRaw, -1.0f, 1.0f) + 1.0f)
-            : std::clamp(driveCharacterRaw, 0.0f, 1.0f);
-
-        // Dynamic EQ params
-        const bool dynUpward = p.dynMode->load(std::memory_order_relaxed) > 0.5f;
-        const bool externalSC = p.scSource->load(std::memory_order_relaxed) > 0.5f;
-        const float dynThr = p.dynThresh->load(std::memory_order_relaxed);
-        const float dynRange = p.dynRange->load(std::memory_order_relaxed);
-        const float dynRat = p.dynRatio->load(std::memory_order_relaxed);
-        const auto [dynAtk, dynRel] = dynamicsTimingForSpeed(p.dynSpeed->load(std::memory_order_relaxed));
-
-        // Zero drive is a hard off state: the band is not added to the driven
-        // list, so neither the nonlinear code nor oversampling runs at all.
-        b.driveAmount   = driveDb > 0.0001f ? drive : 0.0f;
-        b.driveCharacter = driveCharacter;
-        b.driveSecondary = driveSecondary;
-        b.driveAutoGainLinear = deq::drive_auto_gain_table::lookup(satIdx, driveDb);
-        // Threshold doubles as the dynamic enable control. Its stepped default
-        // of 0 dB is truly inactive; the first active value is -0.1 dB.
-        const bool wasDynamic = b.dynEnabled;
-        b.dynEnabled    = dynThr < -0.05f;
-        if (!b.dynEnabled)
-        {
-            b.dynGainMod = 0.0f;
-            if (wasDynamic) b.coefficientsValid = false;
-        }
-        b.dynUpward     = dynUpward;
-        b.useExternalSidechain = externalSC && sidechainL != nullptr;
-        b.dynRangeDb    = dynRange;
-        b.dynThreshDb   = dynThr;
-        b.dynRatio      = dynRat;
-        b.dynAttackMs   = dynAtk;
-        b.dynReleaseMs  = dynRel;
-        // Gain-bearing filters scale their actual dB parameters for the whole
-        // -200..200% range. This is monotonic and cannot create the phase-
-        // cancellation reversal caused by dry + amount * (wet - dry).
-        b.gainScale = gainBearing ? amount : 1.0f;
-        b.globalAmount = gainBearing ? 1.0f
-            : isCut ? EQBand::cutAmountMix(amount)
-                    : std::clamp(amount, 0.0f, 1.0f);
-        b.driveGlobalAmount = std::max(0.0f, amount);
-
-        float amountAdjustedFrequency = shiftedFrequency(b.targetFreqHz, shiftSemitones);
-        if (isCut)
-        {
-            const float cutStrength = std::max(0.0f, amount);
-            const float neutralEdge = (b.parameterType == Biquad::Type::LowPass
-                                       || b.parameterType == Biquad::Type::ResLowPass)
-                ? (float)sr * 0.45f : 10.0f;
-            amountAdjustedFrequency = neutralEdge * std::pow(
-                std::max(1.0e-6f, amountAdjustedFrequency / neutralEdge), cutStrength);
-            amountAdjustedFrequency = std::clamp(amountAdjustedFrequency, 10.0f,
-                                                  (float)sr * 0.45f);
-        }
-
-        // Stereo static magnitude is handled by the FIR in linear mode. The
-        // post stage remains a neutral Bell so dynamic modulation and per-band
-        // drive still work. Asymmetrically placed bands retain their minimum-phase
-        // filter because a single stereo FIR cannot represent that routing.
-        const bool linearStereo = linearPhase && !b.dynEnabled
-            && placementMode == 0 && std::abs(placement) < 0.0001f;
-        b.routeEffectWeight=1.0f;
-        b.beginBlock(sr, effectiveEnabled,
-                     linearStereo ? Biquad::Type::Bell : b.parameterType,
-                     amountAdjustedFrequency, effectiveQ, linearStereo ? 0.0f : bandGain,
-                     linearStereo ? 12.0f : slope, placementMS, placement, decramp);
-        if (effectiveEnabled)
-        {
-            if(placementMode==2)
-            {
-                tsActiveBands[(size_t)tsActiveBandCount++]=i;
-                const bool bandDetectorNeeded = b.dynEnabled || i == meterBand;
-                tsDetectorNeeded = tsDetectorNeeded || bandDetectorNeeded;
-                tsExternalDetectorNeeded = tsExternalDetectorNeeded
-                    || (bandDetectorNeeded && b.useExternalSidechain);
-                const auto configureBranch=[&](EQBand& branch,float weight)
+                const bool bipolarCharacter = saturationModeUsesBipolarCharacter(p.satMode);
+                b.driveAmount = driveDb > 0.0001f ? driveDb / 36.0f : 0.0f;
+                b.driveCharacter = bipolarCharacter
+                    ? 0.5f * (std::clamp(driveCharacterRaw, -1.0f, 1.0f) + 1.0f)
+                    : std::clamp(driveCharacterRaw, 0.0f, 1.0f);
+                b.driveSecondary = p.driveSecondary;
+                b.driveAutoGainLinear = deq::drive_auto_gain_table::lookup(p.satMode, driveDb);
+                const bool wasDynamic = b.dynEnabled;
+                b.dynEnabled = p.dynThresh < -0.05f;
+                if (!b.dynEnabled)
                 {
-                    branch.parameterType=b.parameterType; branch.gainScale=b.gainScale;
-                    branch.globalAmount=b.globalAmount; branch.driveGlobalAmount=b.driveGlobalAmount;
-                    branch.routeEffectWeight=weight; branch.driveAmount=b.driveAmount;
-                    branch.driveCharacter=b.driveCharacter; branch.driveSecondary=b.driveSecondary;
-                    branch.driveAutoGainLinear=b.driveAutoGainLinear; branch.satType=b.satType;
-                    branch.dynEnabled=b.dynEnabled; branch.dynUpward=b.dynUpward;
-                    branch.useExternalSidechain=b.useExternalSidechain; branch.dynRangeDb=b.dynRangeDb;
-                    branch.dynThreshDb=b.dynThreshDb; branch.dynRatio=b.dynRatio;
-                    branch.dynAttackMs=b.dynAttackMs; branch.dynReleaseMs=b.dynReleaseMs;
-                    branch.beginBlock(sr,true,b.parameterType,amountAdjustedFrequency,effectiveQ,bandGain,
-                                      slope,false,0.0f,decramp);
-                    if(branch.driveActive())
-                    {
-                        branch.prepareDriveRate(configuredOS != nullptr ? effectiveSR : sr);
-                        tsDriveActive = true;
-                    }
-                };
-                configureBranch(transientBands[(size_t)i],std::clamp(1.0f-placement,0.0f,1.0f));
-                configureBranch(sustainBands[(size_t)i],std::clamp(1.0f+placement,0.0f,1.0f));
+                    b.dynGainMod = 0.0f;
+                    if (wasDynamic) b.coefficientsValid = false;
+                }
+                const auto [dynAtk, dynRel] = dynamicsTimingForSpeed(p.dynSpeed);
+                b.dynUpward = p.dynMode > 0;
+                b.useExternalSidechain = p.scSource > 0 && sidechainConnected;
+                b.dynRangeDb = p.dynRange;
+                b.dynThreshDb = p.dynThresh;
+                b.dynRatio = p.dynRatio;
+                b.dynAttackMs = dynAtk;
+                b.dynReleaseMs = dynRel;
+                b.gainScale = gainBearing ? amount : 1.0f;
+                b.globalAmount = gainBearing ? 1.0f
+                    : isCut ? EQBand::cutAmountMix(amount)
+                            : std::clamp(amount, 0.0f, 1.0f);
+                b.driveGlobalAmount = std::max(0.0f, amount);
+
+                float adjustedFrequency = shiftedFrequency(p.freq, shiftSemitones);
+                if (isCut)
+                {
+                    const float neutralEdge = (parameterType == Biquad::Type::LowPass
+                                               || parameterType == Biquad::Type::ResLowPass)
+                        ? (float)sr * 0.45f : 10.0f;
+                    adjustedFrequency = neutralEdge * std::pow(
+                        std::max(1.0e-6f, adjustedFrequency / neutralEdge),
+                        std::max(0.0f, amount));
+                    adjustedFrequency = std::clamp(adjustedFrequency, 10.0f,
+                                                    (float)sr * 0.45f);
+                }
+                const bool linearStereo = linearPhase && !b.dynEnabled
+                    && placementMode == 0 && std::abs(placement) < 0.0001f;
+                b.routeEffectWeight = 1.0f;
+                b.beginBlock(sr, effectiveEnabled,
+                             linearStereo ? Biquad::Type::Bell : parameterType,
+                             adjustedFrequency, effectiveQ, linearStereo ? 0.0f : bandGain,
+                             linearStereo ? 12.0f : p.slope,
+                             placementMode == 1, placement, decramp);
             }
-            else
+
+            if (effectiveEnabled)
             {
-                activeBands[(size_t)activeBandCount++] = i;
-                if (b.driveActive())
+                if(placementMode==2)
                 {
-                    drivenBands[(size_t)drivenBandCount++] = i;
-                    b.prepareDriveRate(configuredOS != nullptr ? effectiveSR : sr);
+                    tsActiveBands[(size_t)tsActiveBandCount++]=i;
+                    const bool bandDetectorNeeded = b.dynEnabled || i == meterBand;
+                    tsDetectorNeeded = tsDetectorNeeded || bandDetectorNeeded;
+                    tsExternalDetectorNeeded = tsExternalDetectorNeeded
+                        || (bandDetectorNeeded && b.useExternalSidechain);
+                    const auto configureBranch=[&](EQBand& branch,float weight)
+                    {
+                        branch.parameterType=b.parameterType; branch.gainScale=b.gainScale;
+                        branch.globalAmount=b.globalAmount; branch.driveGlobalAmount=b.driveGlobalAmount;
+                        branch.routeEffectWeight=weight; branch.driveAmount=b.driveAmount;
+                        branch.driveCharacter=b.driveCharacter; branch.driveSecondary=b.driveSecondary;
+                        branch.driveAutoGainLinear=b.driveAutoGainLinear; branch.satType=b.satType;
+                        branch.dynEnabled=b.dynEnabled; branch.dynUpward=b.dynUpward;
+                        branch.useExternalSidechain=b.useExternalSidechain; branch.dynRangeDb=b.dynRangeDb;
+                        branch.dynThreshDb=b.dynThreshDb; branch.dynRatio=b.dynRatio;
+                        branch.dynAttackMs=b.dynAttackMs; branch.dynReleaseMs=b.dynReleaseMs;
+                        branch.beginBlock(sr,true,b.type,b.targetFreqHz,b.targetQ,b.targetGainDb,
+                                          b.targetSlopeDbPerOct,false,0.0f,decramp);
+                        if (branch.driveActive())
+                            branch.prepareDriveRate(configuredOS != nullptr ? effectiveSR : sr);
+                    };
+                    auto& transientBand = transientBands[(size_t)i];
+                    auto& sustainBand = sustainBands[(size_t)i];
+                    if (configurationDirty)
+                    {
+                        configureBranch(transientBand,std::clamp(1.0f-placement,0.0f,1.0f));
+                        configureBranch(sustainBand,std::clamp(1.0f+placement,0.0f,1.0f));
+                    }
+                    tsDriveActive = tsDriveActive || transientBand.driveActive()
+                        || sustainBand.driveActive();
+                }
+                else
+                {
+                    activeBands[(size_t)activeBandCount++] = i;
+                    if (b.driveActive())
+                    {
+                        drivenBands[(size_t)drivenBandCount++] = i;
+                        if (configurationDirty)
+                            b.prepareDriveRate(configuredOS != nullptr ? effectiveSR : sr);
+                    }
                 }
             }
+        }
+    }
+    tsDetectorNeeded = false;
+    tsExternalDetectorNeeded = false;
+    for (int active = 0; active < tsActiveBandCount; ++active)
+    {
+        const auto index = (size_t)tsActiveBands[(size_t)active];
+        const bool detectorNeeded = transientBands[index].dynEnabled
+            || (int)index == meterBand;
+        tsDetectorNeeded = tsDetectorNeeded || detectorNeeded;
+        tsExternalDetectorNeeded = tsExternalDetectorNeeded
+            || (detectorNeeded && transientBands[index].useExternalSidechain);
+    }
+    if (shouldAnalyze || meterBand >= 0)
+    {
+        for (int active = 0; active < activeBandCount; ++active)
+            bands[(size_t)activeBands[(size_t)active]].beginMeterBlock();
+        for (int active = 0; active < tsActiveBandCount; ++active)
+        {
+            const auto index = (size_t)tsActiveBands[(size_t)active];
+            transientBands[index].beginMeterBlock();
+            sustainBands[index].beginMeterBlock();
         }
     }
     auto* const activeOS = drivenBandCount > 0 ? configuredOS : nullptr;
@@ -925,7 +755,6 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     auto* L = mainBuffer.getWritePointer(0);
     auto* R = mainChannels > 1 ? mainBuffer.getWritePointer(1) : L;
     // Push pre-EQ samples to spectrum FIFO
-    const bool shouldAnalyze = analyzerEnabled.load(std::memory_order_acquire);
     if (shouldAnalyze) preSpectrumFifo.pushBlock(L, R, n);
 
     if(tsActiveBandCount>0)
@@ -1089,38 +918,82 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         externalTSDetectorMix.setCurrentAndTargetValue(0.0f);
     }
 
-    std::uint64_t autoGainSignature = 1469598103934665603ULL;
-    if (autoGainMode == 2)
-    {
-        const auto hash = [&autoGainSignature](float value)
-        { autoGainSignature = (autoGainSignature ^ (std::uint64_t)std::llround(value * 1000.0f)) * 1099511628211ULL; };
-        hash((float)autoGainMode);
-        for(auto* value:{amountParam,shiftParam,adaptiveQParam,linearPhaseParam,
-                         oversamplingParam,transientStrengthParam,transientBalanceParam,
-                         transientHoldParam,transientSmoothParam})
-            hash(value->load(std::memory_order_relaxed));
-        for (const auto& p : bandParams)
-            for (auto* value : { p.present,p.on,p.type,p.slope,p.placementMode,p.placement,
-                                 p.freq,p.q,p.gain,p.drive,p.driveCharacter,p.driveSecondary,
-                                 p.satMode,p.dynMode,p.scSource,p.dynLookahead,p.dynThresh,
-                                 p.dynRange,p.dynRatio,p.dynSpeed })
-                hash(value->load(std::memory_order_relaxed));
-    }
-    if (autoGainMode == 2 && autoGainSignature != smartParameterSignature)
-    {
-        smartParameterSignature = autoGainSignature;
-        smartInputEnergy = smartOutputEnergy = 0.0;
-        smartInputPeak = smartOutputPeak = 0.0f;
-        smartEnergySamples = 0;
-        smartWarmupSamplesRemaining = getLatencySamples();
-        smartAutoGainLocked.store(false, std::memory_order_release);
-        smartAutoGainProgress.store(0.0f, std::memory_order_release);
-    }
     // Static and dynamic filtering stay at base rate. Oversampling is reserved
     // for the nonlinear per-band drive section; de-cramping handles the linear
     // response near Nyquist without multiplying the complete EQ workload.
     auto processEQ = [&](float* left, float* right, int numSamples, double processSR)
     {
+        bool allStatic = soloedBand < 0;
+        for (int active = 0; active < activeBandCount && allStatic; ++active)
+            allStatic = bands[(size_t)activeBands[(size_t)active]].canUseStaticKernel();
+        if (allStatic)
+        {
+            // The static audio kernel skips the per-sample loop, but a selected
+            // non-dynamic band must still feed the editor's detector meter.
+            for (int active = 0; active < activeBandCount; ++active)
+            {
+                const int index = activeBands[(size_t)active];
+                if (index != meterBand)
+                    continue;
+
+                auto& band = bands[(size_t)index];
+                const auto& detector = band.useExternalSidechain
+                    ? (lookahead > 0 ? externalBandDetectorBuffers[(size_t)index]
+                                     : externalDetectorInputBuffer)
+                    : (lookahead > 0 ? internalBandDetectorBuffers[(size_t)index]
+                                     : detectorInputBuffer);
+                for (int sample = 0; sample < numSamples; ++sample)
+                    band.updateDynamicEnvelope(detector.getSample(0, sample),
+                                               detector.getSample(1, sample), processSR);
+                break;
+            }
+
+            auto* scratchFirst = staticRoutingScratch.getWritePointer(0);
+            auto* scratchSecond = staticRoutingScratch.getWritePointer(1);
+            for (int active = 0; active < activeBandCount; ++active)
+                bands[(size_t)activeBands[(size_t)active]].processEqualizerStaticBlock(
+                    left, right, scratchFirst, scratchSecond, numSamples);
+            return;
+        }
+
+        if (soloedBand < 0)
+        {
+            auto* scratchFirst = staticRoutingScratch.getWritePointer(0);
+            auto* scratchSecond = staticRoutingScratch.getWritePointer(1);
+            for (int active = 0; active < activeBandCount; ++active)
+            {
+                const int index = activeBands[(size_t)active];
+                auto& band = bands[(size_t)index];
+                const bool updateDetector = band.dynEnabled || index == meterBand;
+                const auto& detector = band.useExternalSidechain
+                    ? (lookahead > 0 ? externalBandDetectorBuffers[(size_t)index]
+                                     : externalDetectorInputBuffer)
+                    : (lookahead > 0 ? internalBandDetectorBuffers[(size_t)index]
+                                     : detectorInputBuffer);
+
+                if (band.canUseStaticKernel())
+                {
+                    if (updateDetector)
+                        for (int sample = 0; sample < numSamples; ++sample)
+                            band.updateDynamicEnvelope(detector.getSample(0, sample),
+                                                       detector.getSample(1, sample), processSR);
+                    band.processEqualizerStaticBlock(left, right, scratchFirst, scratchSecond,
+                                                     numSamples);
+                    continue;
+                }
+
+                for (int sample = 0; sample < numSamples; ++sample)
+                {
+                    if (updateDetector)
+                        band.updateDynamicEnvelope(detector.getSample(0, sample),
+                                                   detector.getSample(1, sample), processSR);
+                    band.maybeUpdateCoeffs(processSR);
+                    band.processEqualizer(left[sample], right[sample]);
+                }
+            }
+            return;
+        }
+
         for (int i = 0; i < numSamples; ++i)
         {
             float l = left[i];
@@ -1192,53 +1065,72 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
                     bands[(size_t)drivenBands[(size_t)driven]].processDrive(L[sample], R[sample]);
     }
 
-    for (int i = 0; i < kNumBands; ++i)
-    {
-        const bool ts=(int)bandParams[(size_t)i].placementMode->load(std::memory_order_relaxed)==2;
-        const float placement=bandParams[(size_t)i].placement->load(std::memory_order_relaxed)*0.01f;
-        const float transientWeight=std::clamp(1.0f-placement,0.0f,1.0f);
-        const float sustainWeight=std::clamp(1.0f+placement,0.0f,1.0f);
-        const float weightSum=std::max(1.0f,transientWeight+sustainWeight);
-        const float dynamicGain=ts ? (transientWeight*transientBands[(size_t)i].dynGainMod
-                                      +sustainWeight*sustainBands[(size_t)i].dynGainMod)/weightSum
-                                   : bands[(size_t)i].dynGainMod;
-        const float detectorPeakL=ts ? std::max(transientWeight*transientBands[(size_t)i].detectorPeakL,
-                                                sustainWeight*sustainBands[(size_t)i].detectorPeakL)
-                                     : bands[(size_t)i].detectorPeakL;
-        const float detectorPeakR=ts ? std::max(transientWeight*transientBands[(size_t)i].detectorPeakR,
-                                                sustainWeight*sustainBands[(size_t)i].detectorPeakR)
-                                     : bands[(size_t)i].detectorPeakR;
-        bandDynamicGainDb[(size_t)i].store(dynamicGain,std::memory_order_relaxed);
-        bandDetectorLevelDbL[(size_t)i].store(juce::Decibels::gainToDecibels(detectorPeakL,-60.0f),std::memory_order_relaxed);
-        bandDetectorLevelDbR[(size_t)i].store(juce::Decibels::gainToDecibels(detectorPeakR,-60.0f),std::memory_order_relaxed);
-    }
+    if (anyDynamicBand || configurationDirtyBands != 0u)
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            const bool ts=bandSnapshots[(size_t)i].placementMode==2;
+            const float placement=bandSnapshots[(size_t)i].placement*0.01f;
+            const float transientWeight=std::clamp(1.0f-placement,0.0f,1.0f);
+            const float sustainWeight=std::clamp(1.0f+placement,0.0f,1.0f);
+            const float weightSum=std::max(1.0f,transientWeight+sustainWeight);
+            const float dynamicGain=ts ? (transientWeight*transientBands[(size_t)i].dynGainMod
+                                          +sustainWeight*sustainBands[(size_t)i].dynGainMod)/weightSum
+                                       : bands[(size_t)i].dynGainMod;
+            bandDynamicGainDb[(size_t)i].store(dynamicGain,std::memory_order_relaxed);
+        }
 
-    // Regular is an immediate table lookup. It performs no signal measurement
-    // and recomputes only after a relevant parameter change.
+    if (shouldAnalyze || meterBand >= 0)
+        for (int i = 0; i < kNumBands; ++i)
+        {
+            const bool ts=bandSnapshots[(size_t)i].placementMode==2;
+            const float placement=bandSnapshots[(size_t)i].placement*0.01f;
+            const float transientWeight=std::clamp(1.0f-placement,0.0f,1.0f);
+            const float sustainWeight=std::clamp(1.0f+placement,0.0f,1.0f);
+            const float detectorPeakL=ts ? std::max(transientWeight*transientBands[(size_t)i].detectorPeakL,
+                                                    sustainWeight*sustainBands[(size_t)i].detectorPeakL)
+                                         : bands[(size_t)i].detectorPeakL;
+            const float detectorPeakR=ts ? std::max(transientWeight*transientBands[(size_t)i].detectorPeakR,
+                                                    sustainWeight*sustainBands[(size_t)i].detectorPeakR)
+                                         : bands[(size_t)i].detectorPeakR;
+            bandDetectorLevelDbL[(size_t)i].store(juce::Decibels::gainToDecibels(detectorPeakL,-60.0f),std::memory_order_relaxed);
+            bandDetectorLevelDbR[(size_t)i].store(juce::Decibels::gainToDecibels(detectorPeakR,-60.0f),std::memory_order_relaxed);
+        }
+
+    // Regular evaluates the combined complex response of the current EQ
+    // routing. It performs no signal measurement and recomputes only after a
+    // relevant parameter change.
     float compensation = 1.0f;
     if (autoGainMode == 1)
     {
         if (regularAutoGainDirty.exchange(false, std::memory_order_acq_rel))
         {
-            float targetDb = 0.0f;
-            for (const auto& p : bandParams)
+            std::array<deq::eq_auto_gain::BandParameters, kNumBands> responseBands {};
+            for (int index = 0; index < kNumBands; ++index)
             {
-                if (p.present->load(std::memory_order_relaxed) < 0.5f
-                    || p.on->load(std::memory_order_relaxed) < 0.5f) continue;
-                const int type = std::clamp((int)p.type->load(std::memory_order_relaxed),
-                                            0, deq::filter_types::count - 1);
-                float q = p.q->load(std::memory_order_relaxed);
-                const float gain = p.gain->load(std::memory_order_relaxed);
-                if (adaptiveQ) q = calculateAdaptiveQ(q, gain);
-                targetDb += deq::eq_auto_gain_table::compensationDb(
-                    type, gain, q, amount, p.placement->load(std::memory_order_relaxed));
+                const auto& p = bandParams[(size_t)index];
+                auto& band = responseBands[(size_t)index];
+                band.enabled = p.present->load(std::memory_order_relaxed) > 0.5f
+                    && p.on->load(std::memory_order_relaxed) > 0.5f;
+                band.type = std::clamp((int)p.type->load(std::memory_order_relaxed),
+                                       0, deq::filter_types::count - 1);
+                band.frequencyHz = p.freq->load(std::memory_order_relaxed);
+                band.q = p.q->load(std::memory_order_relaxed);
+                band.gainDb = p.gain->load(std::memory_order_relaxed);
+                band.slopeDbPerOct = p.slope->load(std::memory_order_relaxed);
+                band.placementMode = std::clamp(
+                    (int)p.placementMode->load(std::memory_order_relaxed), 0, 2);
+                band.placementPercent = p.placement->load(std::memory_order_relaxed);
             }
-            regularTargetCompDb = std::clamp(targetDb, -36.0f, 36.0f);
+            regularTargetCompDb = deq::eq_auto_gain::combinedResponseCompensationDb(
+                responseBands, sr, amount, shiftSemitones, adaptiveQ);
+            regularCompensationLinear = std::pow(10.0f, regularTargetCompDb / 20.0f);
         }
-        compensation = std::pow(10.0f, regularTargetCompDb / 20.0f);
-        smartParameterSignature = 0;
-        smartAutoGainLocked.store(false, std::memory_order_relaxed);
-        smartAutoGainProgress.store(0.0f, std::memory_order_relaxed);
+        compensation = regularCompensationLinear;
+        if (autoGainModeChanged)
+        {
+            smartAutoGainLocked.store(false, std::memory_order_relaxed);
+            smartAutoGainProgress.store(0.0f, std::memory_order_relaxed);
+        }
     }
     else if (autoGainMode == 2)
     {
@@ -1250,42 +1142,69 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     }
     else
     {
-        regularTargetCompDb = smartTargetCompDb = 0.0f;
-        regularAutoGainDirty.store(true, std::memory_order_release);
-        smartInputEnergy = smartOutputEnergy = 0.0; smartEnergySamples = 0;
-        smartInputPeak = smartOutputPeak = 0.0f;
-        smartWarmupSamplesRemaining = 0;
-        smartParameterSignature = 0;
-        smartAutoGainLocked.store(false, std::memory_order_relaxed);
-        smartAutoGainProgress.store(0.0f, std::memory_order_relaxed);
+        if (autoGainModeChanged)
+        {
+            regularTargetCompDb = smartTargetCompDb = 0.0f;
+            regularAutoGainDirty.store(true, std::memory_order_release);
+            smartInputLoudness.reset();
+            smartOutputLoudness.reset();
+            smartWarmupSamplesRemaining = 0;
+            smartLoudnessRevision = 0;
+            smartLoudnessUpdateCount = 0;
+            smartAutoGainLocked.store(false, std::memory_order_relaxed);
+            smartAutoGainProgress.store(0.0f, std::memory_order_relaxed);
+        }
     }
 
-    double autoGainBlockOutputEnergy = 0.0;
-    float autoGainBlockOutputPeak = 0.0f;
     autoGainLinearSm.setTargetValue(compensation);
-    for (int i = 0; i < n; ++i)
+    const bool unityOutputPath = outputGain == 1.0f
+        && (autoGainMode != 2
+            || smartAutoGainLocked.load(std::memory_order_acquire))
+        && !autoGainLinearSm.isSmoothing()
+        && autoGainLinearSm.getCurrentValue() == 1.0f
+        && autoGainLinearSm.getTargetValue() == 1.0f
+        && !latencyTransitionGain.isSmoothing()
+        && latencyTransitionGain.getCurrentValue() == 1.0f
+        && latencyTransitionGain.getTargetValue() == 1.0f;
+    if (unityOutputPath)
     {
-        const float sourceL = L[i];
-        const float sourceR = R[i];
-        if (autoGainMode == 2)
-        {
-            autoGainBlockOutputEnergy += (double)sourceL * sourceL + (double)sourceR * sourceR;
-            autoGainBlockOutputPeak = std::max(autoGainBlockOutputPeak,
-                                               std::max(std::abs(sourceL), std::abs(sourceR)));
-        }
-
-        const float combinedGain = outputGain * autoGainLinearSm.getNextValue();
-        const float guard = latencyTransitionGain.getNextValue();
-        const float finalL = (std::isfinite(sourceL) ? std::clamp(sourceL * combinedGain, -8.0f, 8.0f) : 0.0f) * guard;
-        const float finalR = (std::isfinite(sourceR) ? std::clamp(sourceR * combinedGain, -8.0f, 8.0f) : 0.0f) * guard;
-        L[i] = finalL;
-        if (mainChannels > 1) R[i] = finalR;
-        if (latencyFadingOut && !latencyTransitionGain.isSmoothing())
-        {
-            latencyFadingOut = false;
-            latencyTransitionGain.setTargetValue(1.0f);
-        }
+        sanitizeAndClamp(L, n, -8.0f, 8.0f);
+        if (mainChannels > 1)
+            sanitizeAndClamp(R, n, -8.0f, 8.0f);
     }
+    else if ((autoGainMode != 2
+              || smartAutoGainLocked.load(std::memory_order_acquire))
+             && !autoGainLinearSm.isSmoothing()
+             && !latencyTransitionGain.isSmoothing()
+             && latencyTransitionGain.getCurrentValue() == 1.0f
+             && latencyTransitionGain.getTargetValue() == 1.0f)
+    {
+        const float combinedGain = outputGain * autoGainLinearSm.getCurrentValue();
+        scaleSanitizeAndClamp(L, n, combinedGain, -8.0f, 8.0f);
+        if (mainChannels > 1)
+            scaleSanitizeAndClamp(R, n, combinedGain, -8.0f, 8.0f);
+    }
+    else
+        for (int i = 0; i < n; ++i)
+        {
+            const float sourceL = L[i];
+            const float sourceR = R[i];
+            if (autoGainMode == 2
+                && !smartAutoGainLocked.load(std::memory_order_acquire))
+                smartOutputLoudness.pushSample(sourceL, sourceR);
+
+            const float combinedGain = outputGain * autoGainLinearSm.getNextValue();
+            const float guard = latencyTransitionGain.getNextValue();
+            const float finalL = (std::isfinite(sourceL) ? std::clamp(sourceL * combinedGain, -8.0f, 8.0f) : 0.0f) * guard;
+            const float finalR = (std::isfinite(sourceR) ? std::clamp(sourceR * combinedGain, -8.0f, 8.0f) : 0.0f) * guard;
+            L[i] = finalL;
+            if (mainChannels > 1) R[i] = finalR;
+            if (latencyFadingOut && !latencyTransitionGain.isSmoothing())
+            {
+                latencyFadingOut = false;
+                latencyTransitionGain.setTargetValue(1.0f);
+            }
+        }
     autoGainCompDb.store(juce::Decibels::gainToDecibels(
                              std::max(1.0e-7f, autoGainLinearSm.getCurrentValue())),
                          std::memory_order_relaxed);
@@ -1293,313 +1212,64 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     if (autoGainMode == 2 && smartWarmupSamplesRemaining > 0)
     {
         smartWarmupSamplesRemaining = std::max<int64_t>(0, smartWarmupSamplesRemaining - n);
+        smartInputLoudness.clearWindow();
+        smartOutputLoudness.clearWindow();
         smartAutoGainProgress.store(0.0f, std::memory_order_relaxed);
     }
-    else if (autoGainMode == 2 && alignedInputRms > 1.0e-7f)
+    else if (autoGainMode == 2)
     {
-        smartInputEnergy += autoGainBlockInputEnergy;
-        smartOutputEnergy += autoGainBlockOutputEnergy;
-        smartInputPeak = std::max(smartInputPeak, autoGainBlockInputPeak);
-        smartOutputPeak = std::max(smartOutputPeak, autoGainBlockOutputPeak);
-        smartEnergySamples += n * 2;
-        constexpr double smartWindowSeconds = 0.5;
-        smartAutoGainProgress.store(std::min(1.0f, (float)smartEnergySamples
-                                                       / (float)(sr * smartWindowSeconds * 2.0)),
-                                    std::memory_order_relaxed);
-        if (smartEnergySamples >= (int64_t)(sr * smartWindowSeconds * 2.0)
-            && smartOutputEnergy > 1.0e-12)
+        // Establish the first LUFS result after 400 ms, refine it three times
+        // at 100 ms intervals, then stop measuring until audible state changes.
+        constexpr int smartTargetUpdates = 4;
+        constexpr double smartWindowSeconds = 0.4;
+        const int64_t windowFrames = (int64_t)(sr * smartWindowSeconds);
+        const float initialObservationProgress = std::min(
+            1.0f, (float)smartInputLoudness.getFrameCount()
+                / (float)std::max<int64_t>(1, windowFrames));
+        smartAutoGainProgress.store(
+            ((float)smartLoudnessUpdateCount + initialObservationProgress)
+                / (float)smartTargetUpdates,
+            std::memory_order_relaxed);
+        const int64_t completedRevision = std::min(
+            smartInputLoudness.getCompletedSegmentCount(),
+            smartOutputLoudness.getCompletedSegmentCount());
+        if (smartInputLoudness.hasCompleteWindow()
+            && smartOutputLoudness.hasCompleteWindow()
+            && completedRevision > smartLoudnessRevision)
         {
-            const float measuredIn = std::sqrt((float)(smartInputEnergy / (double)smartEnergySamples));
-            const float measuredOut = std::sqrt((float)(smartOutputEnergy / (double)smartEnergySamples));
-            const float rmsTargetDb = 20.0f * std::log10(
-                std::max(measuredIn, 1.0e-7f) / std::max(measuredOut, 1.0e-7f));
-            const float peakTargetDb = 20.0f * std::log10(
-                std::max(smartInputPeak, 1.0e-7f) / std::max(smartOutputPeak, 1.0e-7f));
-            // A large EQ boost can change crest factor enough that RMS matching
-            // still leaves the result visibly louder on a peak meter. Use the
-            // conservative of the two complete deltas: neither measured energy
-            // nor the observed peak is allowed to remain above the input.
-            smartTargetCompDb = std::clamp(std::min(rmsTargetDb, peakTargetDb),
-                                           -36.0f, 36.0f);
-            smartInputEnergy = smartOutputEnergy = 0.0; smartEnergySamples = 0;
-            smartInputPeak = smartOutputPeak = 0.0f;
-            smartAutoGainLocked.store(true, std::memory_order_release);
-            smartAutoGainProgress.store(1.0f, std::memory_order_release);
+            smartLoudnessRevision = completedRevision;
+            // Each refinement uses all samples collected in this one finite
+            // observation, avoiding independent momentary-window jumps.
+            const float inputLufs = smartInputLoudness.getIntegratedLoudnessLufs();
+            const float outputLufs = smartOutputLoudness.getIntegratedLoudnessLufs();
+            if (std::isfinite(inputLufs) && std::isfinite(outputLufs)
+                && inputLufs > -70.0f)
+                smartTargetCompDb = std::clamp(inputLufs - outputLufs,
+                                               -36.0f, 36.0f);
+
+            // Silence or another unusable LUFS result must not leave the
+            // analyser running forever. It consumes the same finite revision
+            // while retaining the last valid compensation.
+            ++smartLoudnessUpdateCount;
+            if (smartLoudnessUpdateCount >= smartTargetUpdates)
+            {
+                smartAutoGainLocked.store(true, std::memory_order_release);
+                smartAutoGainProgress.store(1.0f, std::memory_order_release);
+            }
+            else
+                smartAutoGainProgress.store(
+                    (float)smartLoudnessUpdateCount / (float)smartTargetUpdates,
+                    std::memory_order_release);
         }
     }
 
     // Push post-EQ samples to spectrum FIFO
     if (shouldAnalyze) spectrumFifo.pushBlock(L, R, n);
 
-    const bool pluginEnabled = pluginEnabledParam->load(std::memory_order_relaxed) > 0.5f;
-    globalBypass.processOutput(mainBuffer, getLatencySamples(), pluginEnabled);
+    if (!transparentBypassPath)
+        globalBypass.processOutput(mainBuffer, getLatencySamples(), pluginEnabled);
 }
 
-void DefaultEqualizerAudioProcessor::updateReportedLatency() noexcept
-{
-    const bool linear = linearPhaseParam->load(std::memory_order_relaxed) > 0.5f;
-    const int order = (int)oversamplingParam->load(std::memory_order_relaxed);
-    bool normalDriven = false;
-    bool transientDriven = false;
-    bool transientRouting = false;
-    for (const auto& p : bandParams)
-    {
-        const bool active=p.present->load(std::memory_order_relaxed)>0.5f&&p.on->load(std::memory_order_relaxed)>0.5f;
-        const bool ts=active&&(int)p.placementMode->load(std::memory_order_relaxed)==2;
-        transientRouting=transientRouting||ts;
-        const bool driven=active&&p.drive->load(std::memory_order_relaxed)>0.0001f;
-        normalDriven=normalDriven||(driven&&!ts);
-        transientDriven=transientDriven||(driven&&ts);
-    }
-    const auto* os = (normalDriven||transientDriven)&&order>0&&order<=kNumOversamplingOrders
-        ? oversamplers[(size_t)(order - 1)].get() : nullptr;
-    const int onePassLatency=os!=nullptr?juce::roundToInt(os->getLatencyInSamples()):0;
-    // T/S drive runs before the recombined signal enters any ordinary-band
-    // drive, so mixed routing legitimately traverses two oversampling passes.
-    const int osLatency=(normalDriven?onePassLatency:0)+(transientDriven?onePassLatency:0);
-    setLatencySamples((linear ? currentLinearPhaseLatency() : 0) + osLatency
-                      + (transientRouting ? transientSplitter.latency() : 0)
-                      + requestedLookaheadSamples());
-}
-
-int DefaultEqualizerAudioProcessor::requestedLookaheadSamples() const noexcept
-{
-    float maximumMs = 0.0f;
-    for (const auto& p : bandParams)
-        if (p.present->load(std::memory_order_relaxed) > 0.5f
-            && p.on->load(std::memory_order_relaxed) > 0.5f
-            && p.dynThresh->load(std::memory_order_relaxed) < -0.05f
-            && p.dynLookahead->load(std::memory_order_relaxed) > 0.001f)
-            maximumMs = std::max(maximumMs, p.dynLookahead->load(std::memory_order_relaxed));
-    return juce::roundToInt(sr * maximumMs * 0.001);
-}
-
-int DefaultEqualizerAudioProcessor::requestedBandLookaheadSamples(
-    int index,int maximumDelaySamples) const noexcept
-{
-    if(index<0||index>=kNumBands)return 0;
-    const auto& p=bandParams[(size_t)index];
-    if(p.present->load(std::memory_order_relaxed)<0.5f
-        ||p.on->load(std::memory_order_relaxed)<0.5f
-        ||p.dynThresh->load(std::memory_order_relaxed)>=-0.05f)
-        return 0;
-    return std::clamp(juce::roundToInt(sr*p.dynLookahead->load(std::memory_order_relaxed)*0.001),
-                      0,maximumDelaySamples);
-}
-
-void DefaultEqualizerAudioProcessor::routeLookahead(juce::AudioBuffer<float>& buffer,
-                                                      const float* sidechainL,
-                                                      const float* sidechainR,
-                                                      int maximumDelaySamples) noexcept
-{
-    juce::ignoreUnused(sidechainR);
-    if (maximumDelaySamples <= 0) return;
-    const int ringSize = lookaheadDelayBuffer.getNumSamples();
-    if(ringSize<=0||ringSize<=maximumDelaySamples)return;
-    const int samples = buffer.getNumSamples();
-    auto* left = buffer.getWritePointer(0);
-    auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : left;
-    auto* delayL = lookaheadDelayBuffer.getWritePointer(0);
-    auto* delayR = lookaheadDelayBuffer.getWritePointer(1);
-    auto* externalDelayL=externalLookaheadDelayBuffer.getWritePointer(0);
-    auto* externalDelayR=externalLookaheadDelayBuffer.getWritePointer(1);
-    std::array<float*,kNumBands> internalL{},internalR{},externalL{},externalR{};
-    std::array<int,kNumBands> detectorDelays{};
-    for(int band=0;band<kNumBands;++band)
-    {
-        internalL[(size_t)band]=internalBandDetectorBuffers[(size_t)band].getWritePointer(0);
-        internalR[(size_t)band]=internalBandDetectorBuffers[(size_t)band].getWritePointer(1);
-        externalL[(size_t)band]=externalBandDetectorBuffers[(size_t)band].getWritePointer(0);
-        externalR[(size_t)band]=externalBandDetectorBuffers[(size_t)band].getWritePointer(1);
-        detectorDelays[(size_t)band]=maximumDelaySamples
-            -requestedBandLookaheadSamples(band,maximumDelaySamples);
-    }
-    for(int i=0;i<samples;++i)
-    {
-        const float dryL=detectorInputBuffer.getSample(0,i);
-        const float dryR=detectorInputBuffer.getSample(1,i);
-        const float externalDryL=sidechainL!=nullptr?externalDetectorInputBuffer.getSample(0,i):0.0f;
-        const float externalDryR=sidechainL!=nullptr?externalDetectorInputBuffer.getSample(1,i):0.0f;
-        for(int band=0;band<kNumBands;++band)
-        {
-            const int delay=detectorDelays[(size_t)band];
-            int read=lookaheadWritePosition-delay;
-            if(read<0)read+=ringSize;
-            internalL[(size_t)band][i]=delay==0?dryL:delayL[read];
-            internalR[(size_t)band][i]=delay==0?dryR:delayR[read];
-            externalL[(size_t)band][i]=delay==0?externalDryL:externalDelayL[read];
-            externalR[(size_t)band][i]=delay==0?externalDryR:externalDelayR[read];
-        }
-        int audioRead=lookaheadWritePosition-maximumDelaySamples;
-        if(audioRead<0)audioRead+=ringSize;
-        const float wetL=maximumDelaySamples==0?dryL:delayL[audioRead];
-        const float wetR=maximumDelaySamples==0?dryR:delayR[audioRead];
-        const float mix = lookaheadMix.getNextValue();
-        left[i]=dryL+mix*(wetL-dryL);
-        if(buffer.getNumChannels()>1)right[i]=dryR+mix*(wetR-dryR);
-        delayL[lookaheadWritePosition]=dryL;
-        delayR[lookaheadWritePosition]=dryR;
-        externalDelayL[lookaheadWritePosition]=externalDryL;
-        externalDelayR[lookaheadWritePosition]=externalDryR;
-        if(++lookaheadWritePosition>=ringSize)lookaheadWritePosition=0;
-    }
-}
-
-
-void DefaultEqualizerAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
-{
-    juce::ValueTree root("DEFAULT_EQ_STATE");
-    root.setProperty("schemaVersion", 9, nullptr);
-    auto current = apvts.copyState();
-    current.setProperty("stateRole", "current", nullptr);
-    root.appendChild(current, nullptr);
-    std::unique_ptr<juce::XmlElement> xml (root.createXml());
-    copyXmlToBinary(*xml, destData);
-}
-
-void DefaultEqualizerAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
-{
-    std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary(data, sizeInBytes));
-    if (!xmlState)
-        return;
-
-    const auto restored = juce::ValueTree::fromXml(*xmlState);
-    int restoredSchema = 0;
-    bool recognizedState = false;
-    if (restored.hasType("DEFAULT_EQ_STATE"))
-    {
-        recognizedState = true;
-        restoredSchema = (int) restored.getProperty("schemaVersion", 0);
-        juce::ValueTree current;
-        if (restoredSchema >= 4)
-        {
-            for (auto child : restored)
-                if (child.getProperty("stateRole").toString() == "current")
-                    current = child.createCopy();
-        }
-        else
-        {
-            // v1-v3 stored two A/B snapshots. Preserve the state that was
-            // audible when the project was saved, then discard the obsolete
-            // comparison slot.
-            const auto active = restored.getProperty("activeSlot", "A").toString();
-            for (auto child : restored)
-                if (child.getProperty("snapshotSlot").toString() == active)
-                    current = child.createCopy();
-        }
-        if (!current.isValid()) return;
-        current.removeProperty("stateRole", nullptr);
-        current.removeProperty("snapshotSlot", nullptr);
-        for (int i = 1; i <= kNumBands; ++i)
-        {
-            removeStateParameter(current, bandId(i, "link"));
-            removeStateParameter(current, bandId(i, "dyn_on"));
-        }
-        if (restoredSchema < 6)
-            for (int i = 1; i <= kNumBands; ++i)
-            {
-                const int route = (int)readStateParameter(current, bandId(i, "ch"), 0.0f);
-                writeStateParameter(current, bandId(i, "placement_mode"), route >= 3 ? 1.0f : 0.0f);
-                writeStateParameter(current, bandId(i, "placement"),
-                    route == 1 || route == 3 ? -100.0f : route == 2 || route == 4 ? 100.0f : 0.0f);
-                removeStateParameter(current, bandId(i, "ch"));
-                const int mode = (int)readStateParameter(current, bandId(i, "sat_mode"), 0.0f);
-                const float legacyDrive = readStateParameter(current, bandId(i, "drive"), 0.0f);
-                const float legacyCharacter = readStateParameter(current, bandId(i, "drive_character"), 0.0f) * 0.01f;
-                writeStateParameter(current, bandId(i, "drive"), legacyDrive * 0.36f);
-                writeStateParameter(current, bandId(i, "drive_character"),
-                    mode == 3 || mode == 4 || mode == 6 ? 2.0f * legacyCharacter - 1.0f : legacyCharacter);
-                writeStateParameter(current, bandId(i, "drive_secondary"),
-                    readStateParameter(current, bandId(i, "drive_secondary"), 0.0f) * 0.01f);
-                removeStateParameter(current, bandId(i, "drive_tone"));
-            }
-        if (restoredSchema < 8)
-            for (int i = 1; i <= kNumBands; ++i)
-                writeStateParameter(current, bandId(i, "present"),
-                    readStateParameter(current, bandId(i, "on"), 0.0f));
-        apvts.replaceState(current);
-    }
-    else if (restored.hasType(apvts.state.getType()))
-    {
-        recognizedState = true;
-        // Migration from upstream FreeEQ8-compatible state: preserve matching IDs,
-        // and write the current single-state schema on the next save.
-        auto current = restored.createCopy();
-        for (int i = 1; i <= kNumBands; ++i)
-        {
-            removeStateParameter(current, bandId(i, "link"));
-            removeStateParameter(current, bandId(i, "dyn_on"));
-            const int route = (int)readStateParameter(current, bandId(i, "ch"), 0.0f);
-            writeStateParameter(current, bandId(i, "placement_mode"), route >= 3 ? 1.0f : 0.0f);
-            writeStateParameter(current, bandId(i, "placement"),
-                route == 1 || route == 3 ? -100.0f : route == 2 || route == 4 ? 100.0f : 0.0f);
-            removeStateParameter(current, bandId(i, "ch"));
-            const int mode = (int)readStateParameter(current, bandId(i, "sat_mode"), 0.0f);
-            const float legacyDrive = readStateParameter(current, bandId(i, "drive"), 0.0f);
-            const float legacyCharacter = readStateParameter(current, bandId(i, "drive_character"), 0.0f) * 0.01f;
-            writeStateParameter(current, bandId(i, "drive"), legacyDrive * 0.36f);
-            writeStateParameter(current, bandId(i, "drive_character"),
-                mode == 3 || mode == 4 || mode == 6 ? 2.0f * legacyCharacter - 1.0f : legacyCharacter);
-            writeStateParameter(current, bandId(i, "drive_secondary"),
-                readStateParameter(current, bandId(i, "drive_secondary"), 0.0f) * 0.01f);
-            removeStateParameter(current, bandId(i, "drive_tone"));
-            writeStateParameter(current, bandId(i, "present"),
-                readStateParameter(current, bandId(i, "on"), 0.0f));
-        }
-        apvts.replaceState(current);
-        restoredSchema = 0;
-    }
-    if (!recognizedState) return;
-
-    if (restoredSchema < 2)
-    {
-        // v1 inherited FreeEQ8's choice parameter: 0/1/2 meant 12/24/48.
-        // v2 exposes a continuous 0..48 dB/oct value for every filter type.
-        const auto migrateCurrent = [this]
-        {
-            for (int i = 1; i <= kNumBands; ++i)
-            {
-                const auto id = bandId(i, "slope");
-                const float legacy = apvts.getRawParameterValue(id)->load();
-                const float migrated = legacy < 0.5f ? 12.0f : (legacy < 1.5f ? 24.0f : 48.0f);
-                if (auto* parameter = apvts.getParameter(id))
-                    parameter->setValueNotifyingHost(parameter->convertTo0to1(migrated));
-            }
-        };
-
-        migrateCurrent();
-    }
-    if (restoredSchema < 3)
-    {
-        const auto migrateAutoGain = [this]
-        {
-            const bool oldEnabled = (bool) apvts.state.getProperty("auto_gain", false);
-            if (auto* mode = apvts.getParameter("auto_gain_mode"))
-                mode->setValueNotifyingHost(mode->convertTo0to1(oldEnabled ? 2.0f : 0.0f));
-            apvts.state.removeProperty("auto_gain", nullptr);
-        };
-        migrateAutoGain();
-    }
-    if (restoredSchema < 4)
-    {
-        // The v3 lookahead control was a boolean selecting a fixed 5 ms.
-        // Preserve the audible timing when loading those projects into the
-        // continuous 0..5 ms parameter.
-        for (int i = 1; i <= kNumBands; ++i)
-        {
-            const auto id = bandId(i, "dyn_lookahead");
-            if (apvts.getRawParameterValue(id)->load() > 0.5f)
-                if (auto* parameter = apvts.getParameter(id))
-                    parameter->setValueNotifyingHost(parameter->convertTo0to1(5.0f));
-        }
-    }
-
-    // Ask the background worker to rebuild the FIR from the restored
-    // state; audio thread will keep using the previous kernel until then.
-    requestLinearPhaseRebuild();
-
-    updateReportedLatency();
-}
 
 double DefaultEqualizerAudioProcessor::getTailLengthSeconds() const
 {
@@ -1616,82 +1286,6 @@ juce::AudioProcessorEditor* DefaultEqualizerAudioProcessor::createEditor()
     return new DefaultEqualizerAudioProcessorEditor(*this);
 }
 
-void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
-{
-    // Build composite magnitude response for the linear phase FIR.
-    // Use the same logic as ResponseCurveComponent but at FFT resolution.
-    // Centered L/R static bands are synthesized into this FIR. Asymmetrically
-    // placed L/R, M/S or T/S bands,
-    // dynamic modulation, and per-band drive remain in the post-FIR stage.
-    const int numBins = LinearPhaseEngine::firLength / 2 + 1;
-
-    // Use pre-allocated member buffer (avoid heap allocation on audio thread)
-    linPhaseMagBuf.resize((size_t)numBins);
-    std::fill(linPhaseMagBuf.begin(), linPhaseMagBuf.end(), 0.0f);
-    float* magDb = linPhaseMagBuf.data();
-    const float amount = apvts.getRawParameterValue("scale")->load();
-    const float shiftSemitones = apvts.getRawParameterValue("shift")->load();
-
-    for (int b = 0; b < kNumBands; ++b)
-    {
-        const int idx = b + 1;
-        const bool on = apvts.getRawParameterValue(bandId(idx, "present"))->load() > 0.5f
-            && apvts.getRawParameterValue(bandId(idx, "on"))->load() > 0.5f;
-        if (!on) continue;
-        const bool routed = apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load() > 0.5f
-            || std::abs(apvts.getRawParameterValue(bandId(idx, "placement"))->load()) > 0.001f
-            || apvts.getRawParameterValue(bandId(idx, "dyn_thresh"))->load() < -0.05f;
-        if (routed) continue; // routed bands use their minimum-phase post stage
-
-        const int t = (int)apvts.getRawParameterValue(bandId(idx, "type"))->load();
-        const auto tp = deq::filter_types::fromParameterIndex(t);
-
-        const float freq = shiftedFrequency(
-            apvts.getRawParameterValue(bandId(idx, "freq"))->load(), shiftSemitones);
-        float q    = apvts.getRawParameterValue(bandId(idx, "q"))->load();
-        const float rawGain = apvts.getRawParameterValue(bandId(idx, "gain"))->load();
-        const bool gainBearing = variable_slope::distributesGain(tp);
-        const float gain = gainBearing ? rawGain * amount : rawGain;
-
-        // Apply adaptive Q in linear phase magnitude build
-        const bool adaptiveQ = apvts.getRawParameterValue("adaptive_q")->load() > 0.5f;
-        if (adaptiveQ)
-            q = calculateAdaptiveQ(q, rawGain);
-
-        const float slope = apvts.getRawParameterValue(bandId(idx, "slope"))->load();
-        constexpr bool decramp = true;
-        const bool cut = zl_filter::isClassicCut(tp) || zl_filter::isResonantCut(tp);
-        double responseFreq = freq;
-        if (zl_filter::isResonantCut(tp))
-            q = EQBand::amountResonantCutQ(q, amount);
-        if (cut)
-        {
-            const double neutralEdge = (tp == Biquad::Type::LowPass || tp == Biquad::Type::ResLowPass)
-                ? sr * 0.45 : 10.0;
-            responseFreq = neutralEdge * std::pow(std::max(1.0e-9, freq / neutralEdge),
-                                                   std::max(0.0f, amount));
-            responseFreq = std::clamp(responseFreq, 10.0, sr * 0.45);
-        }
-
-        for (int i = 0; i < numBins; ++i)
-        {
-            const double f = (double)i / (double)(numBins - 1) * sr * 0.5;
-            if (f < 1.0) continue;
-
-            const auto rawResponse = variable_slope::response(tp, sr, responseFreq, q, gain,
-                                                              slope, decramp, f);
-            const double mix = cut ? (double)EQBand::cutAmountMix(amount)
-                                   : (double)std::clamp(amount, 0.0f, 1.0f);
-            const auto response = gainBearing ? rawResponse
-                : std::complex<double>(1.0, 0.0)
-                    + mix * (rawResponse - std::complex<double>(1.0, 0.0));
-            magDb[(size_t)i] += (float)(20.0 * std::log10(
-                std::max(std::abs(response), 1.0e-15)));
-        }
-    }
-
-    linearPhaseEngine.rebuildFromMagnitude(magDb, numBins, currentLinearPhaseLatency() * 2);
-}
 
 // This creates new instances of the plugin.
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

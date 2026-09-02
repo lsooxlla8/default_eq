@@ -1,6 +1,7 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include "../Source/UI/DriveCharacterFormatting.h"
+#include "../Source/DSP/EQAutoGain.h"
 #include "../Source/DSP/FilterTypes.h"
 #include "../Source/UI/ResponseCurveComponent.h"
 #include <cmath>
@@ -302,7 +303,9 @@ struct AutoGainRender
 {
     double rms = 0.0;
     double peak = 0.0;
+    float lufs = -std::numeric_limits<float>::infinity();
     float compensationDb = 0.0f;
+    bool smartLocked = false;
 };
 
 enum class TestSpectrum { Balanced, BassHeavy, Bright, DynamicMusic };
@@ -319,7 +322,8 @@ struct AutoGainScenario
 };
 
 AutoGainRender renderAutoGainScenario(int autoMode, const AutoGainScenario& scenario,
-                                      bool neutralReference = false, float outputDb = 0.0f)
+                                      bool neutralReference = false, float outputDb = 0.0f,
+                                      int totalBlocksOverride = 0)
 {
     constexpr double sampleRate = 48000.0;
     constexpr int blockSize = 128;
@@ -345,8 +349,13 @@ AutoGainRender renderAutoGainScenario(int autoMode, const AutoGainScenario& scen
     std::array<double, frequencies.size()> phases {};
     double energy = 0.0, peak = 0.0;
     int samplesMeasured = 0;
-    const int totalBlocks = autoMode == 2 ? 1500 : 500;
-    const int measureStart = totalBlocks - 200;
+    deq::loudness::KWeightedMeter loudness;
+    loudness.prepare(sampleRate);
+    const bool dynamicProgramme = scenario.spectrum == TestSpectrum::DynamicMusic;
+    const int defaultTotalBlocks = dynamicProgramme ? 3000 : autoMode == 2 ? 1500 : 500;
+    const int totalBlocks = totalBlocksOverride > 0 ? totalBlocksOverride : defaultTotalBlocks;
+    const int measuredBlocks = std::min(totalBlocks, dynamicProgramme ? 1200 : 200);
+    const int measureStart = totalBlocks - measuredBlocks;
     for (int blockIndex = 0; blockIndex < totalBlocks; ++blockIndex)
     {
         for (int sample = 0; sample < blockSize; ++sample)
@@ -386,11 +395,15 @@ AutoGainRender renderAutoGainScenario(int autoMode, const AutoGainScenario& scen
                 const double value = block.getSample(0, sample);
                 energy += value * value;
                 peak = std::max(peak, std::abs(value));
+                loudness.pushSample(block.getSample(0, sample),
+                                    block.getSample(1, sample));
                 ++samplesMeasured;
             }
     }
     return { std::sqrt(energy / std::max(1, samplesMeasured)), peak,
-             p.autoGainCompDb.load(std::memory_order_relaxed) };
+             loudness.getIntegratedLoudnessLufs(),
+             p.autoGainCompDb.load(std::memory_order_relaxed),
+             p.smartAutoGainLocked.load(std::memory_order_acquire) };
 }
 
 std::pair<double, double> renderLiveAmountChange()
@@ -727,6 +740,38 @@ int main()
     {
         return 20.0 * std::log10(std::max(level, 1.0e-12) / std::max(reference, 1.0e-12));
     };
+    {
+        deq::loudness::KWeightedMeter meter;
+        meter.prepare(48000.0);
+        double phase = 0.0;
+        const float amplitude = std::pow(10.0f, -23.0f / 20.0f);
+        for (int sample = 0; sample < 48000; ++sample)
+        {
+            const float value = amplitude * std::sin((float)phase);
+            phase += juce::MathConstants<double>::twoPi * 1000.0 / 48000.0;
+            meter.pushSample(value, value);
+        }
+        CHECK(std::abs(meter.getLoudnessLufs() + 23.0f) < 0.15f,
+              "K-weighted meter matches the BS.1770 stereo 1 kHz calibration");
+    }
+    {
+        std::array<deq::eq_auto_gain::BandParameters, kNumBands> responseBands {};
+        responseBands[0] = { true, deq::filter_types::bell, 1000.0f, 1.0f,
+                             12.0f, 12.0f, 0, 0.0f };
+        responseBands[1] = { true, deq::filter_types::bell, 1000.0f, 1.0f,
+                             -12.0f, 12.0f, 0, 0.0f };
+        CHECK(std::abs(deq::eq_auto_gain::combinedResponseCompensationDb(
+                           responseBands, 48000.0, 1.0f, 0.0f, false)) < 0.05f,
+              "Regular Gain combines cancelling bands before deriving compensation");
+        responseBands[1].enabled = false;
+        const float centred = deq::eq_auto_gain::combinedResponseCompensationDb(
+            responseBands, 48000.0, 1.0f, 0.0f, false);
+        responseBands[0].placementPercent = -100.0f;
+        const float leftOnly = deq::eq_auto_gain::combinedResponseCompensationDb(
+            responseBands, 48000.0, 1.0f, 0.0f, false);
+        CHECK(std::abs(leftOnly) < std::abs(centred),
+              "Regular Gain derives partial placement from the stereo transfer matrix");
+    }
     const std::array<AutoGainScenario, 17> autoGainScenarios {{
         { "low shelf +12 bass", deq::filter_types::lowShelf, 160.0f, 1.0f, 12.0f, 12.0f, TestSpectrum::BassHeavy },
         { "low shelf +25 bass", deq::filter_types::lowShelf, 160.0f, 1.0f, 12.0f, 25.0f, TestSpectrum::BassHeavy },
@@ -746,7 +791,7 @@ int main()
         { "notch 1k", deq::filter_types::notch, 1000.0f, 2.0f, 12.0f, 0.0f, TestSpectrum::Balanced },
         { "band pass 1k", deq::filter_types::bandPass, 1000.0f, 1.0f, 12.0f, 0.0f, TestSpectrum::Balanced }
     }};
-    float worstRegularBoostPeak = 0.0f, worstSmartPositiveResidual = 0.0f;
+    float worstSmartLufsResidual = 0.0f;
     for (const auto& scenario : autoGainScenarios)
     {
         const auto clean = renderAutoGainScenario(0, scenario, true);
@@ -759,26 +804,29 @@ int main()
         const double offPeakDb = levelDeltaDb(uncorrected.peak, clean.peak);
         const double regularPeakDb = levelDeltaDb(regular.peak, clean.peak);
         const double smartPeakDb = levelDeltaDb(smart.peak, clean.peak);
-        worstSmartPositiveResidual = std::max(worstSmartPositiveResidual,
-                                              (float)std::max(smartRmsDb, smartPeakDb));
-        if (scenario.gainDb > 0.0f)
-            worstRegularBoostPeak = std::max(worstRegularBoostPeak, (float)regularPeakDb);
-        std::printf("%-23s RMS off/reg/smart %+6.2f/%+6.2f/%+6.2f, peak %+6.2f/%+6.2f/%+6.2f, comp %+6.2f/%+6.2f dB\n",
+        const float smartLufsDb = smart.lufs - clean.lufs;
+        worstSmartLufsResidual = std::max(worstSmartLufsResidual,
+                                          std::abs(smartLufsDb));
+        std::printf("%-23s RMS off/reg/smart %+6.2f/%+6.2f/%+6.2f, peak %+6.2f/%+6.2f/%+6.2f, Smart LUFS %+6.2f, comp %+6.2f/%+6.2f dB\n",
                     scenario.name, offRmsDb, regularRmsDb, smartRmsDb,
                     offPeakDb, regularPeakDb, smartPeakDb,
-                    regular.compensationDb, smart.compensationDb);
-        CHECK(smartRmsDb < 0.35 && smartPeakDb < 0.35,
-              "Smart Gain leaves neither measured energy nor peak louder than the input");
-        if (scenario.gainDb > 0.0f && offPeakDb > 0.5)
-            CHECK(regularPeakDb <= 0.75 && regularPeakDb < offPeakDb,
-                  "instant Regular Auto Gain prevents a positive-gain band from making peaks louder");
+                    smartLufsDb, regular.compensationDb, smart.compensationDb);
+        CHECK(std::abs(smartLufsDb) < 0.35f,
+              "Smart Gain matches latency-aligned input/output LUFS");
     }
-    std::printf("auto-gain matrix: worst Regular boost peak %+0.2f dB, worst Smart positive residual %.2f dB\n",
-                worstRegularBoostPeak, worstSmartPositiveResidual);
+    std::printf("auto-gain scenarios: worst Smart LUFS residual %.2f dB\n",
+                worstSmartLufsResidual);
 
-    // This scenario changes both spectral balance and crest factor over time.
-    // It catches the old stationary-tone false confidence and the former 75%
-    // Smart correction that left several dB of error on programme material.
+    auto regularSpectrumA = autoGainScenarios.front();
+    auto regularSpectrumB = regularSpectrumA;
+    regularSpectrumB.spectrum = TestSpectrum::Bright;
+    const auto regularA = renderAutoGainScenario(1, regularSpectrumA);
+    const auto regularB = renderAutoGainScenario(1, regularSpectrumB);
+    CHECK(std::abs(regularA.compensationDb - regularB.compensationDb) < 0.001f,
+          "Regular Gain is independent of programme audio");
+
+    // Once the finite observation has completed, later programme changes must
+    // not keep moving the compensation target.
     const AutoGainScenario dynamicMusic {
         "dynamic music low shelf", deq::filter_types::lowShelf, 160.0f, 1.0f,
         12.0f, 36.0f, TestSpectrum::DynamicMusic
@@ -787,22 +835,75 @@ int main()
     const auto musicOff = renderAutoGainScenario(0, dynamicMusic);
     const auto musicRegular = renderAutoGainScenario(1, dynamicMusic);
     const auto musicSmart = renderAutoGainScenario(2, dynamicMusic);
+    const auto musicSmartAtLock = renderAutoGainScenario(
+        2, dynamicMusic, false, 0.0f, 800);
     const double musicOffPeakDb = levelDeltaDb(musicOff.peak, musicClean.peak);
     const double musicRegularPeakDb = levelDeltaDb(musicRegular.peak, musicClean.peak);
     const double musicSmartPeakDb = levelDeltaDb(musicSmart.peak, musicClean.peak);
     const double musicSmartRmsDb = levelDeltaDb(musicSmart.rms, musicClean.rms);
-    std::printf("dynamic music peak off/reg/smart %+0.2f/%+0.2f/%+0.2f dB, Smart RMS %+0.2f dB\n",
-                musicOffPeakDb, musicRegularPeakDb, musicSmartPeakDb, musicSmartRmsDb);
-    CHECK(musicRegularPeakDb <= 0.75 && musicRegularPeakDb < musicOffPeakDb,
-          "instant Regular Auto Gain bounds a changing music-like bass boost");
-    CHECK(musicSmartRmsDb < 0.5 && musicSmartPeakDb < 0.5,
-          "Smart Gain leaves neither energy nor peak louder after a changing +36 dB music-like boost");
+    const float musicSmartLufsDb = musicSmart.lufs - musicClean.lufs;
+    std::printf("dynamic music peak off/reg/smart %+0.2f/%+0.2f/%+0.2f dB, Smart RMS %+0.2f dB, LUFS %+0.2f dB, comp %+0.2f dB\n",
+                musicOffPeakDb, musicRegularPeakDb, musicSmartPeakDb,
+                musicSmartRmsDb, musicSmartLufsDb, musicSmart.compensationDb);
+    CHECK(musicSmart.smartLocked && musicSmartAtLock.smartLocked
+              && std::abs(musicSmart.compensationDb
+                          - musicSmartAtLock.compensationDb) < 0.01f,
+          "Smart Gain stops measuring after its finite LUFS observation");
+    {
+        DefaultEqualizerAudioProcessor silent;
+        setPlain(silent, "auto_gain_mode", 2.0f);
+        silent.prepareToPlay(48000.0, 128);
+        juce::AudioBuffer<float> block(2, 128);
+        juce::MidiBuffer midi;
+        for (int blockIndex = 0; blockIndex < 300; ++blockIndex)
+        {
+            block.clear();
+            silent.processBlock(block, midi);
+        }
+        CHECK(silent.smartAutoGainLocked.load(std::memory_order_acquire),
+              "Smart Gain also ends its finite observation on silence");
+    }
     const auto& outputScenario = autoGainScenarios.front();
     const auto autoGainSmart = renderAutoGainScenario(2, outputScenario);
     const auto smartWithOutput = renderAutoGainScenario(2, outputScenario, false, 6.0f);
     CHECK(std::abs(smartWithOutput.compensationDb - autoGainSmart.compensationDb) < 0.25f
-              && std::abs(levelDeltaDb(smartWithOutput.rms, autoGainSmart.rms) - 6.0) < 0.35,
+              && std::abs((smartWithOutput.lufs - autoGainSmart.lufs) - 6.0f) < 0.35f,
           "Smart Gain leaves the manual Output control outside its compensation loop");
+
+    {
+        constexpr double sampleRate = 48000.0;
+        constexpr int blockSize = 128;
+        DefaultEqualizerAudioProcessor p;
+        setPlain(p, "auto_gain_mode", 1.0f);
+        activateBand(p, 1);
+        setPlain(p, id(1, "type"), (float)deq::filter_types::lowShelf);
+        setPlain(p, id(1, "freq"), 160.0f);
+        setPlain(p, id(1, "gain"), 24.0f);
+        p.prepareToPlay(sampleRate, blockSize);
+        juce::AudioBuffer<float> block(2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        const auto processTone = [&]
+        {
+            for (int sample = 0; sample < blockSize; ++sample)
+            {
+                const float value = 0.02f * std::sin((float)phase);
+                phase += juce::MathConstants<double>::twoPi * 80.0 / sampleRate;
+                block.setSample(0, sample, value);
+                block.setSample(1, sample, value);
+            }
+            p.processBlock(block, midi);
+        };
+        for (int blockIndex = 0; blockIndex < 500; ++blockIndex)
+            processTone();
+        const float regularCompensation = p.autoGainCompDb.load(std::memory_order_relaxed);
+        setPlain(p, "auto_gain_mode", 2.0f);
+        for (int blockIndex = 0; blockIndex < 100; ++blockIndex)
+            processTone();
+        CHECK(std::abs(p.autoGainCompDb.load(std::memory_order_relaxed)
+                       - regularCompensation) < 0.1f,
+              "Smart Gain holds the current compensation while analysing");
+    }
 
     std::printf("DSP integration: routing and unity\n");
     // Neutral 8-band centered L/R and M/S placement must both be unity.
@@ -1496,6 +1597,21 @@ int main()
     CHECK(ResponseCurveComponent::isCutType(0) && ResponseCurveComponent::isCutType(1)
               && ResponseCurveComponent::isCutType(8) && ResponseCurveComponent::isCutType(9),
           "all resonant and classic low/high cuts are classified as cuts");
+    CHECK(ResponseCurveComponent::wheelActionForModifiers(true, false, false)
+              == ResponseCurveComponent::WheelAction::slope
+              && ResponseCurveComponent::wheelActionForModifiers(false, true, false)
+                  == ResponseCurveComponent::WheelAction::character
+              && ResponseCurveComponent::wheelActionForModifiers(false, false, true)
+                  == ResponseCurveComponent::WheelAction::placement,
+          "Cmd/Ctrl-wheel edits slope while Alt-wheel edits Character");
+    CHECK(ResponseCurveComponent::increasingSlopeWheelStep(-1.0f) > 0.0f
+              && ResponseCurveComponent::increasingSlopeWheelStep(1.0f) < 0.0f,
+          "upward wheel increases slope and downward wheel decreases it");
+    CHECK(ResponseCurveComponent::slopeAfterWheelStep(8, 24.0f, 1.0f) > 24.0f
+              && ResponseCurveComponent::slopeAfterWheelStep(8, 24.0f, -1.0f) < 24.0f
+              && ResponseCurveComponent::slopeAfterWheelStep(5, 24.0f, 1.0f) == 36.0f
+              && ResponseCurveComponent::slopeAfterWheelStep(5, 24.0f, -1.0f) == 12.0f,
+          "continuous and discrete slope wheel paths follow the same direction");
     CHECK(ResponseCurveComponent::usesQVerticalDrag(8)
               && ResponseCurveComponent::usesQVerticalDrag(9)
               && ResponseCurveComponent::usesQVerticalDrag(0)
@@ -1518,12 +1634,64 @@ int main()
     CHECK(ResponseCurveComponent::cutQFromVerticalDrag(24.0f, -1000.0f) == 24.0f
               && ResponseCurveComponent::cutQFromVerticalDrag(0.1f, 1000.0f) == 0.1f,
           "vertical cut drag clamps Q to the published parameter range");
+    CHECK(std::abs(ResponseCurveComponent::qResetValueForType(
+                       deq::filter_types::resLowCut) - 0.75f) < 0.0001f
+              && std::abs(ResponseCurveComponent::qResetValueForType(
+                              deq::filter_types::resHighCut) - 0.75f) < 0.0001f
+              && std::abs(ResponseCurveComponent::qResetValueForType(
+                              deq::filter_types::bell) - 1.0f) < 0.0001f,
+          "Q reset uses 0.75 only for resonant Low/High Cut");
+    CHECK(ResponseCurveComponent::isWithinBandHitArea(19.9f, 0.0f)
+              && !ResponseCurveComponent::isWithinBandHitArea(20.1f, 0.0f),
+          "band pointer hit area extends to the new 20 pixel radius");
     {
         const juce::Rectangle<float> marquee(20.0f, 30.0f, 100.0f, 80.0f);
         CHECK(ResponseCurveComponent::marqueeContains(marquee, { 20.0f, 30.0f })
                   && ResponseCurveComponent::marqueeContains(marquee, { 75.0f, 70.0f })
                   && !ResponseCurveComponent::marqueeContains(marquee, { 121.0f, 70.0f }),
               "marquee selection includes its boundary and rejects nodes outside the rectangle");
+    }
+    {
+        DefaultEqualizerAudioProcessor p;
+        for (int band = 0; band < kNumBands; ++band)
+            p.resetBandToDefaults(band, false);
+        p.resetBandToDefaults(0, true, 180.0f, 2.0f);
+        p.resetBandToDefaults(2, true, 2400.0f, -3.0f);
+        setPlain(p, id(1, "placement"), 47.0f);
+        setPlain(p, id(1, "dyn_thresh"), -31.0f);
+        ResponseCurveComponent curve(p);
+        curve.setSelectedBand(0);
+        CHECK(curve.resetBandThreshold(0)
+                  && std::abs(p.apvts.getRawParameterValue(id(1, "dyn_thresh"))->load()) < 0.01f
+                  && std::abs(p.apvts.getRawParameterValue(id(1, "placement"))->load() - 47.0f) < 0.01f,
+              "band threshold reset returns Threshold to zero without changing placement");
+        CHECK(curve.deleteSelectedBands()
+                  && p.apvts.getRawParameterValue(id(1, "present"))->load() < 0.5f
+                  && p.apvts.getRawParameterValue(id(3, "present"))->load() > 0.5f
+                  && curve.getSelectionCount() == 0 && curve.getSelectedBand() < 0,
+              "deleting a selection clears only selected bands and selection state");
+    }
+    {
+        DefaultEqualizerAudioProcessor p;
+        for (int band = 0; band < kNumBands; ++band)
+            p.resetBandToDefaults(band, false);
+        p.resetBandToDefaults(0, true, 200.0f, 0.0f);
+        p.resetBandToDefaults(3, true, 4200.0f, 0.0f);
+        DefaultEqualizerAudioProcessorEditor editor(p);
+        ResponseCurveComponent* graph = nullptr;
+        for (int child = 0; child < editor.getNumChildComponents(); ++child)
+            if (auto* response = dynamic_cast<ResponseCurveComponent*>(editor.getChildComponent(child)))
+                graph = response;
+        if (graph != nullptr) graph->setSelectedBand(0);
+        CHECK(editor.keyPressed(juce::KeyPress(juce::KeyPress::deleteKey))
+                  && p.apvts.getRawParameterValue(id(1, "present"))->load() < 0.5f
+                  && p.apvts.getRawParameterValue(id(4, "present"))->load() > 0.5f,
+              "Delete removes the selected band only");
+
+        if (graph != nullptr) graph->setSelectedBand(3);
+        CHECK(editor.keyPressed(juce::KeyPress(juce::KeyPress::backspaceKey))
+                  && p.apvts.getRawParameterValue(id(4, "present"))->load() < 0.5f,
+              "Backspace removes the selected band");
     }
     CHECK(deq::filter_types::fromParameterIndex(deq::filter_types::bell) == Biquad::Type::Bell
               && deq::filter_types::fromParameterIndex(deq::filter_types::lowCut) == Biquad::Type::LowPass
@@ -1784,9 +1952,15 @@ int main()
         CHECK(worst < 2.0e-5f, "neutral mono processing is unity");
     }
 
+    const auto cleanCpuNs = benchmarkProcessorNsPerSample(0);
+    const auto oneBandCpuNs = benchmarkProcessorNsPerSample(1);
+    const auto eightBandCpuNs = benchmarkProcessorNsPerSample(8);
     std::printf("processor CPU probe: 0 bands %.2f, 1 band %.2f, 8 bands %.2f ns/sample\n",
-                benchmarkProcessorNsPerSample(0), benchmarkProcessorNsPerSample(1),
-                benchmarkProcessorNsPerSample(8));
+                cleanCpuNs, oneBandCpuNs, eightBandCpuNs);
+    CHECK(cleanCpuNs < oneBandCpuNs * 0.5,
+          "clean-instance fast path remains materially cheaper than one active band");
+    CHECK(eightBandCpuNs < oneBandCpuNs * 6.5,
+          "eight-band processing remains within the Phase 6 scaling budget");
 
     std::printf(failures == 0 ? "ALL DSP INTEGRATION TESTS PASSED\n" : "%d DSP INTEGRATION TEST(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;

@@ -41,6 +41,13 @@ public:
             dryInput.copyFrom(channel, 0, input, channel, 0, capturedSamples);
     }
 
+    bool isTransparentEnabledPath(int latencySamples, bool enabled) const noexcept
+    {
+        return enabled && latencySamples == 0 && !wetMix.isSmoothing()
+            && wetMix.getCurrentValue() >= 0.999999f
+            && wetMix.getTargetValue() >= 0.999999f;
+    }
+
     void processOutput(juce::AudioBuffer<float>& processed, int latencySamples,
                        bool enabled) noexcept
     {

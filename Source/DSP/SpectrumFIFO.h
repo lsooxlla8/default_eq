@@ -59,7 +59,7 @@ public:
         midSlot.store(1, std::memory_order_relaxed);
         readSlot  = 2;
         fresh.store(false, std::memory_order_relaxed);
-        fifoWriteIndex.store(0, std::memory_order_relaxed);
+        fifoWriteIndex = 0;
         samplesSincePublish = 0;
         for (int resolution = 0; resolution < 3; ++resolution)
         {
@@ -88,7 +88,7 @@ public:
     // Reset the FIFO state (call from prepareToPlay or when going offline/online).
     void reset()
     {
-        fifoWriteIndex.store(0, std::memory_order_relaxed);
+        fifoWriteIndex = 0;
         samplesSincePublish = 0;
         writeSlot = 0;
         midSlot.store(1, std::memory_order_relaxed);
@@ -102,7 +102,7 @@ public:
     // Call from audio thread: push interleaved mono samples.
     void pushSamples(const float* data, int numSamples)
     {
-        int idx = fifoWriteIndex.load(std::memory_order_relaxed);
+        int idx = fifoWriteIndex;
         for (int i = 0; i < numSamples; ++i)
         {
             capture[(size_t)idx] = data[i];
@@ -114,13 +114,13 @@ public:
                 writerFlip();
             }
         }
-        fifoWriteIndex.store(idx, std::memory_order_relaxed);
+        fifoWriteIndex = idx;
     }
 
     // Call from audio thread: push a stereo buffer (sum to mono).
     void pushBlock(const float* L, const float* R, int numSamples)
     {
-        int idx = fifoWriteIndex.load(std::memory_order_relaxed);
+        int idx = fifoWriteIndex;
         for (int i = 0; i < numSamples; ++i)
         {
             capture[(size_t)idx] = (L[i] + R[i]) * 0.5f;
@@ -132,7 +132,7 @@ public:
                 writerFlip();
             }
         }
-        fifoWriteIndex.store(idx, std::memory_order_relaxed);
+        fifoWriteIndex = idx;
     }
 
     // Call from UI thread: returns true if new data was processed.
@@ -201,8 +201,9 @@ private:
     void snapshotCapture(int oldestSample)
     {
         auto& destination = slots[(size_t) writeSlot];
-        for (int i = 0; i < fftSize; ++i)
-            destination[(size_t)i] = capture[(size_t)((oldestSample + i) % fftSize)];
+        const int tailSamples = fftSize - oldestSample;
+        std::copy_n(capture.begin() + oldestSample, tailSamples, destination.begin());
+        std::copy_n(capture.begin(), oldestSample, destination.begin() + tailSamples);
     }
 
     juce::dsp::FFT fftLow, fftMedium, fftHigh;
@@ -216,7 +217,7 @@ private:
     std::array<std::array<float, fftSize>, 3>        hannWindows {};
     std::array<std::array<int, numBins>, 3>          smoothingLo {}, smoothingHi {};
 
-    std::atomic<int>  fifoWriteIndex { 0 };
+    int               fifoWriteIndex = 0; // audio-thread only; reset in prepare
     std::atomic<int>  midSlot        { 1 };
     std::atomic<bool> fresh          { false };
     std::atomic<int> resolutionIndex { 2 };

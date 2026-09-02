@@ -1,5 +1,8 @@
 # Verification record — 0.1.0
 
+> Archived historical record. These measurements and screenshots describe
+> version 0.1.0, not the current 0.3.0 implementation.
+
 Verified locally on macOS on 2026-08-13 from a universal Release build.
 
 ## Build and host validation
@@ -76,14 +79,14 @@ screenshots confirm exact paper/ink role inversion. The current 860 px compact
 and Advanced captures also verify that the graph retains its dimensions when
 the panel opens, and that no separate meter is overlaid on the RTA edge.
 
-- `docs/screenshots/default_equalizer-dark-final-720.jpeg`
-- `docs/screenshots/default_equalizer-dark-final-860.jpeg`
-- `docs/screenshots/default_equalizer-dark-1200.jpeg`
-- `docs/screenshots/default_equalizer-light-860.jpeg`
-- `docs/screenshots/default_equalizer-light-final-2026-08-13.jpeg`
-- `docs/screenshots/default_equalizer-light-band-drive-2026-08-13.png`
-- `docs/screenshots/default_equalizer-light-collapsed-2026-08-13.png`
-- `docs/screenshots/default_equalizer-light-compact-controls-2026-08-13.png`
+- `screenshots/default_equalizer-dark-final-720.jpeg`
+- `screenshots/default_equalizer-dark-final-860.jpeg`
+- `screenshots/default_equalizer-dark-1200.jpeg`
+- `screenshots/default_equalizer-light-860.jpeg`
+- `screenshots/default_equalizer-light-final-2026-08-13.jpeg`
+- `screenshots/default_equalizer-light-band-drive-2026-08-13.png`
+- `screenshots/default_equalizer-light-collapsed-2026-08-13.png`
+- `screenshots/default_equalizer-light-compact-controls-2026-08-13.png`
 
 ## Known boundaries
 

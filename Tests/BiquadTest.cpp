@@ -4,9 +4,9 @@
     and sample rates.
 
     Build & run:
-        cmake -S . -B build -DFREEEQ8_BUILD_TESTS=ON
-        cmake --build build --target FreeEQ8_Tests
-        ./build/FreeEQ8_Tests
+        cmake -S . -B build -DDEFAULT_EQ_BUILD_TESTS=ON
+        cmake --build build --target DefaultEQ_Tests
+        ./build/DefaultEQ_Tests
 */
 
 #include <cmath>

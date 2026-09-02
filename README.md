@@ -19,8 +19,8 @@ Most editing happens directly on the analyzer:
 - **Cmd-drag** a band to adjust Drive; **Shift-drag** it to adjust the dynamic
   Threshold.
 - Use the **mouse wheel** for Q (or Slope on non-resonant Cut filters),
-  **Shift-wheel** for placement, **Alt-wheel** for Slope, and **Cmd-wheel** for
-  Character.
+  **Shift-wheel** for placement, **Cmd/Ctrl-wheel** for Slope, and **Alt-wheel**
+  for Character. Scrolling up increases Slope; scrolling down decreases it.
 - **Shift-click** individual bands to add or remove them from the selection.
   **Shift-drag** or **right-drag** a marquee over empty graph space to select
   multiple bands.
@@ -67,7 +67,12 @@ ctest --test-dir build --output-on-failure
 ```
 
 On Windows and Linux, omit `CMAKE_OSX_ARCHITECTURES`. AU is built only on
-macOS.
+macOS. The current CMake target uses `COPY_PLUGIN_AFTER_BUILD`, so building AU
+or VST3 also replaces that format in the user's standard plug-in folder.
+
+The current implementation contract and latest local verification are recorded
+in [`docs/implementation-status.md`](docs/implementation-status.md) and
+[`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
 
 ## Licence
 

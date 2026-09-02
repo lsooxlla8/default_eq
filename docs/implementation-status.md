@@ -1,4 +1,4 @@
-# Development status — 0.3.0 (`default_eq`)
+# Development status — 0.4.0 (`default_eq`)
 
 ## Implemented and exercised
 
@@ -9,7 +9,7 @@
   first-order-stage slope, now extending through 96 dB/oct.
 - Graph drag, position-aware first-click creation into an unused slot with an
   immediate drag gesture, Q wheel (slope wheel only on classic cuts), vertical Q
-  drag restricted to cut filters, Alt-wheel slope, Cmd-wheel Character,
+  drag restricted to cut filters, Cmd/Ctrl-wheel Slope, Alt-wheel Character,
   Cmd-click bypass, Cmd-drag drive, Cmd-right-click Drive/Character reset,
   Alt-right-click slope reset, Shift-click selection toggle on nodes,
   Shift-Cmd-click placement reset, Shift-click Flat Tilt/resonant edge-cut
@@ -64,11 +64,21 @@
   of extrapolating through a phase reversal. Negative cut, band-pass and notch
   Amount stays at unity because an exact inverse is not a stable zero-latency
   IIR. Drive is inactive on the negative half.
-- Regular parameter-derived Auto Gain and 500 ms measured Smart Gain with
-  progress. Smart Gain compares untouched program input with final output,
-  invalidates its measurement when T/S routing/split or other audible
-  parameters change, and waits out the current reported latency before taking
-  a fresh measurement.
+- Regular Auto Gain derives one compensation value from the exact combined
+  complex EQ response, including Amount, Shift, Adaptive Q and stereo routing.
+  It is independent of programme audio and recomputes only after a relevant
+  parameter change. Smart Gain compares latency-aligned input and pre-Output
+  post-EQ loudness through BS.1770 K-weighting. It takes its first estimate at
+  400 ms, refines it three times at 100 ms intervals, then locks and stops
+  measuring. Audible parameter or latency changes start one new finite
+  observation without forcing compensation to jump during analysis.
+- Phase 6 performance work adds a transparent zero-band fast path, per-band
+  dirty snapshots, a vectorised stable-output pass and stereo block kernels for
+  steady-state cascades and classic cuts. Unchanged bands avoid parameter,
+  routing and coefficient setup, and static sections stay on the block kernel
+  inside mixed dynamic chains. The response graph now updates from parameter
+  changes or new FFT frames, advances spectrum smoothing outside `paint()`,
+  caches its static background, and skips unchanged control repaints.
   Schema-v9 single-state recall and v3/v5/v6/v7 migration, no published
   A/B/link-group/dynamic-enable parameters, corrupt-state rejection,
   mono/stereo, unit parsing, and paper/ink family UI with hidden Reduced Motion
@@ -84,7 +94,9 @@
   validated. Linear Phase is the optional non-minimum-phase mode.
 - Classic Low/High Cut ignore Q and use plain wheel for their continuous slope.
   Resonant cuts use ZLEqualizer Q and discrete cascades; their plain wheel edits
-  Q and Alt-wheel edits slope, matching Bell, shelves, Tilt, Band Pass and Notch.
+  Q and Cmd/Ctrl-wheel edits slope, matching Bell, shelves, Tilt, Band Pass and
+  Notch. Upward wheel motion increases Slope in both the modified and classic-cut
+  plain-wheel paths.
 - In Linear Phase, centered L/R bands are in the FIR. Continuously placed L/R
   or M/S bands use their minimum-phase post stage because one shared stereo FIR
   cannot encode asymmetric placement. Dynamic modulation and drive remain active post-FIR.

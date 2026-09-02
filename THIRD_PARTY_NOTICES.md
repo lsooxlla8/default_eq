@@ -91,6 +91,5 @@ routes; no ZL branding or assets are included.
 The upstream FreeEQ8 JUCE 7 revision was updated because it uses a CoreGraphics
 API unavailable in the installed macOS 15 SDK.
 
-The local patch at `patches/juce-popup-submenu-direction.patch` adds an
-explicit left/right preference for hover submenus. It changes only popup-menu
-placement and is applied automatically by CMake to a clean JUCE submodule.
+Popup and hover-submenu positioning is implemented in project-owned UI code;
+the JUCE submodule is used without local source patches.

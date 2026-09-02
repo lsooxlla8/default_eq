@@ -5,10 +5,12 @@
 #include "DSP/EQBand.h"
 #include "DSP/SpectrumFIFO.h"
 #include "DSP/LinearPhaseEngine.h"
+#include "DSP/KWeightedLoudness.h"
 #include "DSP/GlobalBypass.h"
 #include "DSP/TransientSplitter.h"
 #include <array>
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -120,6 +122,36 @@ private:
         std::atomic<float>* dynSpeed = nullptr;
     };
     std::array<BandParameterPointers, kNumBands> bandParams {};
+    struct BandParameterSnapshot
+    {
+        bool present = false, on = false;
+        int type = deq::filter_types::bell;
+        float slope = 12.0f;
+        int placementMode = 0;
+        float placement = 0.0f;
+        float freq = 1000.0f, q = 1.0f, gain = 0.0f;
+        float drive = 0.0f, driveCharacter = 0.0f, driveSecondary = 0.0f;
+        int satMode = 0, dynMode = 0, scSource = 0;
+        float dynLookahead = 0.0f, dynThresh = 0.0f, dynRange = 6.0f;
+        float dynRatio = 4.0f, dynSpeed = 75.0f;
+        bool enabled() const noexcept { return present && on; }
+    };
+    std::array<BandParameterSnapshot, kNumBands> bandSnapshots {};
+    std::atomic<std::uint32_t> bandDirtyMask { (1u << kNumBands) - 1u };
+    bool runtimeBandsConfigured = false;
+    bool lastSidechainConnected = false;
+    int lastMainChannelCount = 0;
+    std::array<int, kNumBands> cachedActiveBands {};
+    std::array<int, kNumBands> cachedDrivenBands {};
+    std::array<int, kNumBands> cachedTsActiveBands {};
+    int cachedActiveBandCount = 0;
+    int cachedDrivenBandCount = 0;
+    int cachedTsActiveBandCount = 0;
+    bool cachedTsDriveActive = false;
+    bool cachedTsDetectorNeeded = false;
+    bool cachedTsExternalDetectorNeeded = false;
+    bool cachedAnyDynamicBand = false;
+    float cachedMaxDynamicLookaheadMs = 0.0f;
     std::atomic<float>* outputGainParam = nullptr;
     std::atomic<float>* amountParam = nullptr;
     std::atomic<float>* shiftParam = nullptr;
@@ -136,12 +168,14 @@ private:
     void cacheParameterPointers();
     std::atomic<bool> analyzerEnabled { false };
     bool transportWasPlaying = false; // audio-thread owned
+    bool cachedAnyEnabledBand = false;
 
     std::array<EQBand, kNumBands> bands;
     std::array<EQBand, kNumBands> transientBands, sustainBands;
     TransientSplitter transientSplitter;
     TransientSplitter internalDetectorTransientSplitter, externalDetectorTransientSplitter;
     juce::AudioBuffer<float> transientBuffer, sustainBuffer;
+    juce::AudioBuffer<float> staticRoutingScratch;
     juce::AudioBuffer<float> internalDetectorTransientBuffer, internalDetectorSustainBuffer;
     juce::AudioBuffer<float> externalDetectorTransientBuffer, externalDetectorSustainBuffer;
     juce::AudioBuffer<float> externalDetectorInputBuffer;
@@ -167,13 +201,18 @@ private:
     std::array<std::atomic<float>, kNumBands> bandDetectorLevelDbL {}, bandDetectorLevelDbR {};
     std::atomic<bool> regularAutoGainDirty { true };
     float regularTargetCompDb = 0.0f;
+    float regularCompensationLinear = 1.0f;
+    float cachedOutputGainDb = std::numeric_limits<float>::quiet_NaN();
+    float cachedOutputGainLinear = 1.0f;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> autoGainLinearSm;
-    double smartInputEnergy = 0.0, smartOutputEnergy = 0.0;
-    float smartInputPeak = 0.0f, smartOutputPeak = 0.0f;
-    int64_t smartEnergySamples = 0;
+    deq::loudness::KWeightedMeter smartInputLoudness;
+    deq::loudness::KWeightedMeter smartOutputLoudness;
     int64_t smartWarmupSamplesRemaining = 0;
-    std::uint64_t smartParameterSignature = 0;
+    int64_t smartLoudnessRevision = 0;
+    int smartLoudnessUpdateCount = 0;
+    std::atomic<bool> smartObservationDirty { true };
     float smartTargetCompDb = 0.0f;
+    int processedAutoGainMode = -1;
     juce::AudioBuffer<float> smartReferenceDelayBuffer;
     int smartReferenceDelayPosition = 0;
     void routeLookahead(juce::AudioBuffer<float>&, const float* sidechainL,
@@ -209,7 +248,7 @@ private:
     std::unique_ptr<LinPhaseRebuildThread> linPhaseRebuildThread;
     void requestLinearPhaseRebuild();
 
-    void syncBandsFromParams();
+    std::uint32_t syncBandsFromParams();
     void buildAllOversamplers(double sampleRate, int samplesPerBlock);
     juce::dsp::Oversampling<float>* currentOversamplerPtr() const noexcept;
     void buildLinearPhaseMagnitude();        // runs on background thread only

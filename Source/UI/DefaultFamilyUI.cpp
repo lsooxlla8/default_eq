@@ -351,7 +351,11 @@ SmartGainButton::SmartGainButton(juce::String text) : juce::TextButton(std::move
 
 void SmartGainButton::setLoadingState(float progress, bool shouldLoad, bool reduceMotion)
 {
-    loadingProgress = juce::jlimit(0.0f, 1.0f, progress);
+    const float nextProgress = juce::jlimit(0.0f, 1.0f, progress);
+    if (std::abs(loadingProgress - nextProgress) < 0.0001f
+        && loading == shouldLoad && reducedMotion == reduceMotion)
+        return;
+    loadingProgress = nextProgress;
     loading = shouldLoad;
     reducedMotion = reduceMotion;
     repaint();

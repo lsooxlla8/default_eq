@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#050505">
+    <title>default_eq — site-aligned prototype</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="prototype-page">
+      <section class="plugin-shell" id="plugin" aria-label="Interactive default_eq prototype">
+        <header class="plugin-header">
+          <button class="wordmark" id="themeToggle" type="button" aria-label="Toggle paper and ink theme">default_eq</button>
+
+          <label class="header-cell header-select header-select--small">
+            <span>OS</span>
+            <select id="oversampling" aria-label="Oversampling">
+              <option value="0">OFF</option>
+              <option value="1">2×</option>
+              <option value="2">4×</option>
+              <option value="3">8×</option>
+            </select>
+          </label>
+
+          <label class="header-cell header-select header-select--phase">
+            <span>PHASE</span>
+            <select id="phaseMode" aria-label="Phase mode">
+              <option value="0">MIN PHASE</option>
+              <option value="1">LINEAR ECO</option>
+              <option value="2">LINEAR MED</option>
+              <option value="3">LINEAR HIGH</option>
+            </select>
+          </label>
+
+          <label class="header-cell header-drag">
+            <span>AMOUNT</span>
+            <output id="amountValue">100%</output>
+            <input id="amount" type="range" min="-2" max="2" step="0.01" value="1" aria-label="Amount">
+          </label>
+
+          <label class="header-cell header-drag">
+            <span>SHIFT</span>
+            <output id="shiftValue">0.0</output>
+            <input id="shift" type="range" min="-48" max="48" step="0.1" value="0" aria-label="Shift">
+          </label>
+
+          <button class="header-cell header-action is-active" id="autoGain" type="button">
+            <span>AUTO GAIN</span>
+            <strong id="autoGainValue">REGULAR</strong>
+          </button>
+
+          <button class="header-cell header-action power is-active" id="power" type="button">
+            <span>POWER</span>
+            <strong id="powerValue">ON</strong>
+          </button>
+        </header>
+
+        <div class="graph-stack">
+          <section class="graph-panel" id="graphPanel" aria-label="EQ response and analyzer">
+            <svg id="eqGraph" viewBox="0 0 1200 420" preserveAspectRatio="none" aria-label="Interactive EQ graph">
+              <g id="gridLayer"></g>
+              <g id="spectrumLayer"></g>
+              <g id="bandCurveLayer"></g>
+              <g id="responseLayer"></g>
+              <g id="nodeLayer"></g>
+              <g id="marqueeLayer"></g>
+            </svg>
+            <div class="hover-card" id="hoverCard" hidden></div>
+          </section>
+
+          <section class="value-strip" aria-label="Selected band values">
+            <button class="strip-toggle" id="adaptiveQ" type="button">
+              <strong>ADAPTIVE Q</strong>
+            </button>
+            <label class="strip-field strip-filter-field">
+              <span class="filter-select-line">
+                <span class="filter-icon-preview" id="filterIconPreview" aria-hidden="true"></span>
+                <select id="filterType" aria-label="Filter type"></select>
+              </span>
+            </label>
+            <label class="strip-field">
+              <span>FREQUENCY</span>
+              <div><input id="freqField" type="number" min="20" max="20000" step="1"><small>Hz</small></div>
+            </label>
+            <label class="strip-field">
+              <span>GAIN</span>
+              <div><input id="gainField" type="number" min="-36" max="36" step="0.01"><small>dB</small></div>
+            </label>
+            <label class="strip-field">
+              <span>Q</span>
+              <div><input id="qField" type="number" min="0.1" max="24" step="0.001"></div>
+            </label>
+            <label class="strip-field">
+              <span>SLOPE</span>
+              <div><input id="slopeField" type="number" min="3" max="96" step="0.1"><small>dB/OCT</small></div>
+            </label>
+            <label class="strip-field strip-field--output">
+              <span>OUT</span>
+              <div><input id="outputField" type="number" min="-24" max="24" step="0.1" value="0"><small>dB</small></div>
+            </label>
+          </section>
+        </div>
+
+        <section class="workspace" id="workspace" aria-label="Selected band controls">
+          <div class="workspace-block state-block">
+            <button id="bandOn" type="button">ON</button>
+            <button id="bandSolo" type="button">SOLO</button>
+          </div>
+
+          <div class="workspace-block routing-block">
+            <label class="compact-field route-mode-field">
+              <span>ROUTE</span>
+              <select id="placementMode" aria-label="Placement mode"></select>
+            </label>
+            <label class="compact-field placement-field">
+              <span id="placementName">CENTER</span>
+              <input id="placement" type="range" min="-100" max="100" step="0.1" aria-label="Placement">
+              <output id="placementValue">0%</output>
+            </label>
+          </div>
+
+          <div class="workspace-block saturation-block">
+            <label class="compact-field saturation-field">
+              <span>DIST TYPE</span>
+              <select id="saturationMode" aria-label="Distortion type"></select>
+            </label>
+            <div class="drive-controls" id="driveControls"></div>
+          </div>
+          <div class="workspace-gap" aria-hidden="true"></div>
+
+          <div class="workspace-block dynamics-block">
+            <div class="dynamics-actions">
+              <button id="dynMode" type="button">DOWN</button>
+              <button id="sidechain" type="button">IN SC</button>
+            </div>
+            <div id="thresholdControl"></div>
+            <div class="dynamic-parameters" id="dynamicControls"></div>
+          </div>
+        </section>
+
+        <div class="filter-glyph" id="filterGlyph" aria-hidden="true"></div>
+        <div class="select-menu" id="selectMenu" hidden></div>
+        <div class="context-menu" id="contextMenu" hidden></div>
+      </section>
+    </main>
+  </body>
+</html>

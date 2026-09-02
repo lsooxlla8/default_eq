@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(default_eq VERSION 0.3.0)
+project(default_eq VERSION 0.4.0)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -15,38 +15,6 @@ endif()
 # Option B: Point JUCE_DIR to your local JUCE folder:
 #   cmake -DJUCE_DIR=/path/to/JUCE ..
 #
-set(DEFAULT_EQ_JUCE_POPUP_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/patches/juce-popup-submenu-direction.patch")
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt" AND EXISTS "${DEFAULT_EQ_JUCE_POPUP_PATCH}")
-  find_package(Git QUIET)
-  if (GIT_FOUND)
-    execute_process(
-      COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/JUCE" apply
-              --check --ignore-space-change --ignore-whitespace "${DEFAULT_EQ_JUCE_POPUP_PATCH}"
-      RESULT_VARIABLE DEFAULT_EQ_JUCE_PATCH_CAN_APPLY
-      OUTPUT_QUIET ERROR_QUIET)
-    if (DEFAULT_EQ_JUCE_PATCH_CAN_APPLY EQUAL 0)
-      execute_process(
-        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/JUCE" apply
-                --ignore-space-change --ignore-whitespace "${DEFAULT_EQ_JUCE_POPUP_PATCH}"
-        RESULT_VARIABLE DEFAULT_EQ_JUCE_PATCH_RESULT)
-      if (NOT DEFAULT_EQ_JUCE_PATCH_RESULT EQUAL 0)
-        message(FATAL_ERROR "Could not apply the default_eq JUCE popup-menu patch")
-      endif()
-    else()
-      execute_process(
-        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}/JUCE" apply
-                --reverse --check --ignore-space-change --ignore-whitespace "${DEFAULT_EQ_JUCE_POPUP_PATCH}"
-        RESULT_VARIABLE DEFAULT_EQ_JUCE_PATCH_ALREADY_APPLIED
-        OUTPUT_QUIET ERROR_QUIET)
-      if (NOT DEFAULT_EQ_JUCE_PATCH_ALREADY_APPLIED EQUAL 0)
-        message(FATAL_ERROR "JUCE popup-menu sources do not match the default_eq patch")
-      endif()
-    endif()
-  else()
-    message(FATAL_ERROR "Git is required to apply the default_eq JUCE popup-menu patch")
-  endif()
-endif()
-
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/JUCE/CMakeLists.txt")
   add_subdirectory(JUCE)
 elseif (DEFINED JUCE_DIR AND EXISTS "${JUCE_DIR}/CMakeLists.txt")
@@ -83,25 +51,39 @@ juce_add_plugin(DefaultEQ
 target_sources(DefaultEQ PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
+    Source/ProcessorParameters.cpp
+    Source/ProcessorRouting.cpp
+    Source/ProcessorState.cpp
+    Source/ProcessorLinearPhase.cpp
     Source/PluginEditor.cpp
     Source/PluginEditor.h
+    Source/EditorControls.cpp
+    Source/EditorBandControls.cpp
     Source/Config.h
     Source/DSP/Biquad.h
     Source/DSP/FilterTypes.h
     Source/DSP/SvfBiquad.h
     Source/DSP/EQBand.h
+    Source/DSP/EQBandProcessing.inl
+    Source/DSP/EQBandDrive.inl
+    Source/DSP/EQBandInternals.inl
     Source/DSP/ZLFilter.h
     Source/DSP/TransientSplitter.h
     Source/DSP/DriveAutoGainTable.h
-    Source/DSP/EQAutoGainTable.h
+    Source/DSP/EQAutoGain.h
+    Source/DSP/KWeightedLoudness.h
     Source/DSP/SpectrumFIFO.h
     Source/DSP/LinearPhaseEngine.h
     Source/DSP/GlobalBypass.h
     Source/UI/ResponseCurveComponent.h
     Source/UI/ResponseCurveComponent.cpp
+    Source/UI/ResponseCurveDrawing.cpp
+    Source/UI/ResponseCurveInteraction.cpp
     Source/UI/DefaultFamilyUI.h
     Source/UI/DefaultFamilyUI.cpp
     Source/UI/DriveCharacterFormatting.h
+    Source/UI/ContextMenuLayout.h
+    Source/UI/EditorLayout.h
 )
 
 target_compile_definitions(DefaultEQ PRIVATE
@@ -162,6 +144,34 @@ if (DEFAULT_EQ_BUILD_TESTS)
     target_link_libraries(DefaultEQ_DspIntegration PRIVATE DefaultEQ juce::juce_audio_utils juce::juce_dsp)
     target_compile_definitions(DefaultEQ_DspIntegration PRIVATE
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+
+    # Manual processor benchmark. It is intentionally not a CTest gate: CPU
+    # timings vary by machine, power state and host load. The executable keeps
+    # source-buffer preparation outside the reported processor cost and prints
+    # a matrix suitable for before/after performance work.
+    add_executable(DefaultEQ_PerformanceBenchmark Tests/PerformanceBenchmark.cpp)
+    target_link_libraries(DefaultEQ_PerformanceBenchmark PRIVATE
+        DefaultEQ juce::juce_audio_utils juce::juce_dsp)
+    target_compile_definitions(DefaultEQ_PerformanceBenchmark PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+
+    # Phase-1 safety net uses one runner so JUCE's module sources are compiled
+    # once rather than once per regression executable. CTest still exposes the
+    # three gates independently for focused failures and reruns.
+    add_executable(DefaultEQ_SafetyNet
+        Tests/SafetyNetMain.cpp
+        Tests/HostParameterRegressionTest.cpp
+        Tests/AutomationFuzzTest.cpp
+        Tests/MemoryRegressionTest.cpp
+        Tests/DspEquivalenceTest.cpp
+        Tests/EditorLayoutRegressionTest.cpp)
+    target_link_libraries(DefaultEQ_SafetyNet PRIVATE
+        DefaultEQ juce::juce_audio_utils juce::juce_dsp)
+    target_compile_definitions(DefaultEQ_SafetyNet PRIVATE
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    if (WIN32)
+        target_link_libraries(DefaultEQ_SafetyNet PRIVATE Psapi)
+    endif()
     if (MSVC)
         # The processor deliberately owns large fixed DSP workspaces. Plugin
         # hosts instantiate it on the heap, while this integration runner uses
@@ -172,6 +182,8 @@ if (DEFAULT_EQ_BUILD_TESTS)
         # in an unoptimised macOS build. Hosts still create the processor on the
         # heap; this affects only the integration-test executable.
         target_link_options(DefaultEQ_DspIntegration PRIVATE
+            "LINKER:-stack_size,0x4000000")
+        target_link_options(DefaultEQ_PerformanceBenchmark PRIVATE
             "LINKER:-stack_size,0x4000000")
     endif()
 
@@ -184,4 +196,11 @@ if (DEFAULT_EQ_BUILD_TESTS)
     add_test(NAME audit_regressions COMMAND DefaultEQ_AuditTests)
     add_test(NAME latency_probe COMMAND DefaultEQ_LatencyProbe)
     add_test(NAME dsp_integration COMMAND DefaultEQ_DspIntegration)
+    add_test(NAME host_parameter_regression COMMAND DefaultEQ_SafetyNet host-parameters)
+    add_test(NAME automation_fuzz COMMAND DefaultEQ_SafetyNet automation-fuzz)
+    add_test(NAME memory_regression COMMAND DefaultEQ_SafetyNet memory)
+    add_test(NAME dsp_equivalence COMMAND DefaultEQ_SafetyNet dsp-self)
+    add_test(NAME editor_layout_regression COMMAND DefaultEQ_SafetyNet editor-layout)
+    set_tests_properties(automation_fuzz PROPERTIES TIMEOUT 240)
+    set_tests_properties(memory_regression PROPERTIES TIMEOUT 120)
 endif()

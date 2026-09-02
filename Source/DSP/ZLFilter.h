@@ -223,6 +223,38 @@ struct Cascade
         return x;
     }
     float processR(float x) { for(int i=0;i<count;++i)x=stages[(size_t)i].processR(x); return x; }
+    void processStereo(float& left, float& right)
+    {
+        if(coefficientRamping)
+        {
+            bool remains=false;
+            for(int i=0;i<count;++i)
+            {
+                stages[(size_t)i].advanceCoefficientRamp();
+                remains=remains||stages[(size_t)i].coefficientRampRemaining>0;
+            }
+            coefficientRamping=remains;
+        }
+        if (count == 1)
+        {
+            stages[0].processStereo(left, right);
+            return;
+        }
+        for(int i=0;i<count;++i)
+            stages[(size_t)i].processStereo(left, right);
+    }
+    bool isCoefficientRamping() const noexcept { return coefficientRamping; }
+    void processStereoBlock(float* left, float* right, int numSamples)
+    {
+        if (coefficientRamping)
+        {
+            for (int sample = 0; sample < numSamples; ++sample)
+                processStereo(left[sample], right[sample]);
+            return;
+        }
+        for (int stage = 0; stage < count; ++stage)
+            stages[(size_t)stage].processStereoBlock(left, right, numSamples);
+    }
     std::complex<double> response(double frequency,double sr) const
     {
         std::complex<double> h{1,0}; const auto z=std::polar(1.0,-2*kPi*frequency/sr);

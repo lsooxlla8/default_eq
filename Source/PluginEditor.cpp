@@ -1,13 +1,11 @@
 #include "PluginEditor.h"
 #include "UI/DriveCharacterFormatting.h"
+#include "UI/EditorLayout.h"
 #include "DSP/FilterTypes.h"
 #include <numeric>
 
 namespace
 {
-constexpr int minimumEditorWidth = 800;
-constexpr int minimumEditorHeight = 464;
-
 juce::Font mono(float size, bool bold = false)
 {
     return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), size,
@@ -42,235 +40,8 @@ juce::String cleanDb(double value, int digits = 2)
     return juce::String(value, digits) + " dB";
 }
 
-float layoutScaleForWidth(int width) noexcept
-{
-    return juce::jlimit(1.0f, 1.25f, (float)width / 860.0f);
 }
 
-int workspaceHeightForWidth(int width) noexcept
-{
-    return juce::roundToInt(104.0f * layoutScaleForWidth(width));
-}
-
-int wordmarkWidthForWidth(int width) noexcept
-{
-    return juce::roundToInt(178.0f * layoutScaleForWidth(width));
-}
-}
-
-void VerticalDragSlider::mouseDown(const juce::MouseEvent& event)
-{
-    dragStartValue = getValue();
-    ResettableSlider::mouseDown(event);
-}
-
-void VerticalDragSlider::mouseDrag(const juce::MouseEvent& event)
-{
-    if (!isEnabled()) return;
-    const double range = getMaximum() - getMinimum();
-    const double next = dragStartValue
-        - (double)event.getDistanceFromDragStartY() * range
-            / (double)juce::jmax(1, getMouseDragSensitivity());
-    setValue(juce::jlimit(getMinimum(), getMaximum(), next), juce::sendNotificationSync);
-}
-
-void TwoAxisDragSlider::mouseDown(const juce::MouseEvent& event)
-{
-    dragStartValue = getValue();
-    ResettableSlider::mouseDown(event);
-}
-
-void TwoAxisDragSlider::mouseDrag(const juce::MouseEvent& event)
-{
-    if (!isEnabled()) return;
-    const int dx = event.getDistanceFromDragStartX();
-    const int dy = event.getDistanceFromDragStartY();
-    // Use the dominant axis so horizontal and vertical drags have identical
-    // sensitivity without a diagonal gesture accidentally running twice as fast.
-    const int directedDistance = std::abs(dx) >= std::abs(dy) ? dx : -dy;
-    const double range = getMaximum() - getMinimum();
-    const double next = dragStartValue + (double)directedDistance * range
-        / (double)juce::jmax(1, getMouseDragSensitivity());
-    setValue(juce::jlimit(getMinimum(), getMaximum(), next), juce::sendNotificationSync);
-}
-
-void DriveCharacterSlider::setSaturationMode(int newMode)
-{
-    saturationMode = juce::jlimit(0, kSaturationModeCount - 1, newMode);
-    updateText();
-}
-
-juce::String DriveCharacterSlider::getTextFromValue(double raw)
-{
-    return deq::ui::formatDriveCharacter(saturationMode, raw);
-}
-
-ThresholdMeterSlider::ThresholdMeterSlider()
-{
-    setName("THRES");
-    setSliderStyle(juce::Slider::LinearVertical);
-    setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    setSliderSnapsToMousePosition(false);
-    setMouseDragSensitivity(240);
-    valueLabel.setJustificationType(juce::Justification::centred);
-    valueLabel.setEditable(false, true, false);
-    valueLabel.setInterceptsMouseClicks(false, false);
-    valueLabel.getProperties().set("rotaryValueLabel", true);
-    addAndMakeVisible(valueLabel);
-    onValueChange = [this] { updateText(); };
-    valueLabel.onTextChange = [this]
-    {
-        if (updating) return;
-        const double parsed = parseUnitValue(valueLabel.getText());
-        if (std::isfinite(parsed))
-            setValue(getNormalisableRange().snapToLegalValue(
-                juce::jlimit(getMinimum(), getMaximum(), parsed)), juce::sendNotificationSync);
-        updateText();
-    };
-    updateText();
-}
-
-void ThresholdMeterSlider::setInputLevelsDb(float leftDb, float rightDb)
-{
-    displayedLevelDbL = std::max(std::clamp(leftDb, -60.0f, 0.0f), displayedLevelDbL - 1.5f);
-    displayedLevelDbR = std::max(std::clamp(rightDb, -60.0f, 0.0f), displayedLevelDbR - 1.5f);
-    repaint();
-}
-
-void ThresholdMeterSlider::paint(juce::Graphics& g)
-{
-    const auto fg = findColour(default_family::LookAndFeel::foregroundColourId, true)
-        .withMultipliedAlpha(isEnabled() ? 1.0f : default_family::metrics::disabledOpacity);
-    const auto bg = findColour(default_family::LookAndFeel::backgroundColourId, true);
-    auto bounds = getLocalBounds();
-    auto valueArea = bounds.removeFromBottom(18);
-    auto meter = bounds.reduced(3, 1).toFloat();
-
-    g.setColour(fg); g.fillRect(meter);
-    auto inner = meter.reduced(2.0f);
-    g.setColour(bg); g.fillRect(inner);
-    g.setColour(fg.withAlpha(0.55f));
-    const float laneGap = 2.0f;
-    const float laneWidth = (inner.getWidth() - laneGap) * 0.5f;
-    const auto drawLane = [&](float levelDb, float x)
-    {
-        const float level = juce::jmap(levelDb, -60.0f, 0.0f, 0.0f, 1.0f);
-        g.fillRect(juce::Rectangle<float>(x, inner.getBottom() - inner.getHeight() * level,
-                                         laneWidth, inner.getHeight() * level));
-    };
-    drawLane(displayedLevelDbL, inner.getX());
-    drawLane(displayedLevelDbR, inner.getX() + laneWidth + laneGap);
-
-    // Paint the attached parameter directly. Keeping a second display value
-    // made the line stale while SliderAttachment was rebinding to a new band.
-    const float threshold = (float)valueToProportionOfLength(getValue());
-    const float thresholdY = inner.getBottom() - inner.getHeight() * threshold;
-    g.setColour(fg);
-    g.fillRect(meter.getX(), thresholdY - 1.0f, meter.getWidth(), 2.0f);
-    juce::ignoreUnused(valueArea);
-}
-
-void ThresholdMeterSlider::updateText()
-{
-    juce::ScopedValueSetter<bool> guard(updating, true);
-    valueLabel.setText(juce::String(getValue(), 1), juce::dontSendNotification);
-}
-
-void ThresholdMeterSlider::resized()
-{
-    valueLabel.setBounds(getLocalBounds().removeFromBottom(18));
-}
-
-void ThresholdMeterSlider::mouseDoubleClick(const juce::MouseEvent&)
-{
-    valueLabel.showEditor();
-    if (auto* editor = valueLabel.getCurrentTextEditor()) editor->selectAll();
-}
-
-void ThresholdMeterSlider::lookAndFeelChanged()
-{
-    juce::Slider::lookAndFeelChanged();
-    const auto fg = findColour(default_family::LookAndFeel::foregroundColourId, true);
-    valueLabel.setColour(juce::Label::textColourId, fg);
-    valueLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-    valueLabel.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
-    updateText();
-}
-
-NumericValueControl::NumericValueControl(juce::String labelText)
-{
-    setName(std::move(labelText));
-    setSliderStyle(juce::Slider::LinearVertical);
-    setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-    setSliderSnapsToMousePosition(false);
-    setMouseDragSensitivity(540);
-    valueLabel.setJustificationType(juce::Justification::centred);
-    valueLabel.setEditable(false, true, false);
-    valueLabel.setMinimumHorizontalScale(1.0f);
-    valueLabel.getProperties().set("numericValueControl", true);
-    valueLabel.setInterceptsMouseClicks(false, false);
-    addAndMakeVisible(valueLabel);
-    onValueChange = [this] { updateText(); };
-}
-
-void NumericValueControl::setFormatter(std::function<juce::String(double)> formatter,
-                                       std::function<double(const juce::String&)> parser)
-{
-    formatValue = std::move(formatter);
-    parseValue = std::move(parser);
-    valueLabel.onTextChange = [this]
-    {
-        if (updating || !parseValue) return;
-        const double parsed = parseValue(valueLabel.getText());
-        if (std::isfinite(parsed))
-            setValue(getNormalisableRange().snapToLegalValue(
-                juce::jlimit(getMinimum(), getMaximum(), parsed)), juce::sendNotificationSync);
-        updateText();
-    };
-    updateText();
-}
-
-void NumericValueControl::updateText()
-{
-    juce::ScopedValueSetter<bool> guard(updating, true);
-    const auto value = formatValue ? formatValue(getValue()) : juce::String(getValue(), 2);
-    valueLabel.setText(showValue ? getName() + " " + value : getName(), juce::dontSendNotification);
-}
-
-void NumericValueControl::setValueVisible(bool shouldShowValue)
-{
-    if (showValue == shouldShowValue) return;
-    showValue = shouldShowValue;
-    updateText();
-}
-
-void NumericValueControl::paint(juce::Graphics& g)
-{
-    const auto fg = findColour(default_family::LookAndFeel::foregroundColourId, true)
-        .withMultipliedAlpha(isEnabled() ? 1.0f : default_family::metrics::disabledOpacity);
-    const auto bg = findColour(default_family::LookAndFeel::backgroundColourId, true);
-    const int border = juce::jmax(1, juce::roundToInt(2.0f * default_family::metrics::designWidth / 880.0f));
-    g.setColour(fg); g.fillRect(getLocalBounds());
-    g.setColour(bg); g.fillRect(getLocalBounds().reduced(border));
-}
-
-void NumericValueControl::resized() { valueLabel.setBounds(getLocalBounds().reduced(3, 2)); }
-
-void NumericValueControl::mouseDoubleClick(const juce::MouseEvent&)
-{
-    valueLabel.showEditor();
-    if (auto* editor = valueLabel.getCurrentTextEditor()) editor->selectAll();
-}
-
-void NumericValueControl::lookAndFeelChanged()
-{
-    juce::Slider::lookAndFeelChanged();
-    const auto fg = findColour(default_family::LookAndFeel::foregroundColourId, true);
-    valueLabel.setColour(juce::Label::textColourId, fg);
-    valueLabel.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-    valueLabel.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
-    updateText();
-}
 
 DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(DefaultEqualizerAudioProcessor& p)
     : juce::AudioProcessorEditor(&p), proc(p), responseCurve(p)
@@ -288,9 +59,14 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
 
     setResizable(true, true);
     addMouseListener(this, true);
-    const int initialWidth = minimumEditorWidth;
-    setResizeLimits(minimumEditorWidth, minimumEditorHeight, 1200, 900);
-    setSize(initialWidth, 464);
+    setResizeLimits(deq::ui::editor_layout::minimumWidth,
+                    deq::ui::editor_layout::minimumHeight,
+                    deq::ui::editor_layout::maximumWidth,
+                    deq::ui::editor_layout::maximumHeight);
+    const auto initialSize = deq::ui::editor_layout::constrainedSize(
+        uiPreferences->getIntValue("windowWidth", deq::ui::editor_layout::defaultWidth),
+        uiPreferences->getIntValue("windowHeight", deq::ui::editor_layout::defaultHeight));
+    setSize(initialSize.x, initialSize.y);
 
     addAndMakeVisible(responseCurve);
 
@@ -508,6 +284,8 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
                 q->endChangeGesture();
             }
         }
+        qField.setDoubleClickReturnValue(true,
+            ResponseCurveComponent::qResetValueForType(type));
         slopeField.refreshText();
         if (ResponseCurveComponent::typeDefaultsToMidSide(type))
             if (auto* placementMode = proc.apvts.getParameter(bandId(selectedBand + 1, "placement_mode")))
@@ -618,389 +396,14 @@ DefaultEqualizerAudioProcessorEditor::~DefaultEqualizerAudioProcessorEditor()
     proc.setAnalyzerEnabled(false);
     if (uiPreferences)
     {
-        uiPreferences->removeValue("windowWidth");
-        uiPreferences->removeValue("windowHeight");
+        const auto savedSize = deq::ui::editor_layout::constrainedSize(getWidth(), getHeight());
+        uiPreferences->setValue("windowWidth", savedSize.x);
+        uiPreferences->setValue("windowHeight", savedSize.y);
         uiPreferences->saveIfNeeded();
     }
     setLookAndFeel(nullptr);
 }
 
-void DefaultEqualizerAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
-{
-    const auto belongsTo = [&event](const juce::Component& parent)
-    { return event.originalComponent == &parent || parent.isParentOf(event.originalComponent); };
-    if (belongsTo(typeBox)) typeMouseInteraction = true;
-    if (belongsTo(placementModeBox)) placementModeMouseInteraction = true;
-    if (belongsTo(saturationBox)) saturationMouseInteraction = true;
-
-    if (event.mods.isPopupMenu())
-    {
-        auto* component = event.originalComponent;
-        auto* slider = dynamic_cast<juce::Slider*>(component);
-        if (slider == nullptr && component != nullptr)
-            slider = component->findParentComponentOfClass<juce::Slider>();
-        if (slider != nullptr && slider->isEnabled())
-        {
-            const auto suffix = groupSuffixForSlider(slider);
-            if (suffix.isNotEmpty() && responseCurve.getSelectionCount() > 1)
-            {
-                if (auto* primary = proc.apvts.getParameter(bandId(selectedBand + 1, suffix)))
-                    applyAbsoluteToSelectedBands(suffix,
-                        primary->convertFrom0to1(primary->getDefaultValue()));
-            }
-            slider->setValue(slider->getDoubleClickReturnValue(), juce::sendNotificationSync);
-            return;
-        }
-    }
-    if (!responseCurve.isNumericEditorComponent(event.originalComponent))
-        responseCurve.dismissNumericEditor();
-}
-
-juce::String DefaultEqualizerAudioProcessorEditor::groupSuffixForSlider(
-    const juce::Slider* slider) const
-{
-    if (slider == &placementSlider) return "placement";
-    if (slider == &freqField) return "freq";
-    if (slider == &gainField) return "gain";
-    if (slider == &qField) return "q";
-    if (slider == &slopeField) return "slope";
-    if (slider == &dynLookahead) return "dyn_lookahead";
-    if (slider == &dynThreshold) return "dyn_thresh";
-    if (slider == &dynRange) return "dyn_range";
-    if (slider == &dynRatio) return "dyn_ratio";
-    if (slider == &dynSpeed) return "dyn_speed";
-    if (slider == &driveSlider) return "drive";
-    if (slider == &driveCharacterSlider) return "drive_character";
-    return {};
-}
-
-void DefaultEqualizerAudioProcessorEditor::applyAbsoluteToSelectedBands(
-    const juce::String& suffix, float value, bool includePrimary)
-{
-    if (applyingGroupEdit) return;
-    juce::ScopedValueSetter<bool> guard(applyingGroupEdit, true);
-    const auto& selected = responseCurve.getSelection();
-    for (int band = 0; band < kNumBands; ++band)
-        if (selected[(size_t)band] && (includePrimary || band != selectedBand))
-            if (auto* parameter = proc.apvts.getParameter(bandId(band + 1, suffix)))
-            {
-                const auto legal = parameter->getNormalisableRange().snapToLegalValue(value);
-                parameter->beginChangeGesture();
-                parameter->setValueNotifyingHost(parameter->convertTo0to1(legal));
-                parameter->endChangeGesture();
-            }
-}
-
-void DefaultEqualizerAudioProcessorEditor::beginGroupSliderEdit(juce::Slider& slider)
-{
-    if (selectedBand < 0 || responseCurve.getSelectionCount() < 2) return;
-    const auto suffix = groupSuffixForSlider(&slider);
-    if (suffix.isEmpty()) return;
-    activeGroupSlider = &slider;
-    activeGroupSuffix = suffix;
-    groupPrimaryStart = (float)slider.getValue();
-    groupParameters.fill(nullptr);
-    const auto& selected = responseCurve.getSelection();
-    proc.undoManager.beginNewTransaction("Adjust selected band parameters");
-    for (int band = 0; band < kNumBands; ++band)
-        if (selected[(size_t)band])
-        {
-            auto* parameter = proc.apvts.getParameter(bandId(band + 1, suffix));
-            groupParameters[(size_t)band] = parameter;
-            groupParameterStarts[(size_t)band] = parameter != nullptr
-                ? proc.apvts.getRawParameterValue(bandId(band + 1, suffix))->load()
-                : 0.0f;
-            if (parameter != nullptr && band != selectedBand)
-                parameter->beginChangeGesture();
-        }
-}
-
-void DefaultEqualizerAudioProcessorEditor::sliderDragStarted(juce::Slider* slider)
-{
-    if (slider != nullptr) beginGroupSliderEdit(*slider);
-}
-
-void DefaultEqualizerAudioProcessorEditor::sliderValueChanged(juce::Slider* slider)
-{
-    if (slider == nullptr || slider != activeGroupSlider || applyingGroupEdit) return;
-    juce::ScopedValueSetter<bool> guard(applyingGroupEdit, true);
-    const float current = (float)slider->getValue();
-    const bool multiplicative = activeGroupSuffix == "freq" || activeGroupSuffix == "q";
-    const float ratio = std::abs(groupPrimaryStart) > 1.0e-9f
-        ? current / groupPrimaryStart : 1.0f;
-    const float delta = current - groupPrimaryStart;
-    for (int band = 0; band < kNumBands; ++band)
-        if (band != selectedBand)
-            if (auto* parameter = groupParameters[(size_t)band])
-            {
-                const float raw = multiplicative
-                    ? groupParameterStarts[(size_t)band] * ratio
-                    : groupParameterStarts[(size_t)band] + delta;
-                const auto legal = parameter->getNormalisableRange().snapToLegalValue(raw);
-                parameter->setValueNotifyingHost(parameter->convertTo0to1(legal));
-            }
-}
-
-void DefaultEqualizerAudioProcessorEditor::endGroupSliderEdit(juce::Slider& slider)
-{
-    if (&slider != activeGroupSlider) return;
-    if (activeGroupSuffix == "slope")
-    {
-        static constexpr float values[] { 6, 12, 24, 36, 48, 72, 96 };
-        for (int band = 0; band < kNumBands; ++band)
-            if (auto* parameter = groupParameters[(size_t)band])
-            {
-                const int type = (int)proc.apvts.getRawParameterValue(
-                    bandId(band + 1, "type"))->load();
-                if (ResponseCurveComponent::isClassicCutType(type)) continue;
-                const int first = (type == 2 || type == 4 || type == 5) ? 1 : 0;
-                const float current = proc.apvts.getRawParameterValue(
-                    bandId(band + 1, "slope"))->load();
-                int best = first;
-                for (int value = first + 1; value < 7; ++value)
-                    if (std::abs(current - values[value]) < std::abs(current - values[best]))
-                        best = value;
-                parameter->setValueNotifyingHost(parameter->convertTo0to1(values[best]));
-            }
-    }
-    for (int band = 0; band < kNumBands; ++band)
-        if (band != selectedBand)
-            if (auto* parameter = groupParameters[(size_t)band])
-                parameter->endChangeGesture();
-    groupParameters.fill(nullptr);
-    activeGroupSlider = nullptr;
-    activeGroupSuffix.clear();
-}
-
-void DefaultEqualizerAudioProcessorEditor::sliderDragEnded(juce::Slider* slider)
-{
-    if (slider != nullptr) endGroupSliderEdit(*slider);
-}
-
-int DefaultEqualizerAudioProcessorEditor::getControlParameterIndex(juce::Component& control)
-{
-    const auto parameterIndex = [this](const juce::String& id)
-    {
-        if (auto* parameter = proc.apvts.getParameter(id))
-            return parameter->getParameterIndex();
-        return -1;
-    };
-
-    for (auto* component = &control; component != nullptr && component != this;
-         component = component->getParentComponent())
-    {
-        if (component == &powerBtn)          return parameterIndex("plugin_enabled");
-        if (component == &adaptiveQBtn)      return parameterIndex("adaptive_q");
-        if (component == &autoGainBtn)       return parameterIndex("auto_gain_mode");
-        if (component == &phaseModeBox)
-            return parameterIndex("linear_phase");
-        if (component == &oversamplingSlider) return parameterIndex("oversampling");
-        if (component == &amountSlider)       return parameterIndex("scale");
-        if (component == &shiftSlider)        return parameterIndex("shift");
-        if (component == &outputSlider)       return parameterIndex("output_gain");
-
-        if (selectedBand < 0 || selectedBand >= kNumBands)
-            continue;
-
-        const int band = selectedBand + 1;
-        const auto bandParameter = [&](const char* suffix)
-        { return parameterIndex(bandId(band, suffix)); };
-
-        if (component == &responseCurve || component == &freqField)
-            return bandParameter("freq");
-        if (component == &gainField)          return bandParameter("gain");
-        if (component == &qField)             return bandParameter("q");
-        if (component == &slopeField)         return bandParameter("slope");
-        if (component == &bandOn)             return bandParameter("on");
-        if (component == &typeBox)            return bandParameter("type");
-        if (component == &placementModeBox)   return bandParameter("placement_mode");
-        if (component == &placementSlider)    return bandParameter("placement");
-        if (component == &dynModeBtn)         return bandParameter("dyn_mode");
-        if (component == &sidechainBtn)       return bandParameter("sc_source");
-        if (component == &dynThreshold)       return bandParameter("dyn_thresh");
-        if (component == &dynRange)           return bandParameter("dyn_range");
-        if (component == &dynRatio)           return bandParameter("dyn_ratio");
-        if (component == &dynSpeed)           return bandParameter("dyn_speed");
-        if (component == &dynLookahead)       return bandParameter("dyn_lookahead");
-        if (component == &driveSlider)        return bandParameter("drive");
-        if (component == &driveCharacterSlider) return bandParameter("drive_character");
-        if (component == &saturationBox)      return bandParameter("sat_mode");
-    }
-
-    return -1;
-}
-
-void DefaultEqualizerAudioProcessorEditor::visibilityChanged()
-{
-    updateAnalyzerLifecycle();
-}
-
-void DefaultEqualizerAudioProcessorEditor::updateAnalyzerLifecycle()
-{
-    proc.setAnalyzerEnabled(isShowing());
-}
-
-void DefaultEqualizerAudioProcessorEditor::initParameter(juce::Slider& slider, const juce::String& name)
-{
-    slider.setName(name);
-    slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-    slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 48, 16);
-    slider.setDoubleClickReturnValue(false, 0.0);
-    addAndMakeVisible(slider);
-}
-
-void DefaultEqualizerAudioProcessorEditor::applySliderPalette()
-{
-    const auto fg = familyLook.foreground();
-    const auto bg = familyLook.background();
-    const std::array<juce::Slider*, 12> sliders {
-        &placementSlider, &dynThreshold, &dynRange, &dynRatio, &dynSpeed,
-        &dynLookahead, &driveSlider, &driveCharacterSlider,
-        &amountSlider, &shiftSlider, &outputSlider,
-        &oversamplingSlider
-    };
-    for (auto* slider : sliders)
-    {
-        slider->setColour(juce::Slider::textBoxTextColourId, fg);
-        slider->setColour(juce::Slider::textBoxBackgroundColourId, bg);
-        slider->setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        slider->updateText();
-    }
-}
-
-void DefaultEqualizerAudioProcessorEditor::rebindBandControls()
-{
-    bandOnAtt.reset(); typeAtt.reset(); placementModeAtt.reset(); placementAtt.reset();
-    freqAtt.reset(); gainAtt.reset(); qAtt.reset(); slopeAtt.reset();
-    dynLookaheadAtt.reset(); dynThresholdAtt.reset(); dynRangeAtt.reset();
-    dynRatioAtt.reset(); dynSpeedAtt.reset(); driveAtt.reset();
-    driveCharacterAtt.reset(); saturationAtt.reset();
-    if (selectedBand < 0 || selectedBand >= kNumBands)
-    {
-        displayedFilterType = -1;
-        displayedDriveMode = -1;
-        driveFormatPending = false;
-        return;
-    }
-    const int idx = selectedBand + 1;
-    displayedFilterType = std::clamp((int)proc.apvts.getRawParameterValue(
-        bandId(idx, "type"))->load(), 0, deq::filter_types::count - 1);
-    bandOnAtt = std::make_unique<ButtonAttachment>(proc.apvts, bandId(idx, "on"), bandOn);
-    typeAtt = std::make_unique<ComboAttachment>(proc.apvts, bandId(idx, "type"), typeBox);
-    placementModeAtt = std::make_unique<ComboAttachment>(proc.apvts,
-        bandId(idx, "placement_mode"), placementModeBox);
-    placementAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "placement"), placementSlider);
-    freqAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "freq"), freqField);
-    gainAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "gain"), gainField);
-    qAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "q"), qField);
-    slopeAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "slope"), slopeField);
-    dynLookaheadAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "dyn_lookahead"), dynLookahead);
-    dynThresholdAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "dyn_thresh"), dynThreshold);
-    dynRangeAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "dyn_range"), dynRange);
-    dynRatioAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "dyn_ratio"), dynRatio);
-    dynSpeedAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "dyn_speed"), dynSpeed);
-    driveAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive"), driveSlider);
-    driveCharacterAtt = std::make_unique<SliderAttachment>(proc.apvts, bandId(idx, "drive_character"), driveCharacterSlider);
-    displayedDriveMode = std::clamp((int)proc.apvts.getRawParameterValue(bandId(idx, "sat_mode"))->load(),
-                                      0, kSaturationModeCount - 1);
-    saturationAtt = std::make_unique<ComboAttachment>(proc.apvts, bandId(idx, "sat_mode"), saturationBox);
-    updateDriveControls(false);
-    driveFormatPending = true;
-}
-
-void DefaultEqualizerAudioProcessorEditor::updateBandControlEnablement(bool bandSelected)
-{
-    for (auto* component : { static_cast<juce::Component*>(&bandOn),
-                             static_cast<juce::Component*>(&bandSolo),
-                             static_cast<juce::Component*>(&placementModeBox),
-                             static_cast<juce::Component*>(&placementSlider),
-                             static_cast<juce::Component*>(&typeBox),
-                             static_cast<juce::Component*>(&saturationBox),
-                             static_cast<juce::Component*>(&driveSlider),
-                             static_cast<juce::Component*>(&driveCharacterSlider),
-                             static_cast<juce::Component*>(&dynModeBtn),
-                             static_cast<juce::Component*>(&sidechainBtn),
-                             static_cast<juce::Component*>(&dynThreshold),
-                             static_cast<juce::Component*>(&dynRange),
-                             static_cast<juce::Component*>(&dynRatio),
-                             static_cast<juce::Component*>(&dynSpeed),
-                             static_cast<juce::Component*>(&dynLookahead),
-                             static_cast<juce::Component*>(&freqField),
-                             static_cast<juce::Component*>(&gainField),
-                             static_cast<juce::Component*>(&qField),
-                             static_cast<juce::Component*>(&slopeField) })
-        component->setEnabled(bandSelected);
-
-    if (!bandSelected)
-    {
-        if (proc.soloBand.load(std::memory_order_acquire) == selectedBand)
-            proc.soloBand.store(-1, std::memory_order_release);
-        bandSolo.setToggleState(false, juce::dontSendNotification);
-    }
-}
-
-void DefaultEqualizerAudioProcessorEditor::updateDriveControls(bool resetModeDefaults)
-{
-    static constexpr const char* characterNames[] { "CURVE", "TOPOLOGY", "BIAS", "GATE",
-                                                     "HYSTERESIS", "ODD / EVEN", "TONE", "FREQUENCY" };
-    const int mode = juce::jlimit(0, kSaturationModeCount - 1, displayedDriveMode);
-    const bool bipolarCharacter = saturationModeUsesBipolarCharacter(mode);
-    driveCharacterSlider.setName(characterNames[mode]);
-    driveCharacterSlider.setSaturationMode(mode);
-    driveCharacterSlider.setRange(bipolarCharacter ? -1.0 : 0.0, 1.0, 0.001);
-    driveSlider.setPersistentTextFormatter([](double value) { return cleanDb(value, 1); });
-    driveSlider.updateText();
-    driveCharacterSlider.updateText();
-
-    const bool tape = mode == static_cast<int>(SaturationType::Tape);
-    const bool sine = mode == static_cast<int>(SaturationType::SineErosion);
-
-    if (resetModeDefaults)
-    {
-        proc.undoManager.beginNewTransaction("Change drive algorithm");
-        const float characterDefault = (tape
-            || mode == static_cast<int>(SaturationType::PhaseDistortion) || sine) ? 0.5f : 0.0f;
-        const float secondaryDefault = tape ? 0.5f : 0.0f;
-        applyAbsoluteToSelectedBands("drive_character", characterDefault);
-        applyAbsoluteToSelectedBands("drive_secondary", secondaryDefault);
-    }
-    resized();
-    repaint();
-}
-
-void DefaultEqualizerAudioProcessorEditor::selectBand(int band, bool updateGraphSelection)
-{
-    selectedBand = band >= 0 && band < kNumBands ? band : -1;
-    proc.uiMeterBand.store(selectedBand, std::memory_order_release);
-    if (selectedBand < 0)
-    {
-        if (updateGraphSelection) responseCurve.setSelectedBand(-1);
-        rebindBandControls();
-        for (auto* field : { &freqField, &gainField, &qField, &slopeField })
-            field->setValueVisible(false);
-        updateBandControlEnablement(false);
-        updateHeaderText();
-        return;
-    }
-    bandSolo.setToggleState(selectedBand >= 0
-                                && proc.soloBand.load(std::memory_order_acquire) == selectedBand,
-                            juce::dontSendNotification);
-    if (updateGraphSelection) responseCurve.setSelectedBand(selectedBand);
-    rebindBandControls();
-    const bool bandPresent = proc.apvts.getRawParameterValue(
-        bandId(selectedBand + 1, "present"))->load(std::memory_order_relaxed) > 0.5f;
-    for (auto* field : { &freqField, &gainField, &qField, &slopeField })
-        field->setValueVisible(bandPresent);
-    updateBandControlEnablement(bandPresent);
-    updateHeaderText();
-    if ((int)proc.apvts.getRawParameterValue("auto_gain_mode")->load() == 2)
-        autoGainBtn.setTooltip(proc.smartAutoGainLocked.load(std::memory_order_acquire) ? "Smart Gain: locked" : "Smart Gain: analysing");
-}
-
-void DefaultEqualizerAudioProcessorEditor::updateHeaderText()
-{
-    powerBtn.setButtonText(powerBtn.getToggleState() ? "ON" : "OFF");
-}
 
 bool DefaultEqualizerAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
@@ -1011,6 +414,18 @@ bool DefaultEqualizerAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
         else                    proc.undoManager.undo();
         return true;
     }
+    const auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    const bool editingText = dynamic_cast<const juce::TextEditor*>(focused) != nullptr
+        || (focused != nullptr && focused->findParentComponentOfClass<juce::TextEditor>() != nullptr);
+    if (!editingText && (key.getKeyCode() == juce::KeyPress::deleteKey
+                         || key.getKeyCode() == juce::KeyPress::backspaceKey))
+    {
+        if (responseCurve.deleteSelectedBands())
+        {
+            selectBand(-1, false);
+            return true;
+        }
+    }
     return juce::AudioProcessorEditor::keyPressed(key);
 }
 
@@ -1019,9 +434,9 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
     // Some plug-in hosts resize editors with a direct setBounds(), which JUCE
     // explicitly documents as bypassing the normal bounds constrainer.  Clamp
     // again on the message thread so those hosts cannot leave clipped UI.
-    if (getWidth() < minimumEditorWidth || getHeight() < minimumEditorHeight)
-        setSize(juce::jmax(minimumEditorWidth, getWidth()),
-                juce::jmax(minimumEditorHeight, getHeight()));
+    const auto constrained = deq::ui::editor_layout::constrainedSize(getWidth(), getHeight());
+    if (getWidth() != constrained.x || getHeight() != constrained.y)
+        setSize(constrained.x, constrained.y);
 
     // Hosts can attach an already-visible editor to a native window without a
     // JUCE visibilityChanged() callback. Reconcile the cheap atomic analyzer
@@ -1061,10 +476,18 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
         nextBrandGlitchTimeMs = nowMs + 4000.0;
     }
     const double sampleRate = proc.getSampleRate() > 0 ? proc.getSampleRate() : 44100.0;
+    bool spectrumFrameArrived = false;
     if (proc.preSpectrumFifo.processIfReady())
+    {
         responseCurve.pushSpectrumData(proc.preSpectrumFifo.getMagnitudes(), proc.preSpectrumFifo.getNumBins(), sampleRate, true);
+        spectrumFrameArrived = true;
+    }
     if (proc.spectrumFifo.processIfReady())
+    {
         responseCurve.pushSpectrumData(proc.spectrumFifo.getMagnitudes(), proc.spectrumFifo.getNumBins(), sampleRate, false);
+        spectrumFrameArrived = true;
+    }
+    responseCurve.refreshForTimer(spectrumFrameArrived);
     const int curveSelection = responseCurve.getSelectedBand();
     if (curveSelection != selectedBand) selectBand(curveSelection, false);
     const bool bandPresent = selectedBand >= 0 && proc.apvts.getRawParameterValue(
@@ -1087,7 +510,6 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
                                            : "Smart Gain: analysing");
     else
         autoGainBtn.setTooltip("Cycle Off / Regular Auto Gain / Smart Gain");
-    autoGainBtn.repaint();
     const float shiftSemitones = proc.apvts.getRawParameterValue("shift")->load();
     if (!std::isfinite(displayedShiftSemitones)
         || std::abs(displayedShiftSemitones - shiftSemitones) > 0.0001f)
@@ -1116,9 +538,14 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
         }
         const int placementMode = std::clamp((int)proc.apvts.getRawParameterValue(
             bandId(selectedBand + 1, "placement_mode"))->load(),0,2);
-        placementSlider.getProperties().set("midSide", placementMode==1);
-        placementSlider.getProperties().set("routeMode", placementMode);
-        placementSlider.repaint();
+        const bool midSide = placementMode == 1;
+        if ((bool)placementSlider.getProperties().getWithDefault("midSide", false) != midSide
+            || (int)placementSlider.getProperties().getWithDefault("routeMode", 0) != placementMode)
+        {
+            placementSlider.getProperties().set("midSide", midSide);
+            placementSlider.getProperties().set("routeMode", placementMode);
+            placementSlider.repaint();
+        }
         const bool upward = proc.apvts.getRawParameterValue(
             bandId(selectedBand + 1, "dyn_mode"))->load(std::memory_order_relaxed) > 0.5f;
         dynModeBtn.setButtonText(upward ? "UP" : "DOWN");
@@ -1136,17 +563,18 @@ void DefaultEqualizerAudioProcessorEditor::timerCallback()
 void DefaultEqualizerAudioProcessorEditor::paint(juce::Graphics& g)
 {
     const auto fg = familyLook.foreground(), bg = familyLook.background();
-    const int headerH = juce::jlimit(56, 70, juce::roundToInt(64.0f * getWidth() / 860.0f));
-    const int workspaceH = workspaceHeightForWidth(getWidth());
+    const auto layout = deq::ui::editor_layout::metricsForSize(getWidth(), getHeight());
+    const int headerH = layout.headerHeight;
+    const int workspaceH = layout.workspaceHeight;
     g.fillAll(fg);
     g.setColour(bg); g.fillRect(0, 0, getWidth(), headerH);
-    const int seamX = wordmarkWidthForWidth(getWidth());
+    const int seamX = layout.wordmarkWidth;
     const int seam = juce::jmax(18, headerH * 3 / 8);
     g.setColour(fg); g.fillRect(seamX, 0, seam, seam); g.fillRect(seamX, headerH - seam, seam, seam);
     g.setColour(bg);
     g.fillRect(0, getHeight() - workspaceH, getWidth(), workspaceH);
 
-    const float layoutScale = layoutScaleForWidth(getWidth());
+    const float layoutScale = layout.scale;
     const float panelScale = layoutScale * 1.15f;
     g.setFont(mono(14.25f * panelScale, true));
     const std::array<juce::Slider*, 8> sliders { &dynThreshold, &dynRange, &dynSpeed,
@@ -1168,16 +596,18 @@ void DefaultEqualizerAudioProcessorEditor::paint(juce::Graphics& g)
 void DefaultEqualizerAudioProcessorEditor::resized()
 {
     const int w = getWidth(), h = getHeight();
-    if (w < minimumEditorWidth || h < minimumEditorHeight)
+    const auto constrained = deq::ui::editor_layout::constrainedSize(w, h);
+    if (w != constrained.x || h != constrained.y)
     {
-        setSize(juce::jmax(minimumEditorWidth, w), juce::jmax(minimumEditorHeight, h));
+        setSize(constrained.x, constrained.y);
         return;
     }
-    const float layoutScale = layoutScaleForWidth(w);
+    const auto layout = deq::ui::editor_layout::metricsForSize(w, h);
+    const float layoutScale = layout.scale;
     familyLook.setUiScale(layoutScale);
-    const int headerH = juce::jlimit(56, 70, juce::roundToInt(64.0f * w / 860.0f));
-    const int workspaceH = workspaceHeightForWidth(w);
-    const int wordW = wordmarkWidthForWidth(w);
+    const int headerH = layout.headerHeight;
+    const int workspaceH = layout.workspaceHeight;
+    const int wordW = layout.wordmarkWidth;
     const int seamW = juce::jmax(18, headerH * 3 / 8);
     themeBtn.setBounds(0, 0, wordW, headerH);
 
