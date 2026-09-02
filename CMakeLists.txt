@@ -177,6 +177,7 @@ if (DEFAULT_EQ_BUILD_TESTS)
         # hosts instantiate it on the heap, while this integration runner uses
         # scoped instances and therefore needs more than Windows' 1 MiB default.
         target_link_options(DefaultEQ_DspIntegration PRIVATE "/STACK:33554432")
+        target_link_options(DefaultEQ_SafetyNet PRIVATE "/STACK:33554432")
     elseif (APPLE)
         # The same scoped-instance test pattern needs an explicit stack reserve
         # in an unoptimised macOS build. Hosts still create the processor on the

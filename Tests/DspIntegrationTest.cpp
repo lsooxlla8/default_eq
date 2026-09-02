@@ -1957,10 +1957,10 @@ int main()
     const auto eightBandCpuNs = benchmarkProcessorNsPerSample(8);
     std::printf("processor CPU probe: 0 bands %.2f, 1 band %.2f, 8 bands %.2f ns/sample\n",
                 cleanCpuNs, oneBandCpuNs, eightBandCpuNs);
-    CHECK(cleanCpuNs < oneBandCpuNs * 0.5,
-          "clean-instance fast path remains materially cheaper than one active band");
-    CHECK(eightBandCpuNs < oneBandCpuNs * 6.5,
-          "eight-band processing remains within the Phase 6 scaling budget");
+    // Keep this as diagnostic evidence only. Wall-clock ratios vary enough
+    // across CI hosts and operating systems that they are not a deterministic
+    // correctness gate; Tests/PerformanceBenchmark.cpp owns repeatable manual
+    // before/after performance comparisons.
 
     std::printf(failures == 0 ? "ALL DSP INTEGRATION TESTS PASSED\n" : "%d DSP INTEGRATION TEST(S) FAILED\n", failures);
     return failures == 0 ? 0 : 1;
