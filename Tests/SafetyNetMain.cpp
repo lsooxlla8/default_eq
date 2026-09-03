@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <juce_gui_basics/juce_gui_basics.h>
 
 int runHostParameterRegression();
 int runAutomationFuzz();
@@ -9,6 +10,13 @@ int runEditorLayoutRegression();
 
 int main(int argc, char** argv)
 {
+#if JUCE_WINDOWS
+    // Windows needs the JUCE GUI subsystem initialised before its software
+    // renderer can produce meaningful offscreen editor snapshots. Linux stays
+    // headless here because its CI test step intentionally has no X server.
+    juce::ScopedJuceInitialiser_GUI guiInitialiser;
+#endif
+
     if (argc < 2)
     {
         std::printf("usage: DefaultEQ_SafetyNet <host-parameters|automation-fuzz|memory|dsp-self|dsp-write|dsp-compare|editor-layout> [baseline]\n");
