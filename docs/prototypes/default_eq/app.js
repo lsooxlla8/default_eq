@@ -9,16 +9,16 @@
   const DISPLAY_DB = 12;
 
   const FILTER_TYPES = [
-    "RES LOW CUT",
-    "RES HIGH CUT",
+    "RES LP",
+    "RES HP",
     "NOTCH",
     "TILT",
     "BAND PASS",
     "BELL",
     "LOW SHELF",
     "HIGH SHELF",
-    "LOW CUT",
-    "HIGH CUT",
+    "LOW PASS",
+    "HIGH PASS",
   ];
   const SATURATION_TYPES = [
     "SOFT CLIP",
@@ -35,8 +35,8 @@
     "TOPOLOGY",
     "BIAS",
     "GATE",
-    "HYSTERESIS",
-    "ODD / EVEN",
+    "HYST",
+    "ODD/EVEN",
     "TONE",
     "FREQUENCY",
   ];
@@ -162,10 +162,12 @@
   }
 
   function openSelectMenu(field, select) {
+    const menu = $("selectMenu");
+    const shouldClose = !menu.hidden && activePickerField === field;
     hideContextMenu();
     hideSelectMenu();
+    if (shouldClose) return;
 
-    const menu = $("selectMenu");
     [...select.options].forEach((option, index) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -384,6 +386,15 @@
     return points.join(" ");
   }
 
+  function dynamicTargetDb(bandIndex, range) {
+    const band = bands[bandIndex];
+    if (!band) return 0;
+    const direction = band.dynMode === 1 ? 1 : -1;
+    return bands.reduce((total, candidate, index) => total
+      + bandResponse(candidate, displayedFreq(band), index === bandIndex
+        ? direction * range : 0), 0);
+  }
+
   function individualPath(band, gainOffset = 0) {
     const points = [];
     for (let i = 0; i <= 180; i += 1) {
@@ -407,7 +418,7 @@
     [-12, -6, 0, 6, 12].forEach((db) => {
       const y = dbToY(db);
       layer.append(svgEl("line", { x1: 0, y1: y, x2: W, y2: y, class: `grid-line${db === 0 ? " zero" : ""}` }));
-      layer.append(svgEl("text", { x: 8, y: clamp(y - 7, 13, H - 8), class: "grid-label" }, db > 0 ? `+${db}` : String(db)));
+      layer.append(svgEl("text", { x: 8, y: clamp(y - 7, 20, H - 8), class: "grid-label" }, db > 0 ? `+${db}` : String(db)));
     });
   }
 
@@ -479,12 +490,12 @@
       });
       group.append(svgEl("circle", { cx: 0, cy: 0, r: 32, class: "node-hitbox" }));
       if (selection.has(index)) {
-        group.append(svgEl("rect", { x: -17, y: -17, width: 34, height: 34, class: "node-selection" }));
-        if (index !== primaryBand) group.append(svgEl("rect", { x: -15, y: -15, width: 30, height: 30, class: "node-selection secondary" }));
+        group.append(svgEl("rect", { x: -21, y: -21, width: 42, height: 42, class: "node-selection" }));
+        if (index !== primaryBand) group.append(svgEl("rect", { x: -19, y: -19, width: 38, height: 38, class: "node-selection secondary" }));
       }
-      group.append(svgEl("rect", { x: -10, y: -10, width: 20, height: 20, class: "node-body" }));
+      group.append(svgEl("rect", { x: -14, y: -14, width: 28, height: 28, class: "node-body" }));
       group.append(svgEl("text", { x: 0, y: 0, class: "node-number" }, String(index + 1)));
-      group.append(svgEl("text", { x: 0, y: 24, class: "node-route" }, routeLabel(band)));
+      group.append(svgEl("text", { x: 0, y: 28, class: "node-route" }, routeLabel(band)));
       layer.append(group);
 
       group.addEventListener("pointerdown", (event) => beginNodePointer(event, index));
@@ -502,8 +513,8 @@
     const band = primary();
     if (band && band.on && band.dynThresh < -0.05) {
       const { x } = nodePosition(band);
-      const direction = band.dynMode === 1 ? 1 : -1;
-      const y = dbToY(band.gain + direction * band.dynRange);
+      const targetDb = dynamicTargetDb(primaryBand, band.dynRange);
+      const y = dbToY(targetDb);
       const handle = svgEl("rect", { x: x - 6, y: y - 6, width: 12, height: 12, class: "range-handle" });
       handle.addEventListener("pointerdown", (event) => {
         event.stopPropagation();
@@ -621,7 +632,18 @@
     const point = graphPoint(event);
     if (drag.type === "range") {
       const band = bands[drag.band];
-      band.dynRange = clamp(Math.abs(yToDb(point.y) - band.gain), 0, 24);
+      const cursorDb = yToDb(point.y);
+      let bestRange = 0;
+      let bestError = Infinity;
+      for (let step = 0; step <= 240; step += 1) {
+        const candidate = step / 10;
+        const error = Math.abs(dynamicTargetDb(drag.band, candidate) - cursorDb);
+        if (error < bestError) {
+          bestError = error;
+          bestRange = candidate;
+        }
+      }
+      band.dynRange = bestRange;
       refresh(false);
       return;
     }
@@ -731,7 +753,7 @@
       menu.append(separator);
     };
 
-    addButton(`Enable/Disable Band ${index + 1}`, () => {
+    addButton(`ENABLE/DISABLE BAND ${index + 1}`, () => {
       bands[index].on = !bands[index].on;
       refresh();
     });
@@ -795,7 +817,7 @@
     const saturationRow = document.createElement("button");
     saturationRow.type = "button";
     saturationRow.className = "menu-saturation-row";
-    saturationRow.textContent = "Saturation";
+    saturationRow.textContent = "SATURATION";
     const saturationSubmenu = document.createElement("div");
     saturationSubmenu.className = "saturation-submenu";
     SATURATION_TYPES.forEach((name, mode) => {
@@ -814,7 +836,7 @@
     menu.append(saturationWrap);
     addSeparator();
 
-    addButton("Reset equalizer", () => {
+    addButton("RESET EQUALIZER", () => {
       bands.forEach((_, bandIndex) => { bands[bandIndex] = makeBand(); });
       selection.clear();
       primaryBand = -1;
@@ -822,7 +844,7 @@
     });
     if (selectedBands().length > 1) {
       addSeparator();
-      addButton(`Bypass selected (${selectedBands().length})`, () => {
+      addButton(`BYPASS SELECTED (${selectedBands().length})`, () => {
         forSelection((band) => { band.on = false; });
         refresh();
       });
@@ -927,7 +949,7 @@
     const label = document.createElement("label");
     label.className = "threshold-meter";
     const name = document.createElement("span");
-    name.textContent = "THRES";
+    name.textContent = "THRESHOLD";
     const visual = document.createElement("div");
     visual.className = "threshold-meter-visual";
     const lanes = document.createElement("div");
@@ -1038,7 +1060,7 @@
 
     const thresholdContainer = $("thresholdControl");
     thresholdContainer.replaceChildren();
-    thresholdMeter(thresholdContainer, { key: "dynThresh", min: -60, max: 0, step: 0.1, value: band.dynThresh, mixed: isMixed("dynThresh"), format: (v) => clean(v) });
+    thresholdMeter(thresholdContainer, { key: "dynThresh", min: -60, max: 0, step: 0.1, value: band.dynThresh, mixed: isMixed("dynThresh"), format: (v) => `${clean(v)} dB` });
     const dynContainer = $("dynamicControls");
     dynContainer.replaceChildren();
     miniRange(dynContainer, { key: "dynRange", label: "RANGE", min: 0, max: 24, step: 0.1, value: band.dynRange, mixed: isMixed("dynRange"), format: (v) => `${clean(v)} dB` });

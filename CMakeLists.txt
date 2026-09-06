@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(default_eq VERSION 0.4.0)
+project(default_eq VERSION 0.5.0)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -28,13 +28,17 @@ if(APPLE)
     list(APPEND DEFAULT_EQ_FORMATS AU)
 endif()
 
+# Development builds must stay inside their build tree unless copying plug-ins
+# into the user's system locations is explicitly requested.
+option(DEFAULT_EQ_COPY_PLUGIN_AFTER_BUILD "Copy built plug-ins into the user plug-in folders" OFF)
+
 juce_add_plugin(DefaultEQ
     COMPANY_NAME "icanseesounds"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    COPY_PLUGIN_AFTER_BUILD ${DEFAULT_EQ_COPY_PLUGIN_AFTER_BUILD}
     PLUGIN_MANUFACTURER_CODE Icss
     PLUGIN_CODE Dfeq
     FORMATS ${DEFAULT_EQ_FORMATS}
@@ -46,6 +50,14 @@ juce_add_plugin(DefaultEQ
     BUNDLE_ID "com.icanseesounds.default-eq"
     COMPANY_URL "https://github.com/lsooxlla8/default_eq"
     DESCRIPTION "Eight-band parametric dynamic equalizer"
+)
+
+juce_add_binary_data(DefaultEQ_FontAssets
+    NAMESPACE DefaultEQFonts
+    HEADER_NAME DefaultEQFonts.h
+    SOURCES
+        Resources/Fonts/JetBrainsMono/JetBrainsMono-Medium.ttf
+        Resources/Fonts/JetBrainsMono/JetBrainsMono-ExtraBold.ttf
 )
 
 target_sources(DefaultEQ PRIVATE
@@ -82,6 +94,7 @@ target_sources(DefaultEQ PRIVATE
     Source/UI/DefaultFamilyUI.h
     Source/UI/DefaultFamilyUI.cpp
     Source/UI/DriveCharacterFormatting.h
+    Source/UI/FilterIcon.h
     Source/UI/ContextMenuLayout.h
     Source/UI/EditorLayout.h
 )
@@ -95,6 +108,7 @@ target_compile_definitions(DefaultEQ PRIVATE
 )
 
 target_link_libraries(DefaultEQ PRIVATE
+    DefaultEQ_FontAssets
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags

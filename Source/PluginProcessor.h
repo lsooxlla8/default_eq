@@ -67,6 +67,8 @@ public:
     std::atomic<bool> smartAutoGainLocked { false };
     std::atomic<float> smartAutoGainProgress { 0.0f };
     std::atomic<std::uint64_t> transportStartGeneration { 0 };
+    std::atomic<float> uiOutputCrestDb { 0.0f };
+    std::atomic<float> uiOutputCorrelation { 0.0f };
     // Restores every parameter owned by one band. New graph nodes always call
     // this before assigning frequency/gain, so a recycled slot cannot inherit
     // deleted dynamic, routing or drive settings.
@@ -105,6 +107,8 @@ public:
     }
 
 private:
+    friend int runEditorLayoutRegression();
+
     static juce::AudioProcessorValueTreeState::ParameterLayout createParams();
 
     struct BandParameterPointers
@@ -168,6 +172,8 @@ private:
     void cacheParameterPointers();
     std::atomic<bool> analyzerEnabled { false };
     bool transportWasPlaying = false; // audio-thread owned
+    float uiOutputCrestSmoothed = 0.0f;
+    float uiOutputCorrelationSmoothed = 0.0f;
     bool cachedAnyEnabledBand = false;
 
     std::array<EQBand, kNumBands> bands;

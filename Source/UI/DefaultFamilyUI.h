@@ -6,22 +6,37 @@ namespace default_family
 {
 namespace metrics
 {
-constexpr int designWidth = 860;
-constexpr int headerHeight = 64;
-constexpr int wordmarkWidth = 220;
-constexpr int structuralGap = 10;
-constexpr int controlGap = 4;
-constexpr int buttonHeight = 28;
-constexpr int controlBorder = 2;
-constexpr float headerFontHeight = 24.0f;
-constexpr float disabledOpacity = 0.35f;
+constexpr int designWidth = 752;
+constexpr int designHeight = 454;
+constexpr float frame = 4.0f;
+constexpr float thinLine = 1.0f;
+constexpr float minimumHitTarget = 24.0f;
+constexpr float headerFontHeight = 20.0f;
+constexpr float ordinaryFontHeight = 9.0f;
+constexpr float disabledOpacity = 0.32f;
 }
 
 juce::Font mono(float height, bool bold = false);
 
+enum class PrototypeTextAlign { left, centre, right };
+
+float prototypeTextWidth(const juce::String& text, float fontSize, bool extraBold,
+                         float letterSpacingEm, float scale);
+void drawPrototypeText(juce::Graphics&, const juce::String&, juce::Rectangle<float> lineBox,
+                       float fontSize, bool extraBold, float letterSpacingEm,
+                       juce::Colour, PrototypeTextAlign, float scale);
+void drawPrototypeBaselineText(juce::Graphics&, const juce::String&,
+                               juce::Point<float> baseline, float fontSize,
+                               bool extraBold, float letterSpacingEm, juce::Colour,
+                               PrototypeTextAlign, float scaleX, float scaleY);
+
 class ThemePreferences final
 {
 public:
+    enum Mode { automatic = 0, white = 1, black = 2 };
+    static int loadMode();
+    static void saveMode(int mode);
+    static bool isDarkForHour(int mode, int localHour) noexcept;
     static bool loadLight();
     static void saveLight(bool light);
 };
@@ -39,12 +54,14 @@ public:
 
     LookAndFeel();
     void setDark(bool shouldBeDark);
+    void setThemeColours(juce::Colour lightBackground, juce::Colour lightForeground,
+                         juce::Colour darkBackground, juce::Colour darkForeground);
     void setUiScale(float newScale) noexcept;
     bool isDark() const noexcept { return dark; }
     float getUiScale() const noexcept { return uiScale; }
 
-    juce::Colour paper() const noexcept { return juce::Colour(0xfff6f6f6); }
-    juce::Colour ink() const noexcept { return juce::Colour(0xff050505); }
+    juce::Colour paper() const noexcept { return lightBackgroundColour; }
+    juce::Colour ink() const noexcept { return lightForegroundColour; }
     juce::Colour foreground() const noexcept { return findColour(foregroundColourId); }
     juce::Colour background() const noexcept { return findColour(backgroundColourId); }
 
@@ -52,6 +69,7 @@ public:
     juce::Font getComboBoxFont(juce::ComboBox&) override;
     juce::Font getLabelFont(juce::Label&) override;
     juce::Font getPopupMenuFont() override;
+    int getPopupMenuBorderSize() override;
     void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
     void getIdealPopupMenuItemSize(const juce::String&, bool, int, int&, int&) override;
     void drawPopupMenuBackground(juce::Graphics&, int, int) override;
@@ -70,6 +88,10 @@ private:
     void applyPalette();
     bool dark = false;
     float uiScale = 1.0f;
+    juce::Colour lightBackgroundColour { 0xfff6f6f6 };
+    juce::Colour lightForegroundColour { 0xff050505 };
+    juce::Colour darkBackgroundColour { 0xff050505 };
+    juce::Colour darkForegroundColour { 0xfff6f6f6 };
 };
 
 class WordmarkButton final : public juce::TextButton

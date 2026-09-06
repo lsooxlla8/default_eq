@@ -82,6 +82,24 @@ spectral delay and upstream parameter transforms. JUCE FFT replaces KFR, and
 the code is integrated as one shared stereo splitter feeding per-band T/S
 routes; no ZL branding or assets are included.
 
+## JetBrains Mono
+
+The interface uses an embedded copy of JetBrains Mono so that glyph shapes and font
+metrics do not depend on fonts installed by the host operating system:
+
+- repository: https://github.com/JetBrains/JetBrainsMono
+- release: `v2.304`
+- revision: `cd5227bd1f61dff3bbd6c814ceaf7ffd95e947d9`
+- files: `Resources/Fonts/JetBrainsMono/JetBrainsMono-Medium.woff2`,
+  `Resources/Fonts/JetBrainsMono/JetBrainsMono-ExtraBold.woff2`, and their
+  matching TTF files
+- copyright: Copyright 2020 The JetBrains Mono Project Authors
+- license: SIL Open Font License 1.1
+
+The WOFF2 files are used by the HTML interface prototypes. The matching static
+TTFs are retained for embedding into the JUCE interface. The complete license is
+included in `LICENSES/OFL-JetBrainsMono.txt`.
+
 ## JUCE
 
 - repository: https://github.com/juce-framework/JUCE

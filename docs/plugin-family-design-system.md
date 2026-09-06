@@ -4,7 +4,7 @@ Document status: normative
 
 Scope: the complete default_ audio plug-in family
 
-Last updated: 1 September 2026
+Last updated: 3 September 2026
 
 ## 1. Purpose
 
@@ -47,7 +47,7 @@ Every default_ product uses:
 - a wordmark in the form default_<function>;
 - the paper / ink palette;
 - exact light/dark role inversion;
-- monospace typography;
+- embedded JetBrains Mono typography;
 - zero corner radius;
 - rectangular zones and square handles;
 - full inversion for active binary states;
@@ -88,6 +88,27 @@ Each product defines:
 
 No family rule authorizes invented parameters, renamed concepts, removed states, or
 decorative functions that do not exist in the product.
+
+### 3.4. Interface-only migration contract
+
+When a product is assigned an interface-only redesign, the visual system may change
+composition, geometry, typography, styling, and the placement of existing controls.
+It must preserve the production product beneath that interface:
+
+- audio DSP, signal flow, coefficients, oversampling, latency, and CPU behaviour;
+- parameter IDs, ordering, ranges, defaults, normalization, text conversion, and
+  automation;
+- preset and project state, migration, Undo/Redo, and host gesture boundaries;
+- analyzer and RTA acquisition, FFT, smoothing, decay, calibration, cadence, and
+  response calculations;
+- every keyboard shortcut, modifier, mouse action, drag axis, wheel action,
+  double-click action, context-menu action, and multi-selection rule;
+- accessibility semantics and focus behaviour.
+
+An HTML prototype is the authority for approved visual composition and styling. It
+is not permission to replace production processing or interaction code. If prototype
+behaviour differs from the shipping product, existing production behaviour wins until
+a separate behavioural change is explicitly approved.
 
 ## 4. Palette and contrast
 
@@ -388,20 +409,34 @@ the same construction and spacing.
 
 ## 13. Typography
 
-Use a system monospace fallback until the family has a shared licensed font asset.
+The family typeface is JetBrains Mono v2.304, distributed under the SIL Open Font
+License 1.1. Every shipped interface embeds the exact upstream font binary rather
+than resolving a similarly named system font.
+
+- HTML prototypes use the upstream Medium 500 and ExtraBold 800 WOFF2 files.
+- JUCE products embed the matching static TTF files as binary data.
+- The family UI uses only the supplied weights 500 and 800; synthetic bold and
+  italic are disabled.
+- Ligatures are disabled for stable labels, values, and measurements.
+- A generic monospace fallback may remain only as a load-failure safeguard; it is
+  not part of the approved rendering.
+- Every repository that redistributes the font includes its OFL 1.1 license and
+  records the upstream release and revision in third-party notices.
+- JetBrains Mono is the family typeface for every default_ plug-in; individual
+  products do not substitute another monospace face.
 
 Reference scale at 1x:
 
 | Role | Size | Weight / contrast |
 |---|---:|---|
-| Wordmark | 20 px | 900 |
+| Wordmark | 20 px | 800 |
 | Header label | 9 px | 800, uppercase |
-| Header value | 11–13 px | 900 |
+| Header value | 11–13 px | 800 |
 | Value-strip label | 9 px | 800, 0.72 alpha |
 | Unit | 9 px | 800, 0.72 alpha |
-| Value-strip value | 10 px | 900 |
+| Value-strip value | 10 px | 800 |
 | Workspace label | 9 px | 800, 0.72 alpha |
-| Workspace value or button | 9 px | 900 |
+| Workspace value or button | 9 px | 800 |
 | Visualization grid label | product-scaled | 800, 0.72 alpha |
 
 Rules:
@@ -414,7 +449,12 @@ Rules:
 - numeric precision never exceeds meaningful parameter precision;
 - units use standard case: Hz, dB, dB/oct, ms;
 - neighboring controls at the same hierarchy use the same label size and contrast;
-- secondary labels must remain clearly readable rather than decorative gray.
+- secondary labels must remain clearly readable rather than decorative gray;
+- ordinary labels, units, selector values, popup rows, and tooltips are never smaller
+  than 9 design px at the 1x reference scale;
+- a closed selector and its popup rows use the same apparent type size;
+- wordmarks, controls, menus, values, units, tooltips, and visualization labels use
+  the same embedded JetBrains Mono family.
 
 ## 14. Icons
 
@@ -442,6 +482,8 @@ Rules:
 - align related labels consistently;
 - ensure every label fits at minimum, default, and maximum scale;
 - do not clip text that would fit with correct padding or alignment;
+- inherited `overflow: hidden` or ellipsis must not crop a label that fits inside its
+  cell including available padding;
 - do not center a subgroup label when neighboring selectors are left-aligned.
 
 ## 16. Context menus and tooltips
@@ -528,7 +570,9 @@ not implement a host.
 - scale popup and tooltip geometry with their targets;
 - recheck text clipping at every supported scale;
 - calculate domain landmarks from the real scale;
-- test font metrics on macOS, Windows, and Linux.
+- verify that the embedded JetBrains Mono assets load on macOS, Windows, and Linux;
+- test text clipping and rasterization on all three systems even though glyph metrics
+  are supplied by the same embedded font.
 
 ## 21. Shared implementation primitives
 
@@ -556,15 +600,15 @@ Centralize design-space metrics:
 ~~~cpp
 struct FamilyMetrics
 {
-    static constexpr float designWidth = 800.0f;
-    static constexpr float designHeight = 464.0f;
     static constexpr float frame = 4.0f;
     static constexpr float thinLine = 1.0f;
+    static constexpr float minimumHitTarget = 24.0f;
 };
 ~~~
 
 The product layer supplies:
 
+- design width and height;
 - parameters and formatting;
 - domain scale;
 - alignment anchors;
@@ -617,6 +661,8 @@ The product layer supplies:
 - [ ] Threshold uses two meter rectangles without a shared outline.
 - [ ] Light and dark themes invert paper and ink roles exactly.
 - [ ] Closed selectors do not look pressed.
+- [ ] Closed selectors match their popup rows in type scale and icon legibility.
+- [ ] No inherited overflow rule crops otherwise fitting text.
 
 ### Interaction
 
@@ -640,8 +686,13 @@ The product layer supplies:
 - [ ] Automation updates the UI without conflicts.
 - [ ] UI preferences do not enter audio parameter state.
 - [ ] Minimum, default, and maximum scale have been checked.
-- [ ] macOS, Windows, and Linux font metrics have been checked.
+- [ ] The embedded JetBrains Mono assets load without falling back on macOS, Windows,
+      and Linux.
+- [ ] Text clipping and rasterization have been checked on all three systems.
 - [ ] Mouse, trackpad, and keyboard editing have been checked.
+- [ ] Interface-only migrations preserve DSP, RTA/analyzer calculations, parameters,
+      automation, state, shortcuts, and mouse behaviour against the production
+      baseline.
 
 ## 24. default_eq reference profile
 
@@ -652,16 +703,16 @@ coordinates are product-specific; its structural method is reusable.
 
 | Zone | X | Y | W | H |
 |---|---:|---:|---:|---:|
-| Complete window | 0 | 0 | 800 | 464 |
-| Top frame | 0 | 0 | 800 | 4 |
-| Header | 4 | 4 | 792 | 60 |
-| Upper structural gap | 0 | 64 | 800 | 4 |
-| RTA / response | 4 | 68 | 792 | 254 |
-| RTA / values gap | 4 | 322 | 792 | 4 |
-| Value strip | 4 | 326 | 792 | 28 |
-| Structural gap | 0 | 354 | 800 | 14 |
-| Contextual workspace | 4 | 368 | 792 | 92 |
-| Bottom frame | 0 | 460 | 800 | 4 |
+| Complete window | 0 | 0 | 752 | 454 |
+| Top frame | 0 | 0 | 752 | 4 |
+| Header | 4 | 4 | 744 | 60 |
+| Upper structural gap | 0 | 64 | 752 | 4 |
+| RTA / response | 4 | 68 | 744 | 254 |
+| RTA / values gap | 4 | 322 | 744 | 4 |
+| Value strip | 4 | 326 | 744 | 28 |
+| Structural gap | 0 | 354 | 752 | 4 |
+| Contextual workspace | 4 | 358 | 744 | 92 |
+| Bottom frame | 0 | 450 | 752 | 4 |
 
 The left and right frame are also 4 design px.
 
@@ -669,24 +720,27 @@ The left and right frame are also 4 design px.
 
 | Absolute X | Aligned boundaries |
 |---:|---|
-| 57 | ON/SOLO · ROUTE; midpoint between the RTA left edge and 50 Hz |
-| 109 | 50 Hz; ROUTE · DIST; ADAPTIVE Q · FILTER |
-| 235 | DIST · DRIVE/CHARACTER; FILTER · FREQUENCY |
-| 373 | 500 Hz; PHASE · AMOUNT; FREQUENCY · GAIN; saturation area end |
-| 493 | AMOUNT · SHIFT; GAIN · Q; THRESHOLD · RANGE |
-| 557 | Q · SLOPE; RANGE · RATIO |
-| 637 | SHIFT · AUTO GAIN; RATIO · SPEED |
-| 717 | 10 kHz; AUTO GAIN · POWER; SLOPE · OUT; SPEED · LOOKAHEAD |
-| 796 | Inner composition right edge |
+| 53.5 | ON/SOLO · ROUTE; midpoint between the RTA left edge and 50 Hz |
+| 102.5 | 50 Hz; ROUTE · DIST; ADAPTIVE Q · FILTER |
+| 214.5 | midpoint between 100 and 200 Hz; DIST · DRIVE/CHARACTER; FILTER · FREQUENCY |
+| 350.5 | 500 Hz; PHASE · AMOUNT; FREQUENCY · GAIN; CHARACTER · DYNAMICS |
+| 462.5 | midpoint between 1 and 2 kHz; AMOUNT · SHIFT; GAIN · Q; THRESHOLD · RANGE |
+| 530.5 | Q · SLOPE; RANGE · RATIO |
+| 598.5 | 5 kHz; SHIFT · AUTO GAIN; RATIO · SPEED |
+| 673.5 | 10 kHz; AUTO GAIN · POWER; SLOPE · OUT; SPEED · LOOKAHEAD |
+| 748 | Inner composition right edge |
 
 ### 24.3. Header grid
 
 ~~~text
-185 | 79 | 105 | 120 | 144 | 80 | 79
+174 | 74 | 99 | 112 | 136 | 75 | 74
 LOGO | OS | PHASE | AMOUNT | SHIFT | AUTO GAIN | POWER
 ~~~
 
 AMOUNT and SHIFT use relative vertical drag. OS and PHASE use full-cell selectors.
+AUTO GAIN uses the standard 13 px left inset; AUTO GAIN and its current mode share
+one left alignment axis. Phase modes are labelled MINIMUM, LINEAR ECO, LINEAR MED,
+and LINEAR MAX.
 
 ### 24.4. Visualization
 
@@ -697,6 +751,14 @@ AMOUNT and SHIFT use relative vertical drag. OS and PHASE use full-cell selector
 - approximately 20 physical px invisible marker radius;
 - multi-selection and grouped editing;
 - no redundant analyzer label or selected-band text block.
+- the +12 and -12 scale labels use optically equal frame insets; edge-label
+  placement may be corrected without moving the scale, grid, response, or nodes.
+
+The production RTA and response implementation is retained intact during the UI
+migration. Its acquisition path, FFT and smoothing, decay, normalization, calibration,
+frequency mapping, response math, refresh cadence, and interaction semantics are not
+reimplemented from the HTML prototype. The redesign may only place, frame, and style
+the existing visualization inside the approved composition.
 
 Filter icons use the production filter geometry. Their unaffected-response baseline
 defines vertical alignment.
@@ -704,12 +766,16 @@ defines vertical alignment.
 ### 24.5. Value strip
 
 ~~~text
-105 | 126 | 138 | 120 | 64 | 160 | 79
+99 | 112 | 136 | 112 | 68 | 143 | 74
 ADAPTIVE Q | FILTER | FREQUENCY | GAIN | Q | SLOPE | OUT
 ~~~
 
 The FILTER cell displays the production icon and selected type without an extra
 FILTER caption.
+
+- the closed selector and popup row use the same 26 × 16 design px production icon,
+  9 px value text, 7 px icon-to-text gap, and 10 px effective left inset;
+- pass filters are named by what they pass: RES LP, RES HP, LOW PASS, and HIGH PASS.
 
 Display precision:
 
@@ -727,20 +793,20 @@ entry.
 ### 24.6. Contextual workspace
 
 ~~~text
-53 | 52 | 264 | 12 | 411
+50 | 49 | 247 | 1 | 397
 STATE | ROUTING | SATURATION | GAP | DYNAMICS
 ~~~
 
 Internal grids:
 
 ~~~text
-SATURATION: 126 | 138
+SATURATION: 112 | 135
 DIST TYPE   | DRIVE + CHARACTER
 
-DYNAMICS: 54 | 54 | 303
+DYNAMICS: 50 | 62 | 285
 ACTIONS     | THRESHOLD | PARAMETERS
 
-PARAMETERS: 64 | 80 | 80 | 79
+PARAMETERS: 68 | 68 | 75 | 74
 RANGE       | RATIO | SPEED | LOOKAHEAD
 ~~~
 
@@ -751,6 +817,8 @@ Rules:
 - DRIVE, CHARACTER, RANGE, RATIO, SPEED, and LOOKAHEAD use the control orientation
   shown by their visual track;
 - threshold is a dual-lane meter-fader;
+- threshold values always include dB, except the explicit MULTI mixed state;
+- compact Character labels use HYST and ODD/EVEN where the full term would clip;
 - placement labels are left-aligned like ROUTE;
 - centered L/R and M/S placement display CENTER;
 - centered transient/sustain placement displays SUM;
@@ -759,6 +827,8 @@ Rules:
 - placement, amount, and shift do not jump on click;
 - placement, amount, and shift use the ns-resize cursor;
 - labels and values remain inside their columns at every supported scale.
+- THRESHOLD and SUSTAIN are never cropped by inherited overflow rules when they fit
+  inside their cells.
 
 ### 24.7. Menus
 
@@ -769,12 +839,88 @@ Rules:
 - the complete field opens the menu;
 - choosing or dismissing clears the open-state outline;
 - filter menus show the production filter icons;
+- closed selector values and popup rows use the same apparent 9 px type scale;
 - the context menu reproduces the product's real action set.
 
-## 25. Compact brief for a default_ product
+## 25. default_distortion reference profile
+
+This profile records the approved interface composition for the 0.9.0 visual
+migration. Production saturation drawings and audio behaviour remain authoritative.
+
+### 25.1. Design space
+
+| Zone | X | Y | W | H |
+|---|---:|---:|---:|---:|
+| Compact window | 0 | 0 | 712 | 382 |
+| Expanded window | 0 | 0 | 712 | 562 |
+| Header | 4 | 4 | 704 | 60 |
+| Saturation visualization | 4 | 68 | 704 | 230 |
+| Value strip | 4 | 302 | 704 | 48 |
+| Multiband strip | 4 | 354 | 704 | 24 |
+| Expanded RTA | 4 | 382 | 704 | 176 |
+
+All exterior edges use the continuous 4 px family frame. The 4 px gaps between
+major horizontal regions remain visible as structural ink.
+
+### 25.2. Header and value grids
+
+~~~text
+185 | 255 | 79 | 106 | 79
+LOGO | ALGORITHM | OS | AUTO GAIN | POWER
+~~~
+
+The LOGO / ALGORITHM boundary aligns with the first vertical guide of the
+saturation visualization. The OS / AUTO GAIN boundary aligns with its third guide.
+The wordmark remains optically centred inside its enlarged cell. OS and POWER keep
+equal widths; AUTO GAIN remains large enough for REGULAR, SMART, and OFF.
+
+The parameter strip contains eight equal 88 px cells:
+
+~~~text
+DRIVE | CHARACTER | DETAIL | ASYM | TONE | STAGES | MIX | OUT
+~~~
+
+The contextual DETAIL label and availability follow the selected production
+algorithm. Production transfer visualizations remain unchanged; only their bounds,
+framing, palette integration, and placement may change.
+
+### 25.3. Header and multiband selectors
+
+- OS, algorithm, Phase, and crossover-slope selectors open from their complete
+  cells and toggle closed on a second press;
+- Auto Gain uses AUTO GAIN with REGULAR, SMART, and OFF;
+- the closed Phase control and its popup use PHASE MINIMUM and PHASE LINEAR;
+- MULTIBAND, LINK, and PHASE occupy a 504 / 88 / 112 px strip;
+- adjacent active MULTIBAND and LINK cells retain a visible paper separator.
+
+### 25.4. Multiband RTA
+
+The production interface ports the default_eq analyzer appearance and behaviour
+one-to-one, then adds only distortion-specific interaction overlays.
+
+- each band contains vertically stacked S and B controls with 18 × 16 design px
+  faces and minimum 24 × 24 physical px hit targets;
+- the top edge of each S face aligns with the first horizontal RTA guide;
+- band numbers and selected-band top bars are omitted;
+- Trim uses relative vertical drag and double-click reset;
+- crossovers use horizontal drag and double-click deletion;
+- the crossover slope badge and bottom-anchored frequency tooltip appear only while
+  that crossover is hovered or actively dragged;
+- the frequency tooltip follows the crossover and updates continuously during drag;
+- the upper half previews a valid new crossover at 25% opacity and adds it on click
+  until four bands exist; the lower half selects, and all clicks select at four bands.
+
+### 25.5. Algorithm menu
+
+The algorithm menu spans the complete 704 px inner width, extends from the top of
+the saturation visualization to the bottom of the parameter strip, and uses a
+3 × 10 grid with 9 px text. It retains every production algorithm preview and has
+no duplicate rule at its bottom edge.
+
+## 26. Compact brief for a default_ product
 
 > Design the interface as a fixed monochrome audio instrument inside a continuous
-> 4 px frame. Use #F6F6F6 paper, #050505 ink, monospace typography, zero radius,
+> 4 px frame. Use #F6F6F6 paper, #050505 ink, embedded JetBrains Mono typography,
 > 1 px internal dividers, and rectangular active masses. Place the default_<function>
 > wordmark at the left of the header and master power at the right. Make the primary
 > visualization functional and directly manipulable. Align adjacent layers to a

@@ -319,6 +319,10 @@ void DefaultEqualizerAudioProcessor::prepareToPlay(double sampleRate, int sample
     cachedTsDriveActive = cachedTsDetectorNeeded = cachedTsExternalDetectorNeeded = false;
     smartAutoGainLocked.store(false, std::memory_order_release);
     smartAutoGainProgress.store(0.0f, std::memory_order_release);
+    uiOutputCrestSmoothed = 0.0f;
+    uiOutputCorrelationSmoothed = 0.0f;
+    uiOutputCrestDb.store(0.0f, std::memory_order_release);
+    uiOutputCorrelation.store(0.0f, std::memory_order_release);
     updateReportedLatency();
 
     // Reset spectrum FIFOs (fixes blank analyzer after DAW offline/online cycle)
@@ -1263,8 +1267,38 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         }
     }
 
-    // Push post-EQ samples to spectrum FIFO
-    if (shouldAnalyze) spectrumFifo.pushBlock(L, R, n);
+    // The diagnostic panel consumes two compact output statistics. Calculate
+    // them only while an editor has enabled the analyzer; keep the handoff
+    // lock-free and avoid touching the audible samples.
+    if (shouldAnalyze)
+    {
+        double sumL2 = 0.0, sumR2 = 0.0, sumLR = 0.0;
+        float peak = 0.0f;
+        for (int sample = 0; sample < n; ++sample)
+        {
+            const float left = L[sample];
+            const float right = R[sample];
+            peak = std::max(peak, std::max(std::abs(left), std::abs(right)));
+            sumL2 += (double)left * (double)left;
+            sumR2 += (double)right * (double)right;
+            sumLR += (double)left * (double)right;
+        }
+        const double meanSquare = (sumL2 + sumR2) / std::max(1, n * 2);
+        const float crest = meanSquare > 1.0e-20 && peak > 1.0e-10f
+            ? (float)(20.0 * std::log10((double)peak / std::sqrt(meanSquare))) : 0.0f;
+        const double correlationDenominator = std::sqrt(sumL2 * sumR2);
+        const float correlation = mainChannels < 2 ? 1.0f
+            : correlationDenominator > 1.0e-20
+                ? (float)std::clamp(sumLR / correlationDenominator, -1.0, 1.0) : 0.0f;
+        const float smoothing = 1.0f - std::exp(-(float)n
+            / (float)std::max(1.0, sr * 0.20));
+        uiOutputCrestSmoothed += smoothing * (crest - uiOutputCrestSmoothed);
+        uiOutputCorrelationSmoothed += smoothing
+            * (correlation - uiOutputCorrelationSmoothed);
+        uiOutputCrestDb.store(uiOutputCrestSmoothed, std::memory_order_release);
+        uiOutputCorrelation.store(uiOutputCorrelationSmoothed, std::memory_order_release);
+        spectrumFifo.pushBlock(L, R, n);
+    }
 
     if (!transparentBypassPath)
         globalBypass.processOutput(mainBuffer, getLatencySamples(), pluginEnabled);

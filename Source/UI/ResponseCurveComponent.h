@@ -11,11 +11,37 @@
 
 class DefaultEqualizerAudioProcessor;
 
+struct PrototypeContextMenuModel
+{
+    int bandNumber = 1;
+    int selectedType = 0;
+    int selectedRoute = 1;
+    int selectedSaturation = 0;
+    int selectedCount = 1;
+    std::function<void()> toggleBand;
+    std::function<void(int)> chooseFilter;
+    std::function<void(int)> chooseRoute;
+    std::function<void(int)> chooseSaturation;
+    std::function<void()> resetEqualizer;
+    std::function<void()> bypassSelected;
+};
+
+struct SpectralStatistics
+{
+    float centroidHz = 0.0f;
+    float averageTiltDbPerOct = 0.0f;
+    std::array<float, 10> tonalPercent {};
+    bool valid = false;
+};
+
 class ResponseCurveComponent : public juce::Component
 {
 public:
     explicit ResponseCurveComponent(DefaultEqualizerAudioProcessor& processor);
     ~ResponseCurveComponent() override = default;
+
+    std::function<void(juce::Point<int>, PrototypeContextMenuModel)> onContextMenuRequest;
+    std::function<void()> onContextMenuDismissRequest;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -49,6 +75,16 @@ public:
         staticLayerDirty = true;
         repaint();
     }
+    void setThemeColours(juce::Colour lightBackground, juce::Colour lightForeground,
+                         juce::Colour darkBackground, juce::Colour darkForeground)
+    {
+        lightBackgroundColour = lightBackground.withAlpha(1.0f);
+        lightForegroundColour = lightForeground.withAlpha(1.0f);
+        darkBackgroundColour = darkBackground.withAlpha(1.0f);
+        darkForegroundColour = darkForeground.withAlpha(1.0f);
+        staticLayerDirty = true;
+        repaint();
+    }
     void setAnalyzerSources(bool input, bool output)
     {
         if (showInputSpectrum == input && showOutputSpectrum == output) return;
@@ -75,6 +111,18 @@ public:
         analyzerTiltDbPerOct = tilt;
         repaint();
     }
+    void setHoverTooltipEnabled(bool enabled)
+    {
+        if (showHoverTooltip == enabled) return;
+        showHoverTooltip = enabled;
+        repaint();
+    }
+    bool isHoverTooltipEnabled() const noexcept { return showHoverTooltip; }
+    void setGainRangeMode(int mode);
+    int getGainRangeMode() const noexcept { return gainRangeMode; }
+    float getDisplayMaxDb() const noexcept { return displayMaxDb; }
+    void resetAutoRtaRangeForOpen();
+    SpectralStatistics calculateSpectralStatistics() const;
 
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
@@ -143,11 +191,14 @@ public:
     { return marquee.getSmallestIntegerContainer().contains(point.roundToInt()); }
 
 private:
+    friend int runEditorLayoutRegression();
+
     DefaultEqualizerAudioProcessor& proc;
 
     // Frequency response calculation
     static constexpr int numPoints = 512;
     float magnitudes[numPoints] = {};
+    float staticMagnitudes[numPoints] = {};
     float perBandMagnitudes[kNumBands][numPoints] = {};
     float responseFrequencies[numPoints] = {};
     double responseGridSampleRate = 0.0;
@@ -188,12 +239,21 @@ private:
     std::array<juce::RangedAudioParameter*, kNumBands> dragDriveParams {};
     std::array<juce::RangedAudioParameter*, kNumBands> dragThresholdParams {};
     juce::RangedAudioParameter* dynamicRangeDragParam = nullptr;
-    float dynamicRangeDragBaseGain = 0.0f;
     float groupAnchorFreq = 1000.0f, groupAnchorGain = 0.0f;
-    float displayMaxDb = 12.0f;
+    float displayMaxDb = 6.0f;
+    int gainRangeMode = 0;
     bool rangeExpansionAvailable = true;
     bool darkMode = true;
+    juce::Colour lightBackgroundColour { 0xfff6f6f6 };
+    juce::Colour lightForegroundColour { 0xff050505 };
+    juce::Colour darkBackgroundColour { 0xff050505 };
+    juce::Colour darkForegroundColour { 0xfff6f6f6 };
+    juce::Colour foregroundColour() const noexcept
+    { return darkMode ? darkForegroundColour : lightForegroundColour; }
+    juce::Colour backgroundColour() const noexcept
+    { return darkMode ? darkBackgroundColour : lightBackgroundColour; }
     bool showInputSpectrum = true, showOutputSpectrum = true;
+    bool showHoverTooltip = true;
     float analyzerFloorDb = -90.0f, analyzerDecayDb = 1.5f;
     float analyzerAveragingSeconds = 0.065f, analyzerTiltDbPerOct = 4.5f;
     juce::Image staticLayer;
@@ -217,6 +277,7 @@ private:
 
     // Paint helpers
     void paintGrid(juce::Graphics& g);
+    void paintGridLabels(juce::Graphics& g);
     void paintSpectrum(juce::Graphics& g);
     void paintResponseCurve(juce::Graphics& g);
     void paintBandCurves(juce::Graphics& g);
@@ -230,7 +291,10 @@ private:
     // Hit test for band nodes
     int hitTestNode(float x, float y) const;
     int createBandAt(float x, float y, std::int64_t eventTimeMs, int forcedType = -1);
+    float bandResponseDb(int band, float modulation, float probeFrequency) const;
+    float dynamicRangeTargetDb(float range) const;
     juce::Rectangle<float> dynamicRangeHandleBounds() const;
+    bool expandAutoRtaRangeNearEdge(int localPointerY);
     void beginStaticBandDrag(int band, bool beginUndoTransaction);
     void updateMarqueeSelection();
     void showNumericEditor(int band, const juce::String& suffix, float x, float y);

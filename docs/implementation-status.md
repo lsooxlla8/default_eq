@@ -1,4 +1,4 @@
-# Development status — 0.4.0 (`default_eq`)
+# Development status — 0.5.0 (`default_eq`)
 
 ## Implemented and exercised
 
@@ -49,12 +49,25 @@
   drive path. Clean and dynamic EQ remain at the native rate; de-cramping owns
   the near-Nyquist correction, so selecting oversampling without active drive
   adds neither work nor latency.
-- Always-both RTA fixed at High resolution, with coherent-gain normalisation,
-  fractional-octave smoothing, a fixed 0 dB ceiling, adjustable floor,
-  averaging time (65 ms default, 1.60 s maximum), and 4.5 dB/oct default tilt.
+- Always-both RTA with selectable 4096/8192/16384 FFT size, coherent-gain
+  normalisation, resolution-matched fractional-octave smoothing, a fixed 0 dB
+  ceiling, adjustable floor, averaging time, and 4.5 dB/oct default tilt.
   Peak Hold is always active and clears on every host transport stop-to-play
   transition and editor reopen. Audio-side capture is dormant while the editor
   is hidden.
+- Clicking the wordmark opens an in-editor panel exactly over the RTA. It holds
+  Auto/White/Black theme, Auto/manual RTA gain range, the exposed analyzer settings,
+  the hover-card toggle, a compact shortcut reference and a bottom diagnostic
+  row for centroid, true output crest factor, spectral tilt, L/R correlation
+  and ten-band tonal balance. The four numeric statistics include compact
+  graphical scales. Shortcuts use an airy 4x2 summary plus a dedicated 3x2
+  complete interaction map, both aligned to the cross-layer grid. White and Black
+  each have independently persisted Background and Ink colours editable through
+  an in-panel HSV picker. Auto is the factory theme and switches at local
+  08:00/20:00. AUTO RTA gain range begins at ±6 dB, expands one step whenever
+  a drag re-enters an edge
+  zone, and only contracts when a new editor is opened or the settings panel is
+  closed, based on the current bands' maximum gain.
 - Global EQ Amount is a header control beside Shift: `-200..200%`, defaults to
   `100%`, and reaches exact dry unity at `0%`. Gain-bearing filters use direct
   signed dB scaling across the entire range, avoiding wet/dry phase reversal in
@@ -81,12 +94,15 @@
   caches its static background, and skips unchanged control repaints.
   Schema-v9 single-state recall and v3/v5/v6/v7 migration, no published
   A/B/link-group/dynamic-enable parameters, corrupt-state rejection,
-  mono/stereo, unit parsing, and paper/ink family UI with hidden Reduced Motion
-  preference and resize from a clipping-safe 800 px minimum to 1200 px. Every
-  editor opens at 800 px width with the Band/Dynamic workspace always open.
-  Four draggable numeric fields expose Freq, Gain, Q and Slope below the graph.
-  Output sits below the graph; the former header Output position is a global
-  semitone Shift that preserves the frequency ratios between all bands.
+  mono/stereo and unit parsing. The 0.5.0 paper/ink interface uses an embedded
+  JetBrains Mono family, a 752x454 reference frame, fixed-aspect
+  640x386–2400x1449 resizing, the retained production graph/RTA, and the
+  always-open contextual workspace. Four draggable numeric cells expose
+  Frequency, Gain, Q and Slope
+  below the graph; zero, single and multi-selection states are explicit, with
+  `MULTI` shown only for values that differ across the selection. Output stays
+  below the graph; the header position remains a global semitone Shift that
+  preserves the frequency ratios between all bands.
 
 ## Deliberate boundary
 

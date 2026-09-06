@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- Rebuilt the editor around the approved fixed-ratio `default_` interface with
+  embedded JetBrains Mono typography and sharp HiDPI rendering.
+- Added an RTA-sized settings and diagnostics panel with automatic light/dark
+  themes, custom palettes, analyzer controls, spectral statistics, shortcuts,
+  and automatic/manual RTA gain ranges from ±6 to ±36 dB.
+- Preserved the production DSP, parameters, state, latency, automation, graph
+  gestures, multi-selection, contextual band menu, and dynamic range editing.
+- Expanded regression coverage for the new editor, analyzer settings, themes,
+  range behaviour, statistics, and 4096/8192/16384-point FFT modes.
+
 ## 0.4.0
 
 - Added host-parameter, automation-fuzz, memory, DSP-equivalence, and editor-layout

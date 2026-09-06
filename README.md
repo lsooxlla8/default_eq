@@ -1,6 +1,6 @@
 # default_eq
 
-![default_eq plug-in interface](docs/screenshots/ui-aligned-rail-tooltip-860.png)
+![default_eq 0.5.0 plug-in interface](docs/screenshots/default-eq-0.5.0.png)
 
 **default_eq** is designed to be your go-to EQ for tonal shaping, dynamic control, and adding harmonic character exactly where you need it.
 
@@ -67,11 +67,14 @@ ctest --test-dir build --output-on-failure
 ```
 
 On Windows and Linux, omit `CMAKE_OSX_ARCHITECTURES`. AU is built only on
-macOS. The current CMake target uses `COPY_PLUGIN_AFTER_BUILD`, so building AU
-or VST3 also replaces that format in the user's standard plug-in folder.
+macOS. Builds stay inside the build directory by default. Pass
+`-DDEFAULT_EQ_COPY_PLUGIN_AFTER_BUILD=ON` only when the built plug-ins should
+replace the copies in the user's standard plug-in folders.
 
-The current implementation contract and latest local verification are recorded
+The current implementation contract and 0.5.0 verification record are documented
 in [`docs/implementation-status.md`](docs/implementation-status.md) and
+[`docs/verification-0.5.0.md`](docs/verification-0.5.0.md). The earlier 0.4.0
+release record remains in
 [`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
 
 ## Licence

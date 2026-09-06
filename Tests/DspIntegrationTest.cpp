@@ -631,6 +631,9 @@ int main()
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("DSP integration: initialise JUCE\n");
     std::printf("DSP integration: defaults\n");
+    CHECK(juce::String(kVersion) == "0.5.0"
+              && juce::String(JucePlugin_VersionString) == "0.5.0",
+          "source and plug-in bundle metadata identify the 0.5.0 development line");
     CHECK(kNumBands == 8, "product exposes exactly eight bands");
     {
         DefaultEqualizerAudioProcessor fresh;
@@ -1950,6 +1953,22 @@ int main()
         float worst = 0.0f;
         for (int i = 0; i < 127; ++i) worst = std::max(worst, std::abs(mono.getSample(0, i) - original.getSample(0, i)));
         CHECK(worst < 2.0e-5f, "neutral mono processing is unity");
+    }
+
+    // The settings menu exposes half/current/double analyzer resolution.
+    {
+        SpectrumFIFO fifo;
+        std::vector<float> samples((size_t)SpectrumFIFO::fftSize + SpectrumFIFO::publishHop,
+                                   0.1f);
+        constexpr int expectedBins[] { 2048, 4096, 8192 };
+        for (int mode = 0; mode < 3; ++mode)
+        {
+            fifo.reset();
+            fifo.setResolution(mode);
+            fifo.pushSamples(samples.data(), (int)samples.size());
+            CHECK(fifo.processIfReady() && fifo.getNumBins() == expectedBins[mode],
+                  "RTA FFT size mode selects 4096/8192/16384 samples");
+        }
     }
 
     const auto cleanCpuNs = benchmarkProcessorNsPerSample(0);

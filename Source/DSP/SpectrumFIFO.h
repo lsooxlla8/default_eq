@@ -2,6 +2,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <atomic>
+#include <memory>
 
 // Lock-free single-producer / single-consumer spectrum FIFO (triple-buffered).
 //
@@ -39,19 +40,21 @@
 class SpectrumFIFO
 {
 public:
-    static constexpr int fftOrder  = 13;             // 8192-point maximum FFT
+    static constexpr int fftOrder  = 14;             // 16384-point maximum FFT
     static constexpr int fftSize   = 1 << fftOrder;
     static constexpr int numBins   = fftSize / 2;
-    static constexpr int publishHop = fftSize / 4;
+    // Preserve the established 8192-point analyzer update cadence while
+    // allowing half/double resolution around it.
+    static constexpr int publishHop = 2048;
     static constexpr int numSlots  = 3;
 
     SpectrumFIFO()
-        : fftLow(11), fftMedium(12), fftHigh(13)
+        : fftLow(12), fftMedium(13), fftHigh(14), storage(std::make_unique<Storage>())
     {
-        for (auto& buf : slots)
+        for (auto& buf : storage->slots)
             std::fill(buf.begin(), buf.end(), 0.0f);
-        std::fill(fftData.begin(),    fftData.end(),    0.0f);
-        std::fill(outputMagnitudes.begin(), outputMagnitudes.end(), -100.0f);
+        std::fill(storage->fftData.begin(), storage->fftData.end(), 0.0f);
+        std::fill(storage->outputMagnitudes.begin(), storage->outputMagnitudes.end(), -100.0f);
 
         // Initial partition: writer owns 0, midSlot is 1, readSlot is 2.
         // These three are a permutation of {0,1,2} at all times.
@@ -63,24 +66,24 @@ public:
         samplesSincePublish = 0;
         for (int resolution = 0; resolution < 3; ++resolution)
         {
-            const int activeSize = 1 << (resolution + 11);
+            const int activeSize = 1 << (resolution + 12);
             for (int i = 0; i < activeSize; ++i)
             {
                 const float phase = (float)i / (float)(activeSize - 1);
-                hannWindows[(size_t)resolution][(size_t)i] = 0.5f * (1.0f - std::cos(
+                storage->hannWindows[(size_t)resolution][(size_t)i] = 0.5f * (1.0f - std::cos(
                     juce::MathConstants<float>::twoPi * phase));
             }
             const int bins = activeSize / 2;
-            const double octaveWidth = resolution == 0 ? 1.0 / 6.0
-                                      : resolution == 1 ? 1.0 / 12.0 : 1.0 / 24.0;
+            const double octaveWidth = resolution == 0 ? 1.0 / 12.0
+                                      : resolution == 1 ? 1.0 / 24.0 : 1.0 / 48.0;
             const double factor = std::pow(2.0, octaveWidth * 0.5);
             for (int i = 0; i < bins; ++i)
             {
-                smoothingLo[(size_t)resolution][(size_t)i] = std::clamp(
+                storage->smoothingLo[(size_t)resolution][(size_t)i] = std::clamp(
                     (int)std::floor((double)i / factor), 0, bins - 1);
-                smoothingHi[(size_t)resolution][(size_t)i] = std::clamp(
+                storage->smoothingHi[(size_t)resolution][(size_t)i] = std::clamp(
                     (int)std::ceil((double)i * factor) + 1,
-                    smoothingLo[(size_t)resolution][(size_t)i] + 1, bins);
+                    storage->smoothingLo[(size_t)resolution][(size_t)i] + 1, bins);
             }
         }
     }
@@ -94,9 +97,9 @@ public:
         midSlot.store(1, std::memory_order_relaxed);
         readSlot  = 2;
         fresh.store(false, std::memory_order_relaxed);
-        for (auto& buf : slots)
+        for (auto& buf : storage->slots)
             std::fill(buf.begin(), buf.end(), 0.0f);
-        std::fill(outputMagnitudes.begin(), outputMagnitudes.end(), -100.0f);
+        std::fill(storage->outputMagnitudes.begin(), storage->outputMagnitudes.end(), -100.0f);
     }
 
     // Call from audio thread: push interleaved mono samples.
@@ -105,7 +108,7 @@ public:
         int idx = fifoWriteIndex;
         for (int i = 0; i < numSamples; ++i)
         {
-            capture[(size_t)idx] = data[i];
+            storage->capture[(size_t)idx] = data[i];
             if (++idx >= fftSize) idx = 0;
             if (++samplesSincePublish >= publishHop)
             {
@@ -123,7 +126,7 @@ public:
         int idx = fifoWriteIndex;
         for (int i = 0; i < numSamples; ++i)
         {
-            capture[(size_t)idx] = (L[i] + R[i]) * 0.5f;
+            storage->capture[(size_t)idx] = (L[i] + R[i]) * 0.5f;
             if (++idx >= fftSize) idx = 0;
             if (++samplesSincePublish >= publishHop)
             {
@@ -148,44 +151,44 @@ public:
         readSlot = midSlot.exchange(readSlot, std::memory_order_acquire);
 
         const int resolution = resolutionIndex.load(std::memory_order_relaxed);
-        const int activeOrder = resolution == 0 ? 11 : (resolution == 1 ? 12 : 13);
+        const int activeOrder = resolution == 0 ? 12 : (resolution == 1 ? 13 : 14);
         const int activeSize = 1 << activeOrder;
         currentBins = activeSize / 2;
-        const auto& src = slots[(size_t)readSlot];
-        std::fill(fftData.begin(), fftData.end(), 0.0f);
+        const auto& src = storage->slots[(size_t)readSlot];
+        std::fill(storage->fftData.begin(), storage->fftData.end(), 0.0f);
         const int sourceOffset = fftSize - activeSize;
         for (int i = 0; i < activeSize; ++i)
         {
-            fftData[(size_t)i] = src[(size_t)(sourceOffset + i)]
-                * hannWindows[(size_t)resolution][(size_t)i];
+            storage->fftData[(size_t)i] = src[(size_t)(sourceOffset + i)]
+                * storage->hannWindows[(size_t)resolution][(size_t)i];
         }
-        if (activeOrder == 11) fftLow.performFrequencyOnlyForwardTransform(fftData.data());
-        else if (activeOrder == 12) fftMedium.performFrequencyOnlyForwardTransform(fftData.data());
-        else fftHigh.performFrequencyOnlyForwardTransform(fftData.data());
+        if (activeOrder == 12) fftLow.performFrequencyOnlyForwardTransform(storage->fftData.data());
+        else if (activeOrder == 13) fftMedium.performFrequencyOnlyForwardTransform(storage->fftData.data());
+        else fftHigh.performFrequencyOnlyForwardTransform(storage->fftData.data());
 
         // ZLEqualizer-inspired perceptual smoothing: average linear power over
         // a constant fractional-octave width before converting to dB. This
         // avoids the jagged low-resolution trace and the bias caused by
         // averaging already-logarithmic values.
-        cumulativePower[0] = 0.0;
+        storage->cumulativePower[0] = 0.0;
         for (int i = 0; i < currentBins; ++i)
         {
-            const float normalized = fftData[(size_t)i] * (4.0f / (float)activeSize);
-            linearPower[(size_t)i] = normalized * normalized;
-            cumulativePower[(size_t)i + 1] = cumulativePower[(size_t)i] + linearPower[(size_t)i];
+            const float normalized = storage->fftData[(size_t)i] * (4.0f / (float)activeSize);
+            storage->linearPower[(size_t)i] = normalized * normalized;
+            storage->cumulativePower[(size_t)i + 1] = storage->cumulativePower[(size_t)i] + storage->linearPower[(size_t)i];
         }
         for (int i = 0; i < currentBins; ++i)
         {
-            const int lo = smoothingLo[(size_t)resolution][(size_t)i];
-            const int hi = smoothingHi[(size_t)resolution][(size_t)i];
-            const double power = (cumulativePower[(size_t)hi] - cumulativePower[(size_t)lo]) / (double)(hi - lo);
-            outputMagnitudes[(size_t)i] = 10.0f * std::log10((float)std::max(power, 1.0e-14));
+            const int lo = storage->smoothingLo[(size_t)resolution][(size_t)i];
+            const int hi = storage->smoothingHi[(size_t)resolution][(size_t)i];
+            const double power = (storage->cumulativePower[(size_t)hi] - storage->cumulativePower[(size_t)lo]) / (double)(hi - lo);
+            storage->outputMagnitudes[(size_t)i] = 10.0f * std::log10((float)std::max(power, 1.0e-14));
         }
 
         return true;
     }
 
-    const float* getMagnitudes() const { return outputMagnitudes.data(); }
+    const float* getMagnitudes() const { return storage->outputMagnitudes.data(); }
     int getNumBins() const { return currentBins; }
     void setResolution(int index) noexcept { resolutionIndex.store(juce::jlimit(0, 2, index), std::memory_order_relaxed); }
 
@@ -200,29 +203,32 @@ private:
 
     void snapshotCapture(int oldestSample)
     {
-        auto& destination = slots[(size_t) writeSlot];
+        auto& destination = storage->slots[(size_t) writeSlot];
         const int tailSamples = fftSize - oldestSample;
-        std::copy_n(capture.begin() + oldestSample, tailSamples, destination.begin());
-        std::copy_n(capture.begin(), oldestSample, destination.begin() + tailSamples);
+        std::copy_n(storage->capture.begin() + oldestSample, tailSamples, destination.begin());
+        std::copy_n(storage->capture.begin(), oldestSample, destination.begin() + tailSamples);
     }
 
     juce::dsp::FFT fftLow, fftMedium, fftHigh;
-
-    std::array<std::array<float, fftSize>, numSlots> slots {};
-    std::array<float, fftSize>                        capture {};
-    std::array<float, fftSize * 2>                   fftData {};
-    std::array<float, numBins>                       outputMagnitudes {};
-    std::array<float, numBins>                       linearPower {};
-    std::array<double, numBins + 1>                  cumulativePower {};
-    std::array<std::array<float, fftSize>, 3>        hannWindows {};
-    std::array<std::array<int, numBins>, 3>          smoothingLo {}, smoothingHi {};
+    struct Storage
+    {
+        std::array<std::array<float, fftSize>, numSlots> slots {};
+        std::array<float, fftSize> capture {};
+        std::array<float, fftSize * 2> fftData {};
+        std::array<float, numBins> outputMagnitudes {};
+        std::array<float, numBins> linearPower {};
+        std::array<double, numBins + 1> cumulativePower {};
+        std::array<std::array<float, fftSize>, 3> hannWindows {};
+        std::array<std::array<int, numBins>, 3> smoothingLo {}, smoothingHi {};
+    };
+    std::unique_ptr<Storage> storage;
 
     int               fifoWriteIndex = 0; // audio-thread only; reset in prepare
     std::atomic<int>  midSlot        { 1 };
     std::atomic<bool> fresh          { false };
-    std::atomic<int> resolutionIndex { 2 };
+    std::atomic<int> resolutionIndex { 1 };
     int samplesSincePublish = 0;
-    int currentBins = numBins;
+    int currentBins = 4096;
 
     // Producer-local / consumer-local slot indices. Only touched by their
     // respective owning thread; never read from the other side.

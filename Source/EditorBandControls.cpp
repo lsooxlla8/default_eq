@@ -24,10 +24,17 @@ void DefaultEqualizerAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
 {
     const auto belongsTo = [&event](const juce::Component& parent)
     { return event.originalComponent == &parent || parent.isParentOf(event.originalComponent); };
-    if (belongsTo(typeBox)) typeMouseInteraction = true;
-    if (belongsTo(placementModeBox)) placementModeMouseInteraction = true;
-    if (belongsTo(saturationBox)) saturationMouseInteraction = true;
-
+    if (settingsOverlay.isVisible() && !belongsTo(settingsOverlay)
+        && !belongsTo(themeBtn))
+        hideSettingsOverlay();
+    if (selectMenu.isVisible() && !belongsTo(selectMenu)
+        && !belongsTo(typeBox) && !belongsTo(placementModeBox)
+        && !belongsTo(saturationBox) && !belongsTo(oversamplingBox)
+        && !belongsTo(phaseModeBox))
+        hideSelectMenu();
+    const bool graphPopup = event.mods.isPopupMenu() && belongsTo(responseCurve);
+    if (contextMenu.isVisible() && !belongsTo(contextMenu) && !graphPopup)
+        hideContextMenu();
     if (event.mods.isPopupMenu())
     {
         auto* component = event.originalComponent;
@@ -211,7 +218,7 @@ int DefaultEqualizerAudioProcessorEditor::getControlParameterIndex(juce::Compone
         if (component == &autoGainBtn)       return parameterIndex("auto_gain_mode");
         if (component == &phaseModeBox)
             return parameterIndex("linear_phase");
-        if (component == &oversamplingSlider) return parameterIndex("oversampling");
+        if (component == &oversamplingBox)    return parameterIndex("oversampling");
         if (component == &amountSlider)       return parameterIndex("scale");
         if (component == &shiftSlider)        return parameterIndex("shift");
         if (component == &outputSlider)       return parameterIndex("output_gain");
@@ -270,11 +277,10 @@ void DefaultEqualizerAudioProcessorEditor::applySliderPalette()
 {
     const auto fg = familyLook.foreground();
     const auto bg = familyLook.background();
-    const std::array<juce::Slider*, 12> sliders {
+    const std::array<juce::Slider*, 11> sliders {
         &placementSlider, &dynThreshold, &dynRange, &dynRatio, &dynSpeed,
         &dynLookahead, &driveSlider, &driveCharacterSlider,
-        &amountSlider, &shiftSlider, &outputSlider,
-        &oversamplingSlider
+        &amountSlider, &shiftSlider, &outputSlider
     };
     for (auto* slider : sliders)
     {
@@ -283,6 +289,79 @@ void DefaultEqualizerAudioProcessorEditor::applySliderPalette()
         slider->setColour(juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         slider->updateText();
     }
+}
+
+bool DefaultEqualizerAudioProcessorEditor::selectedBandsHaveMixedValue(
+    const juce::String& suffix) const
+{
+    if (responseCurve.getSelectionCount() < 2) return false;
+    bool haveReference = false;
+    float reference = 0.0f;
+    const auto& selected = responseCurve.getSelection();
+    for (int band = 0; band < kNumBands; ++band)
+    {
+        if (!selected[(size_t)band]) continue;
+        const auto* raw = proc.apvts.getRawParameterValue(bandId(band + 1, suffix));
+        if (raw == nullptr) continue;
+        const float value = raw->load(std::memory_order_relaxed);
+        if (!haveReference)
+        {
+            reference = value;
+            haveReference = true;
+            continue;
+        }
+        const float tolerance = juce::jmax(1.0e-5f, std::abs(reference) * 1.0e-5f);
+        if (std::abs(value - reference) > tolerance) return true;
+    }
+    return false;
+}
+
+void DefaultEqualizerAudioProcessorEditor::updateMixedSelectionDisplays()
+{
+    const bool multiple = responseCurve.getSelectionCount() > 1;
+    const auto mixed = [this, multiple](const char* suffix)
+    { return multiple && selectedBandsHaveMixedValue(suffix); };
+    const auto clearComboMixed = [](juce::ComboBox& box)
+    {
+        if (!(bool)box.getProperties().getWithDefault("mixedValue", false)) return;
+        box.getProperties().set("mixedValue", false);
+        box.repaint();
+    };
+
+    freqField.setMixedValue(mixed("freq"));
+    gainField.setMixedValue(mixed("gain"));
+    qField.setMixedValue(mixed("q"));
+    slopeField.setMixedValue(mixed("slope"));
+
+    const bool routeModeMixed = mixed("placement_mode");
+    const bool placementMixed = mixed("placement");
+    // The prototype keeps each selector on the primary band's concrete value;
+    // only value fields and aggregate labels expose the multi-selection state.
+    clearComboMixed(typeBox);
+    clearComboMixed(placementModeBox);
+    placementSlider.setMixedValue(routeModeMixed || placementMixed);
+    placementSlider.getProperties().set("nameMixed", routeModeMixed || placementMixed);
+    placementSlider.getProperties().set("valueMixed", placementMixed);
+    placementSlider.repaint();
+
+    const bool saturationMixed = mixed("sat_mode");
+    clearComboMixed(saturationBox);
+    driveSlider.setMixedValue(mixed("drive"));
+    driveCharacterSlider.setMixedValue(saturationMixed || mixed("drive_character"));
+
+    dynThreshold.setMixedValue(mixed("dyn_thresh"));
+    dynRange.setMixedValue(mixed("dyn_range"));
+    dynRatio.setMixedValue(mixed("dyn_ratio"));
+    dynSpeed.setMixedValue(mixed("dyn_speed"));
+    dynLookahead.setMixedValue(mixed("dyn_lookahead"));
+
+    const bool onMixed = mixed("on");
+    const bool dynamicModeMixed = mixed("dyn_mode");
+    const bool sidechainMixed = mixed("sc_source");
+    if (onMixed) bandOn.setButtonText("MIXED");
+    else         bandOn.setButtonText("ON");
+    if (dynamicModeMixed) dynModeBtn.setButtonText("MIXED");
+    if (sidechainMixed) sidechainBtn.setButtonText("MIXED");
 }
 
 void DefaultEqualizerAudioProcessorEditor::rebindBandControls()
@@ -302,6 +381,8 @@ void DefaultEqualizerAudioProcessorEditor::rebindBandControls()
     const int idx = selectedBand + 1;
     displayedFilterType = std::clamp((int)proc.apvts.getRawParameterValue(
         bandId(idx, "type"))->load(), 0, deq::filter_types::count - 1);
+    typeBox.getProperties().set("filterType", displayedFilterType);
+    typeBox.repaint();
     bandOnAtt = std::make_unique<ButtonAttachment>(proc.apvts, bandId(idx, "on"), bandOn);
     typeAtt = std::make_unique<ComboAttachment>(proc.apvts, bandId(idx, "type"), typeBox);
     placementModeAtt = std::make_unique<ComboAttachment>(proc.apvts,
@@ -361,7 +442,7 @@ void DefaultEqualizerAudioProcessorEditor::updateBandControlEnablement(bool band
 void DefaultEqualizerAudioProcessorEditor::updateDriveControls(bool resetModeDefaults)
 {
     static constexpr const char* characterNames[] { "CURVE", "TOPOLOGY", "BIAS", "GATE",
-                                                     "HYSTERESIS", "ODD / EVEN", "TONE", "FREQUENCY" };
+                                                     "HYST", "ODD/EVEN", "TONE", "FREQUENCY" };
     const int mode = juce::jlimit(0, kSaturationModeCount - 1, displayedDriveMode);
     const bool bipolarCharacter = saturationModeUsesBipolarCharacter(mode);
     driveCharacterSlider.setName(characterNames[mode]);
@@ -398,6 +479,7 @@ void DefaultEqualizerAudioProcessorEditor::selectBand(int band, bool updateGraph
         for (auto* field : { &freqField, &gainField, &qField, &slopeField })
             field->setValueVisible(false);
         updateBandControlEnablement(false);
+        updateMixedSelectionDisplays();
         updateHeaderText();
         return;
     }
@@ -411,6 +493,7 @@ void DefaultEqualizerAudioProcessorEditor::selectBand(int band, bool updateGraph
     for (auto* field : { &freqField, &gainField, &qField, &slopeField })
         field->setValueVisible(bandPresent);
     updateBandControlEnablement(bandPresent);
+    updateMixedSelectionDisplays();
     updateHeaderText();
     if ((int)proc.apvts.getRawParameterValue("auto_gain_mode")->load() == 2)
         autoGainBtn.setTooltip(proc.smartAutoGainLocked.load(std::memory_order_acquire) ? "Smart Gain: locked" : "Smart Gain: analysing");
@@ -419,4 +502,5 @@ void DefaultEqualizerAudioProcessorEditor::selectBand(int band, bool updateGraph
 void DefaultEqualizerAudioProcessorEditor::updateHeaderText()
 {
     powerBtn.setButtonText(powerBtn.getToggleState() ? "ON" : "OFF");
+    responseCurve.setAlpha(powerBtn.getToggleState() ? 1.0f : 0.36f);
 }

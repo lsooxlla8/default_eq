@@ -1,6 +1,7 @@
 #include "ResponseCurveComponent.h"
-#include "ContextMenuLayout.h"
+#include "DefaultFamilyUI.h"
 #include "DriveCharacterFormatting.h"
+#include "FilterIcon.h"
 #include "../DSP/FilterTypes.h"
 #include "../DSP/VariableSlope.h"
 #include "../PluginProcessor.h"
@@ -9,223 +10,6 @@
 static juce::String bandId(int idx, const char* suffix)
 {
     return "b" + juce::String(idx) + "_" + suffix;
-}
-
-static constexpr std::array<const char*, kSaturationModeCount> saturationModeNames {
-    "Soft Clip", "Diode", "Triode", "Transistor",
-    "Tape", "Odd / Even", "Phase Distortion", "Sine Erosion"
-};
-
-namespace
-{
-class ChoiceRow final : public juce::PopupMenu::CustomComponent
-{
-public:
-    ChoiceRow(int count, int selected, bool dark, std::function<void(int)> callback,
-              std::function<void(juce::Graphics&, juce::Rectangle<float>, int, juce::Colour)> painter)
-        : juce::PopupMenu::CustomComponent(false), count(count), selected(selected), dark(dark),
-          callback(std::move(callback)), painter(std::move(painter)) {}
-
-    void getIdealSize(int& width, int& height) override
-    {
-        width = count == 5 ? 180 : 280;
-        height = 34;
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        const auto fg = dark ? juce::Colour(0xfff6f6f6) : juce::Colour(0xff050505);
-        const auto bg = dark ? juce::Colour(0xff050505) : juce::Colour(0xfff6f6f6);
-        g.fillAll(bg);
-        const float cellW = (float)getWidth() / (float)count;
-        for (int i = 0; i < count; ++i)
-        {
-            auto cell = juce::Rectangle<float>(cellW * i, 0.0f, cellW, (float)getHeight()).reduced(1.0f);
-            if (i == selected)
-            {
-                g.setColour(fg); g.fillRect(cell);
-                painter(g, cell.reduced(4.0f), i, bg);
-            }
-            else
-            {
-                g.setColour(fg.withAlpha(i == hovered ? 0.20f : 0.08f)); g.fillRect(cell);
-                painter(g, cell.reduced(4.0f), i, fg);
-            }
-        }
-    }
-
-    void mouseMove(const juce::MouseEvent& e) override
-    {
-        const int next = choiceAt(e.x);
-        if (next != hovered) { hovered = next; repaint(); }
-    }
-    void mouseExit(const juce::MouseEvent&) override { hovered = -1; repaint(); }
-    void mouseDown(const juce::MouseEvent& e) override
-    {
-        const int choice = choiceAt(e.x);
-        if (choice >= 0 && callback) callback(choice);
-        triggerMenuItem();
-    }
-
-private:
-    int choiceAt(int x) const noexcept
-    {
-        return juce::jlimit(0, count - 1, x * count / juce::jmax(1, getWidth()));
-    }
-    int count = 0, selected = 0, hovered = -1;
-    bool dark = false;
-    std::function<void(int)> callback;
-    std::function<void(juce::Graphics&, juce::Rectangle<float>, int, juce::Colour)> painter;
-};
-
-class HoverSaturationRow final : public juce::PopupMenu::CustomComponent
-{
-public:
-    HoverSaturationRow(int selectedMode, juce::Point<int> originalPointer,
-                       std::function<void(int)> callback)
-        : juce::PopupMenu::CustomComponent(false), selectedMode(selectedMode),
-          originalPointer(originalPointer), callback(std::move(callback))
-    {
-        static_assert(kSaturationModeCount == deq::ui::context_menu::saturationItemCount);
-    }
-
-    void getIdealSize(int& width, int& height) override
-    {
-        width = deq::ui::context_menu::saturationMenuWidth;
-        height = deq::ui::context_menu::standardItemHeight;
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        const bool highlighted = hovered || isItemHighlighted();
-        const auto background = getLookAndFeel().findColour(highlighted
-            ? juce::PopupMenu::highlightedBackgroundColourId
-            : juce::PopupMenu::backgroundColourId);
-        const auto foreground = getLookAndFeel().findColour(highlighted
-            ? juce::PopupMenu::highlightedTextColourId
-            : juce::PopupMenu::textColourId);
-        g.fillAll(background);
-        g.setColour(foreground);
-        g.setFont(juce::Font(juce::FontOptions(
-            juce::Font::getDefaultMonospacedFontName(), 15.0f, juce::Font::bold)));
-        auto content = getLocalBounds().reduced(8, 1);
-        content.removeFromLeft(12);
-        g.drawText("Saturation", content, juce::Justification::centredLeft);
-        const auto marker = content.removeFromRight(5).withSizeKeepingCentre(4, 4);
-        g.fillRect(marker);
-    }
-
-    void mouseEnter(const juce::MouseEvent&) override
-    {
-        hovered = true;
-        repaint();
-        openSubmenu();
-    }
-
-    void mouseMove(const juce::MouseEvent&) override { openSubmenu(); }
-    void mouseDown(const juce::MouseEvent&) override { openSubmenu(); }
-    void mouseExit(const juce::MouseEvent&) override { hovered = false; repaint(); }
-
-private:
-    void openSubmenu()
-    {
-        if (submenuOpen)
-            return;
-        submenuOpen = true;
-        juce::PopupMenu submenu;
-        submenu.setLookAndFeel(&getLookAndFeel());
-        for (int mode = 0; mode < kSaturationModeCount; ++mode)
-            submenu.addItem(200 + mode, saturationModeNames[(size_t)mode], true,
-                            mode == selectedMode);
-
-        const auto rowBounds = getScreenBounds();
-        const auto* display = juce::Desktop::getInstance().getDisplays()
-            .getDisplayForPoint(rowBounds.getCentre().toFloat());
-        const auto displayBounds = display != nullptr
-            ? display->userBounds.toNearestInt() : rowBounds.expanded(2048);
-        const auto placement = deq::ui::context_menu::saturationSubmenuPlacement(
-            rowBounds, displayBounds, originalPointer);
-        auto safeThis = juce::Component::SafePointer<HoverSaturationRow>(this);
-        auto action = callback;
-        submenu.showMenuAsync(juce::PopupMenu::Options()
-            .withTargetScreenArea(placement.anchor)
-            .withPreferredPopupDirection(juce::PopupMenu::Options::PopupDirection::downwards)
-            .withMinimumWidth(deq::ui::context_menu::saturationMenuWidth)
-            .withMaximumNumColumns(1)
-            .withStandardItemHeight(deq::ui::context_menu::standardItemHeight),
-            [safeThis, action](int result)
-            {
-                if (safeThis != nullptr)
-                    safeThis->submenuOpen = false;
-                if (result >= 200 && result < 200 + kSaturationModeCount && action)
-                    action(result - 200);
-            });
-    }
-
-    int selectedMode = 0;
-    juce::Point<int> originalPointer;
-    bool hovered = false;
-    bool submenuOpen = false;
-    std::function<void(int)> callback;
-};
-
-void paintFilterIcon(juce::Graphics& g, juce::Rectangle<float> r, int type, juce::Colour colour)
-{
-    r = r.withSizeKeepingCentre(juce::jmin(26.0f, r.getWidth()),
-                                juce::jmin(16.0f, r.getHeight()));
-    juce::Path p;
-    const float x0 = r.getX(), x1 = r.getRight(), y0 = r.getY(), y1 = r.getBottom();
-    const float midX = r.getCentreX(), midY = r.getCentreY();
-    switch (juce::jlimit(0, 9, type))
-    {
-        case 0: // resonant low-pass
-            p.startNewSubPath(x0, midY); p.lineTo(midX - 5.0f, midY);
-            p.cubicTo(midX - 2.0f, midY, midX - 1.0f, y0 + 1.0f, midX + 2.0f, y0 + 2.0f);
-            p.cubicTo(midX + 6.0f, y0 + 3.0f, x1 - 4.0f, y1 - 3.0f, x1, y1); break;
-        case 1: // resonant high-pass
-            p.startNewSubPath(x0, y1); p.cubicTo(x0 + 4.0f, y1 - 3.0f, midX - 6.0f, y0 + 3.0f, midX - 2.0f, y0 + 2.0f);
-            p.cubicTo(midX + 1.0f, y0 + 1.0f, midX + 2.0f, midY, midX + 5.0f, midY);
-            p.lineTo(x1, midY); break;
-        case 2: // true notch
-            p.startNewSubPath(x0, midY); p.lineTo(midX - 3.0f, midY);
-            p.lineTo(midX, y1); p.lineTo(midX + 3.0f, midY); p.lineTo(x1, midY); break;
-        case 3: // tilt
-            p.startNewSubPath(x0, y1 - 3.0f); p.lineTo(x1, y0 + 3.0f); break;
-        case 4: // band-pass
-            p.startNewSubPath(x0, y1 - 2.0f); p.cubicTo(midX - 7.0f, y1 - 2.0f, midX - 6.0f, y0 + 2.0f, midX, y0 + 2.0f);
-            p.cubicTo(midX + 6.0f, y0 + 2.0f, midX + 7.0f, y1 - 2.0f, x1, y1 - 2.0f); break;
-        case 5: // classic parametric bell symbol
-        {
-            const auto oval = juce::Rectangle<float>(midX - 6.0f, midY - 4.0f, 12.0f, 8.0f);
-            p.addEllipse(oval);
-            p.startNewSubPath(x0, midY); p.lineTo(oval.getX(), midY);
-            p.startNewSubPath(oval.getRight(), midY); p.lineTo(x1, midY);
-            break;
-        }
-        case 6: // low shelf
-            p.startNewSubPath(x0, y0 + 3.0f); p.lineTo(midX - 5.0f, y0 + 3.0f);
-            p.cubicTo(midX, y0 + 3.0f, midX, midY, midX + 5.0f, midY); p.lineTo(x1, midY); break;
-        case 7: // high shelf
-            p.startNewSubPath(x0, midY); p.lineTo(midX - 5.0f, midY);
-            p.cubicTo(midX, midY, midX, y0 + 3.0f, midX + 5.0f, y0 + 3.0f); p.lineTo(x1, y0 + 3.0f); break;
-        case 8: // low-pass
-            p.startNewSubPath(x0, midY); p.lineTo(midX - 2.0f, midY);
-            p.cubicTo(midX + 5.0f, midY, x1 - 6.0f, y1 - 9.0f, x1, y1); break;
-        case 9: // high-pass
-            p.startNewSubPath(x0, y1); p.cubicTo(x0 + 6.0f, y1 - 9.0f, midX - 5.0f, midY, midX + 2.0f, midY);
-            p.lineTo(x1, midY); break;
-    }
-    // Cut, Bell and Notch symbols are authored around midY. Keep that common
-    // baseline exact instead of visually recentering their asymmetric curves.
-    if (type == 3 || type == 4 || type == 6 || type == 7)
-    {
-        const auto pathBounds = p.getBounds();
-        p.applyTransform(juce::AffineTransform::translation(
-            r.getCentreX() - pathBounds.getCentreX(), r.getCentreY() - pathBounds.getCentreY()));
-    }
-    g.setColour(colour);
-    g.strokePath(p, juce::PathStrokeType(1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-}
 }
 
 // ── Hit-testing and interaction ────────────────────────────────────
@@ -265,7 +49,6 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
     {
         const int idx = selectedBand + 1;
         dynamicRangeDragParam = proc.apvts.getParameter(bandId(idx, "dyn_range"));
-        dynamicRangeDragBaseGain = proc.apvts.getRawParameterValue(bandId(idx, "gain"))->load();
         dynamicRangeDragging = dynamicRangeDragParam != nullptr;
         dragging = dynamicRangeDragging;
         if (dynamicRangeDragParam)
@@ -293,6 +76,8 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
     const bool shiftMarquee = hit < 0 && e.mods.isLeftButtonDown()
         && e.mods.isShiftDown() && !e.mods.isCommandDown() && !e.mods.isAltDown();
     const bool popupMarquee = hit < 0 && e.mods.isPopupMenu();
+    if (popupMarquee && onContextMenuDismissRequest)
+        onContextMenuDismissRequest();
     if (shiftMarquee || popupMarquee)
     {
         marqueePending = true;
@@ -373,165 +158,166 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
 
     if (e.mods.isPopupMenu() && hit >= 0)
     {
-        // Right-click context menu
         if (!selection[(size_t)hit]) { selection.fill(false); selection[(size_t)hit] = true; }
         selectedBand = hit;
         const int idx = hit + 1;
-
-        juce::PopupMenu menu;
-        menu.setLookAndFeel(&getLookAndFeel());
-        menu.addItem(1, "Enable/Disable Band " + juce::String(idx));
-        menu.addSeparator();
-        const int selectedType = juce::jlimit(0, 9,
+        PrototypeContextMenuModel model;
+        model.bandNumber = idx;
+        model.selectedType = juce::jlimit(0, 9,
             (int)proc.apvts.getRawParameterValue(bandId(idx, "type"))->load());
-        menu.addCustomItem(100, std::make_unique<ChoiceRow>(10, selectedType, darkMode,
-            [this](int type)
-            {
-                proc.undoManager.beginNewTransaction("Set selected band filter type");
-                for (int b = 0; b < kNumBands; ++b)
-                    if (selection[(size_t)b])
-                    {
-                        if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "type")))
-                        {
-                            parameter->beginChangeGesture();
-                            parameter->setValueNotifyingHost(parameter->convertTo0to1((float)type));
-                            parameter->endChangeGesture();
-                        }
-                        if (deq::filter_types::isResonantCutIndex(type))
-                            if (auto* q = proc.apvts.getParameter(bandId(b + 1, "q")))
-                            {
-                                q->beginChangeGesture();
-                                q->setValueNotifyingHost(q->convertTo0to1(
-                                    deq::filter_types::resonantCutDefaultQ));
-                                q->endChangeGesture();
-                            }
-                        if (ResponseCurveComponent::typeDefaultsToMidSide(type))
-                            if (auto* mode = proc.apvts.getParameter(bandId(b + 1, "placement_mode")))
-                            {
-                                mode->beginChangeGesture();
-                                mode->setValueNotifyingHost(mode->convertTo0to1(1.0f));
-                                mode->endChangeGesture();
-                            }
-                    }
-            }, paintFilterIcon), nullptr, "Filter type");
-        menu.addSeparator();
-        const int selectedMode = std::clamp((int)proc.apvts.getRawParameterValue(bandId(idx, "placement_mode"))->load(),0,2);
-        const float selectedPlacement = proc.apvts.getRawParameterValue(bandId(idx, "placement"))->load();
-        const int selectedRoute = std::abs(selectedPlacement) <= 1.0f ? 1
+        const int selectedMode = std::clamp((int)proc.apvts.getRawParameterValue(
+            bandId(idx, "placement_mode"))->load(), 0, 2);
+        const float selectedPlacement = proc.apvts.getRawParameterValue(
+            bandId(idx, "placement"))->load();
+        model.selectedRoute = std::abs(selectedPlacement) <= 1.0f ? 1
             : selectedMode == 2 ? (selectedPlacement < 0.0f ? 5 : 6)
             : selectedMode == 1 ? (selectedPlacement < 0.0f ? 3 : 4)
                                 : (selectedPlacement < 0.0f ? 0 : 2);
-        menu.addCustomItem(101, std::make_unique<ChoiceRow>(7, selectedRoute, darkMode,
-            [this](int route)
+        model.selectedSaturation = std::clamp((int)proc.apvts.getRawParameterValue(
+            bandId(idx, "sat_mode"))->load(), 0, kSaturationModeCount - 1);
+        model.selectedCount = (int)std::count(selection.begin(), selection.end(), true);
+
+        auto safeThis = juce::Component::SafePointer<ResponseCurveComponent>(this);
+        model.toggleBand = [safeThis, idx]
+        {
+            if (safeThis == nullptr) return;
+            auto& self = *safeThis;
+            self.proc.undoManager.beginNewTransaction("Enable/disable selected band");
+            auto* raw = self.proc.apvts.getRawParameterValue(bandId(idx, "on"));
+            auto* parameter = self.proc.apvts.getParameter(bandId(idx, "on"));
+            if (parameter != nullptr && raw != nullptr)
             {
-                static constexpr float placements[] { -100.0f, 0.0f, 100.0f, -100.0f, 100.0f, -100.0f, 100.0f };
-                static constexpr float modes[] { 0,0,0,1,1,2,2 };
-                proc.undoManager.beginNewTransaction("Set selected band placement");
-                for (int b = 0; b < kNumBands; ++b)
-                    if (selection[(size_t)b])
+                parameter->beginChangeGesture();
+                parameter->setValueNotifyingHost(raw->load() > 0.5f ? 0.0f : 1.0f);
+                parameter->endChangeGesture();
+            }
+            self.repaint();
+        };
+        model.chooseFilter = [safeThis](int type)
+        {
+            if (safeThis == nullptr) return;
+            auto& self = *safeThis;
+            self.proc.undoManager.beginNewTransaction("Set selected band filter type");
+            for (int b = 0; b < kNumBands; ++b)
+                if (self.selection[(size_t)b])
+                {
+                    if (auto* parameter = self.proc.apvts.getParameter(bandId(b + 1, "type")))
                     {
-                        if (auto* mode = proc.apvts.getParameter(bandId(b + 1, "placement_mode")))
+                        parameter->beginChangeGesture();
+                        parameter->setValueNotifyingHost(parameter->convertTo0to1((float)type));
+                        parameter->endChangeGesture();
+                    }
+                    if (type == 0 || type == 1)
+                        if (auto* q = self.proc.apvts.getParameter(bandId(b + 1, "q")))
+                        {
+                            q->beginChangeGesture();
+                            q->setValueNotifyingHost(q->convertTo0to1(
+                                deq::filter_types::resonantCutDefaultQ));
+                            q->endChangeGesture();
+                        }
+                    if (ResponseCurveComponent::typeDefaultsToMidSide(type))
+                        if (auto* mode = self.proc.apvts.getParameter(
+                                bandId(b + 1, "placement_mode")))
                         {
                             mode->beginChangeGesture();
-                            mode->setValueNotifyingHost(mode->convertTo0to1(modes[route]));
+                            mode->setValueNotifyingHost(mode->convertTo0to1(1.0f));
                             mode->endChangeGesture();
                         }
-                        if (auto* placement = proc.apvts.getParameter(bandId(b + 1, "placement")))
-                        {
-                            placement->beginChangeGesture();
-                            placement->setValueNotifyingHost(placement->convertTo0to1(placements[route]));
-                            placement->endChangeGesture();
-                        }
-                    }
-            }, [](juce::Graphics& g, juce::Rectangle<float> r, int route, juce::Colour colour)
-            {
-                static constexpr const char* labels[] { "L", "C", "R", "M", "S", "T", "S" };
-                g.setColour(colour);
-                g.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 18.0f, juce::Font::bold)));
-                g.drawText(labels[route], r, juce::Justification::centred);
-            }), nullptr, "Placement");
-        menu.addSeparator();
-        const auto mousePosition = localPointToGlobal(e.getPosition());
-        const int selectedSaturation = std::clamp((int)proc.apvts.getRawParameterValue(
-            bandId(idx, "sat_mode"))->load(), 0, kSaturationModeCount - 1);
-        auto safeThis = juce::Component::SafePointer<ResponseCurveComponent>(this);
-        menu.addCustomItem(102, std::make_unique<HoverSaturationRow>(
-            selectedSaturation, mousePosition, [safeThis](int mode)
-            {
-                if (safeThis == nullptr)
-                    return;
-                auto& self = *safeThis;
-                self.proc.undoManager.beginNewTransaction("Set selected band saturation");
-                const float characterDefault = mode == static_cast<int>(SaturationType::Tape)
-                    || mode == static_cast<int>(SaturationType::PhaseDistortion)
-                    || mode == static_cast<int>(SaturationType::SineErosion) ? 0.5f : 0.0f;
-                const float secondaryDefault = mode == static_cast<int>(SaturationType::Tape)
-                    ? 0.5f : 0.0f;
-                for (int b = 0; b < kNumBands; ++b)
-                    if (self.selection[(size_t)b])
-                        for (const auto& change : {
-                            std::pair<const char*, float>{ "sat_mode", (float)mode },
-                            { "drive_character", characterDefault },
-                            { "drive_secondary", secondaryDefault } })
-                            if (auto* parameter = self.proc.apvts.getParameter(
-                                    bandId(b + 1, change.first)))
-                            {
-                                parameter->beginChangeGesture();
-                                parameter->setValueNotifyingHost(
-                                    parameter->convertTo0to1(change.second));
-                                parameter->endChangeGesture();
-                            }
-                juce::PopupMenu::dismissAllActiveMenus();
-                self.repaint();
-            }), nullptr, "Saturation");
-        menu.addSeparator();
-        menu.addItem(3, "Reset equalizer");
-        const int selectedCount = (int) std::count(selection.begin(), selection.end(), true);
-        if (selectedCount > 1)
+                }
+            self.repaint();
+        };
+        model.chooseRoute = [safeThis](int route)
         {
-            menu.addSeparator();
-            menu.addItem(30, "Bypass selected (" + juce::String(selectedCount) + ")");
-        }
-
-        auto menuOptions = juce::PopupMenu::Options()
-            .withTargetComponent(*this)
-            .withTargetScreenArea(deq::ui::context_menu::mainMenuTarget(mousePosition))
-            .withMinimumWidth(deq::ui::context_menu::mainMenuWidth)
-            .withMaximumNumColumns(1)
-            .withStandardItemHeight(deq::ui::context_menu::standardItemHeight)
-            .withItemThatMustBeVisible(101);
-        menu.showMenuAsync(menuOptions, [this, idx](int result)
-        {
-            if (result == 1)
-            {
-                auto* p = proc.apvts.getRawParameterValue(bandId(idx, "on"));
-                auto* param = proc.apvts.getParameter(bandId(idx, "on"));
-                if (param) param->setValueNotifyingHost(p->load() > 0.5f ? 0.0f : 1.0f);
-            }
-            else if (result == 3)
-            {
-                proc.undoManager.beginNewTransaction("Reset equalizer");
-                for (int band = 0; band < kNumBands; ++band)
-                    proc.resetBandToDefaults(band, false);
-                selection.fill(false);
-                selectedBand = -1;
-            }
-            else if (result == 30)
-            {
-                proc.undoManager.beginNewTransaction("Bypass selected bands");
-                for (int b = 0; b < kNumBands; ++b)
-                    if (selection[(size_t)b])
+            if (safeThis == nullptr) return;
+            auto& self = *safeThis;
+            static constexpr float placements[] {
+                -100.0f, 0.0f, 100.0f, -100.0f, 100.0f, -100.0f, 100.0f
+            };
+            static constexpr float modes[] { 0, 0, 0, 1, 1, 2, 2 };
+            route = juce::jlimit(0, 6, route);
+            self.proc.undoManager.beginNewTransaction("Set selected band placement");
+            for (int b = 0; b < kNumBands; ++b)
+                if (self.selection[(size_t)b])
+                {
+                    if (auto* mode = self.proc.apvts.getParameter(
+                            bandId(b + 1, "placement_mode")))
                     {
-                        if (auto* parameter = proc.apvts.getParameter(bandId(b + 1, "on")))
+                        mode->beginChangeGesture();
+                        mode->setValueNotifyingHost(mode->convertTo0to1(modes[route]));
+                        mode->endChangeGesture();
+                    }
+                    if (auto* placement = self.proc.apvts.getParameter(
+                            bandId(b + 1, "placement")))
+                    {
+                        placement->beginChangeGesture();
+                        placement->setValueNotifyingHost(
+                            placement->convertTo0to1(placements[route]));
+                        placement->endChangeGesture();
+                    }
+                }
+            self.repaint();
+        };
+        model.chooseSaturation = [safeThis](int mode)
+        {
+            if (safeThis == nullptr) return;
+            auto& self = *safeThis;
+            self.proc.undoManager.beginNewTransaction("Set selected band saturation");
+            const float characterDefault = mode == static_cast<int>(SaturationType::Tape)
+                || mode == static_cast<int>(SaturationType::PhaseDistortion)
+                || mode == static_cast<int>(SaturationType::SineErosion) ? 0.5f : 0.0f;
+            const float secondaryDefault = mode == static_cast<int>(SaturationType::Tape)
+                ? 0.5f : 0.0f;
+            for (int b = 0; b < kNumBands; ++b)
+                if (self.selection[(size_t)b])
+                    for (const auto& change : {
+                        std::pair<const char*, float>{ "sat_mode", (float)mode },
+                        { "drive_character", characterDefault },
+                        { "drive_secondary", secondaryDefault } })
+                        if (auto* parameter = self.proc.apvts.getParameter(
+                                bandId(b + 1, change.first)))
                         {
                             parameter->beginChangeGesture();
-                            parameter->setValueNotifyingHost(0.0f);
+                            parameter->setValueNotifyingHost(
+                                parameter->convertTo0to1(change.second));
                             parameter->endChangeGesture();
                         }
+            self.repaint();
+        };
+        model.resetEqualizer = [safeThis]
+        {
+            if (safeThis == nullptr) return;
+            auto& self = *safeThis;
+            self.proc.undoManager.beginNewTransaction("Reset equalizer");
+            for (int band = 0; band < kNumBands; ++band)
+                self.proc.resetBandToDefaults(band, false);
+            self.selection.fill(false);
+            self.selectedBand = -1;
+            self.repaint();
+        };
+        model.bypassSelected = [safeThis]
+        {
+            if (safeThis == nullptr) return;
+            auto& self = *safeThis;
+            self.proc.undoManager.beginNewTransaction("Bypass selected bands");
+            for (int b = 0; b < kNumBands; ++b)
+                if (self.selection[(size_t)b])
+                    if (auto* parameter = self.proc.apvts.getParameter(bandId(b + 1, "on")))
+                    {
+                        parameter->beginChangeGesture();
+                        parameter->setValueNotifyingHost(0.0f);
+                        parameter->endChangeGesture();
                     }
-            }
-            repaint();
-        });
+            self.repaint();
+        };
+
+        if (onContextMenuRequest)
+        {
+            const auto pointer = getParentComponent() != nullptr
+                ? getParentComponent()->getLocalPoint(this, e.getPosition())
+                : e.getPosition();
+            onContextMenuRequest(pointer, std::move(model));
+        }
+        repaint();
         return;
     }
 
@@ -667,8 +453,36 @@ void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
     }
     if (dynamicRangeDragging && dynamicRangeDragParam != nullptr)
     {
-        const float range = juce::jlimit(0.0f, 24.0f,
-            std::abs(yToDb((float)e.y) - dynamicRangeDragBaseGain));
+        const float cursorDb = yToDb((float)e.y);
+        float range = 0.0f;
+        float bestError = std::numeric_limits<float>::max();
+        // The handle represents the actual target response, including Amount
+        // and the other bands. Invert that same curve so it stays directly
+        // under the pointer while dragging.
+        constexpr int coarseSteps = 48;
+        for (int step = 0; step <= coarseSteps; ++step)
+        {
+            const float candidate = 24.0f * (float)step / (float)coarseSteps;
+            const float error = std::abs(dynamicRangeTargetDb(candidate) - cursorDb);
+            if (error < bestError)
+            {
+                bestError = error;
+                range = candidate;
+            }
+        }
+        float low = juce::jmax(0.0f, range - 0.5f);
+        float high = juce::jmin(24.0f, range + 0.5f);
+        for (int iteration = 0; iteration < 10; ++iteration)
+        {
+            const float left = low + (high - low) / 3.0f;
+            const float right = high - (high - low) / 3.0f;
+            if (std::abs(dynamicRangeTargetDb(left) - cursorDb)
+                <= std::abs(dynamicRangeTargetDb(right) - cursorDb))
+                high = right;
+            else
+                low = left;
+        }
+        range = 0.5f * (low + high);
         dynamicRangeDragParam->setValueNotifyingHost(dynamicRangeDragParam->convertTo0to1(range));
         repaint();
         return;
@@ -739,13 +553,9 @@ void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
 
     const bool hasGainDrag = std::any_of(dragGainParams.begin(), dragGainParams.end(),
                                         [](const auto* parameter) { return parameter != nullptr; });
-    if (hasGainDrag && (e.y < 0 || e.y >= getHeight()) && rangeExpansionAvailable
-        && displayMaxDb < maxDisplayDb)
-    {
-        displayMaxDb = displayMaxDb < 24.0f ? 24.0f : maxDisplayDb;
-        rangeExpansionAvailable = false; // at most one range step per drag
-        repaint();
-    }
+    const auto localPointer = getLocalPoint(nullptr, e.getScreenPosition());
+    if (hasGainDrag)
+        expandAutoRtaRangeNearEdge(localPointer.y);
 
     const float anchorFreq = std::clamp(xToFreq((float)e.x), minFreq, maxFreq);
     const float ratio = anchorFreq / std::max(1.0f, groupAnchorFreq);
@@ -774,6 +584,32 @@ void ResponseCurveComponent::mouseDrag(const juce::MouseEvent& e)
             p->setValueNotifyingHost(p->convertTo0to1(newQ));
         }
     }
+}
+
+bool ResponseCurveComponent::expandAutoRtaRangeNearEdge(int localPointerY)
+{
+    const float uiScale = juce::jlimit(0.85f, 4.0f,
+        juce::jmin((float)getWidth() / 744.0f, (float)getHeight() / 254.0f));
+    const int edgeZone = juce::jmax(2, juce::roundToInt(18.0f * uiScale));
+    if (gainRangeMode != 0 || displayMaxDb >= maxDisplayDb)
+        return false;
+    const bool nearEdge = localPointerY <= edgeZone
+        || localPointerY >= getHeight() - edgeZone;
+    if (!nearEdge)
+    {
+        // Moving back into the graph is enough to arm the next range step;
+        // releasing and grabbing the band again is not required.
+        rangeExpansionAvailable = true;
+        return false;
+    }
+    if (!rangeExpansionAvailable)
+        return false;
+    displayMaxDb = displayMaxDb < 12.0f ? 12.0f
+                 : displayMaxDb < 24.0f ? 24.0f : maxDisplayDb;
+    rangeExpansionAvailable = false;
+    staticLayerDirty = true;
+    repaint();
+    return true;
 }
 
 void ResponseCurveComponent::mouseUp(const juce::MouseEvent& e)
