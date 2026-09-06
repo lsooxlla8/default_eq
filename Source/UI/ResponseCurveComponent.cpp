@@ -350,8 +350,6 @@ bool ResponseCurveComponent::updateResponseCurve()
         }
 
         const float baseSlope = proc.apvts.getRawParameterValue(bandId(idx, "slope"))->load();
-        constexpr bool decramp = true;
-
         const auto responseForModulation = [&](float modulation, float probeFrequency)
         {
             const float responseQ = resonantCut ? EQBand::dynamicResonantCutQ(q, modulation)
@@ -361,7 +359,7 @@ bool ResponseCurveComponent::updateResponseCurve()
             const float responseSlope = classicCut
                 ? EQBand::dynamicClassicCutSlope(baseSlope, modulation) : baseSlope;
             const auto rawResponse = variable_slope::response(tp, sr, responseFreq,
-                responseQ, responseGain, responseSlope, decramp, probeFrequency);
+                responseQ, responseGain, responseSlope, probeFrequency);
             const double mix = cut ? (double)EQBand::cutAmountMix(amount)
                                    : (double)std::clamp(amount, 0.0f, 1.0f);
             const auto response = gainBearing ? rawResponse

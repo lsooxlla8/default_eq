@@ -43,7 +43,7 @@ struct BandResponseModel
         const float responseSlope = classicCut
             ? EQBand::dynamicClassicCutSlope(slope, modulation) : slope;
         const auto raw = variable_slope::response(type, sampleRate, responseFrequency,
-            responseQ, responseGain, responseSlope, true, probeFrequency);
+            responseQ, responseGain, responseSlope, probeFrequency);
         const double mix = (classicCut || resonantCut)
             ? (double)EQBand::cutAmountMix(amount)
             : (double)std::clamp(amount, 0.0f, 1.0f);

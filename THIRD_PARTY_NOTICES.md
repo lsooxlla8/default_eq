@@ -2,16 +2,18 @@
 
 ## FreeEQ8
 
-Primary architectural and code base:
+Original code base from which this repository was directly forked:
 
 - repository: https://github.com/GareBear99/FreeEQ8
 - revision: `11376c1c496569c975e4d195c3fe5fd44b53d415`
 - copyright: Gary Doman / GareBear99 and contributors
 - license: GNU GPL version 3
 
-This derivative changes product identity, exact band count, build targets, JUCE
-version, license/update infrastructure, state serialization, bypass/latency,
-filters, dynamic processing, interaction, and UI. Original history is retained.
+The current filter design and much of the product logic have since been
+replaced or substantially reworked. Modified FreeEQ8-derived portions remain
+in the processor lifecycle, APVTS parameter/state scaffolding, band engine,
+spectrum transport, Linear Phase infrastructure, and related integration code.
+Original history is retained.
 
 ## default_distortion
 
@@ -29,20 +31,6 @@ parameters, and integrated with equalizer latency reporting. The family theme
 preferences, drive control semantics, and deterministic lookup-table approach
 were also carried over, while the current EQ-specific tables were generated
 against `default_eq` itself.
-
-## Faust vaeffects.lib matched filters
-
-- repository: https://github.com/grame-cncm/faustlibraries
-- file: `vaeffects.lib`
-- revision: `ccc6030e60806011ae73c9502d9bca85ff2b79fa`
-- relevant author/copyright: Dario Sanfilippo and Faust Libraries contributors
-- license for the adapted matched-filter section: MIT
-- mathematical reference: Martin Vicanek, “Matched Second Order Digital Filters”
-
-The coefficient code in `Source/DSP/Biquad.h` is a modified C++ adaptation:
-finite-domain guards, coefficient output, unsupported-case fallback, and a
-smooth upper-frequency-only RBJ/matched blend were added. See
-`LICENSES/MIT-Faust-vaeffects.txt`.
 
 ## ZLEqualizer
 

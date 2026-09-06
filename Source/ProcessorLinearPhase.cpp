@@ -54,7 +54,6 @@ void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
             q = calculateAdaptiveQ(q, rawGain);
 
         const float slope = apvts.getRawParameterValue(bandId(idx, "slope"))->load();
-        constexpr bool decramp = true;
         const bool cut = zl_filter::isClassicCut(tp) || zl_filter::isResonantCut(tp);
         double responseFreq = freq;
         if (zl_filter::isResonantCut(tp))
@@ -74,7 +73,7 @@ void DefaultEqualizerAudioProcessor::buildLinearPhaseMagnitude()
             if (f < 1.0) continue;
 
             const auto rawResponse = variable_slope::response(tp, sr, responseFreq, q, gain,
-                                                              slope, decramp, f);
+                                                              slope, f);
             const double mix = cut ? (double)EQBand::cutAmountMix(amount)
                                    : (double)std::clamp(amount, 0.0f, 1.0f);
             const auto response = gainBearing ? rawResponse

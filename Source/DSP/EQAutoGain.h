@@ -75,7 +75,7 @@ inline Complex rawResponse(const BandParameters& band, double sampleRate,
 
     const double gain = gainBearing ? (double)band.gainDb * amount : band.gainDb;
     const auto wet = variable_slope::response(type, sampleRate, frequency, q, gain,
-                                               band.slopeDbPerOct, true, probeFrequency);
+                                               band.slopeDbPerOct, probeFrequency);
     if (gainBearing)
         return wet;
 

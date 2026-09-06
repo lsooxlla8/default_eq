@@ -35,7 +35,7 @@
   face-panel controls.
 - Bypassed bands remain visible and selectable as outlined graph nodes; only
   explicit delete releases their numbered slot for clean recreation.
-- Zero-latency minimum phase with always-on de-cramping, Linear Phase
+- Zero-latency minimum phase with ZL-derived filter cascades, Linear Phase
   1024/2048/4096 taps, exact host latency reporting, aligned ramped bypass and
   guarded live latency changes.
 - The retained eight `default_distortion` drive algorithms, spectrally
@@ -46,9 +46,9 @@
   Phase Distortion uses the same input-envelope-modulated delay, linear Depth,
   Tone mapping and tail release core as `default_distortion`.
 - Global stepped Off/2x/4x/8x oversampling quality for the nonlinear per-band
-  drive path. Clean and dynamic EQ remain at the native rate; de-cramping owns
-  the near-Nyquist correction, so selecting oversampling without active drive
-  adds neither work nor latency.
+  drive path. Clean and dynamic EQ remain at the native rate; their ZL-derived
+  filter design is independent of drive oversampling, so selecting oversampling
+  without active drive adds neither work nor latency.
 - Always-both RTA with selectable 4096/8192/16384 FFT size, coherent-gain
   normalisation, resolution-matched fractional-octave smoothing, a fixed 0 dB
   ceiling, adjustable floor, averaging time, and 4.5 dB/oct default tilt.

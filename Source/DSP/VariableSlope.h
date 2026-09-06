@@ -35,7 +35,7 @@ inline std::complex<double> firstOrderCutResponse(bool highPass, double sampleRa
 inline std::complex<double> response(Biquad::Type type, double sampleRate,
                                      double centerFrequency, double q,
                                      double gainDb, double slopeDbPerOct,
-                                     bool /*decramp*/, double probeFrequency)
+                                     double probeFrequency)
 {
     if (type == Biquad::Type::HighPass || type == Biquad::Type::LowPass)
     {

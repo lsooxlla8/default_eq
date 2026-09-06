@@ -1,6 +1,6 @@
 # default_eq
 
-![default_eq 0.5.0 plug-in interface](docs/screenshots/default-eq-0.5.0.png)
+![default_eq plug-in interface](docs/screenshots/default-eq-0.5.0.png)
 
 **default_eq** is designed to be your go-to EQ for tonal shaping, dynamic control, and adding harmonic character exactly where you need it.
 
@@ -38,19 +38,25 @@ support.
 
 ## Thanks and third-party code
 
-- [FreeEQ8](https://github.com/GareBear99/FreeEQ8) by GareBear99, providing the
-  GPLv3 core equalizer DSP and logic.
+- [FreeEQ8](https://github.com/GareBear99/FreeEQ8) by GareBear99, the GPLv3
+  codebase from which `default_eq` was originally forked. Modified portions
+  remain in the processor lifecycle, parameter/state scaffolding, band engine,
+  spectrum transport, and Linear Phase infrastructure.
 - [ZLEqualizer](https://github.com/ZL-Audio/ZLEqualizer) by ZL-Audio, providing
   AGPLv3 filter design and analyzer architecture.
 - [ZLSplitter](https://github.com/ZL-Audio/ZLSplitter) by ZL-Audio, providing
   AGPLv3 transient/sustain separation.
-- [Faust Libraries `vaeffects.lib`](https://github.com/grame-cncm/faustlibraries/blob/ccc6030e60806011ae73c9502d9bca85ff2b79fa/vaeffects.lib)
-  by Dario Sanfilippo and Faust Libraries contributors, providing MIT-licensed
-  matched-filter coefficient code used by de-cramping.
 
 Exact repositories, revisions, licences, modifications, and code boundaries
 are documented in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Included
 license texts are in [`LICENSES/`](LICENSES/).
+
+## Installation
+
+Each binary release includes a platform-specific install script. Double-click
+`Install.command` on macOS, `Install.cmd` on Windows, or `Install.sh` on Linux.
+The scripts install the plug-in formats into the current user's standard
+folders without requiring administrator access.
 
 ## Build
 
@@ -71,11 +77,11 @@ macOS. Builds stay inside the build directory by default. Pass
 `-DDEFAULT_EQ_COPY_PLUGIN_AFTER_BUILD=ON` only when the built plug-ins should
 replace the copies in the user's standard plug-in folders.
 
-The current implementation contract and 0.5.0 verification record are documented
+The current implementation contract and 0.5.1 verification record are documented
 in [`docs/implementation-status.md`](docs/implementation-status.md) and
-[`docs/verification-0.5.0.md`](docs/verification-0.5.0.md). The earlier 0.4.0
-release record remains in
-[`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
+[`docs/verification-0.5.1.md`](docs/verification-0.5.1.md). Earlier release
+records remain in [`docs/verification-0.5.0.md`](docs/verification-0.5.0.md)
+and [`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
 
 ## Licence
 

@@ -201,7 +201,6 @@ struct EQBand
 
     float slopeDbPerOct = 12.0f;
     float targetSlopeDbPerOct = 12.0f;
-    bool decrampEnabled = false;
     zl_filter::Cascade zlCascade;
     static constexpr int maxClassicCutStages = 16;
     std::array<FirstOrderCut, maxClassicCutStages> classicCutStages;

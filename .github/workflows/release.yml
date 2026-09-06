@@ -79,8 +79,14 @@ jobs:
           cp -R build/DefaultEQ_artefacts/Release/VST3/default_eq.vst3 "build/$package/"
           cp -R build/DefaultEQ_artefacts/Release/AU/default_eq.component "build/$package/"
           cp -R build/DefaultEQ_artefacts/Release/Standalone/default_eq.app "build/$package/"
-          cp README.md CHANGELOG.md LICENSE LICENSE.md THIRD_PARTY_NOTICES.md "build/$package/"
-          cp -R LICENSES "build/$package/"
+          python3 Packaging/prepare_release_docs.py \
+            --output "build/$package" --revision "$GITHUB_REF_NAME"
+          cp Packaging/Install.command "build/$package/Install.command"
+          chmod +x "build/$package/Install.command"
+          test -f "build/$package/README.md"
+          test -f "build/$package/LEGAL.txt"
+          test -x "build/$package/Install.command"
+          ! grep -q '^## Build$' "build/$package/README.md"
           ditto -c -k --sequesterRsrc --keepParent "build/$package" "build/$package.zip"
 
       - uses: actions/upload-artifact@v4
@@ -135,8 +141,14 @@ jobs:
           mkdir -p "build/$package"
           cp -R build/DefaultEQ_artefacts/Release/VST3/default_eq.vst3 "build/$package/"
           cp build/DefaultEQ_artefacts/Release/Standalone/default_eq "build/$package/default_eq-Standalone"
-          cp README.md CHANGELOG.md LICENSE LICENSE.md THIRD_PARTY_NOTICES.md "build/$package/"
-          cp -R LICENSES "build/$package/"
+          python3 Packaging/prepare_release_docs.py \
+            --output "build/$package" --revision "$GITHUB_REF_NAME"
+          cp Packaging/Install.sh "build/$package/Install.sh"
+          chmod +x "build/$package/Install.sh"
+          test -f "build/$package/README.md"
+          test -f "build/$package/LEGAL.txt"
+          test -x "build/$package/Install.sh"
+          ! grep -q '^## Build$' "build/$package/README.md"
           tar -C build -czf "build/$package.tar.gz" "$package"
 
       - uses: actions/upload-artifact@v4
@@ -182,8 +194,12 @@ jobs:
           New-Item -ItemType Directory -Path $directory -Force | Out-Null
           Copy-Item -Recurse "build\DefaultEQ_artefacts\Release\VST3\default_eq.vst3" $directory
           Copy-Item "build\DefaultEQ_artefacts\Release\Standalone\default_eq.exe" $directory
-          Copy-Item README.md, CHANGELOG.md, LICENSE, LICENSE.md, THIRD_PARTY_NOTICES.md $directory
-          Copy-Item -Recurse LICENSES $directory
+          python Packaging\prepare_release_docs.py `
+            --output $directory --revision $env:GITHUB_REF_NAME
+          Copy-Item Packaging\Install.cmd "$directory\Install.cmd"
+          if (Select-String -Path "$directory\README.md" -Pattern '^## Build$' -Quiet) {
+            throw "Release README still contains the Build section"
+          }
           Compress-Archive -Path "$directory\*" -DestinationPath "build\$package.zip" -Force
 
       - uses: actions/upload-artifact@v4

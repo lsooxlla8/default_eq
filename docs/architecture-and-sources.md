@@ -1,16 +1,16 @@
 # Architecture and source decision
 
-Decision fixed before transfer: FreeEQ8 is the primary architectural and code
-base; current `default_distortion` supplies the family design system and
-author-owned reusable DSP/UI infrastructure; ZLEqualizer supplies the analyzer
-smoothing/normalisation reference. The combined derivative is AGPL-3.0-only.
+`default_eq` began as a direct FreeEQ8 fork and still contains modified portions
+of that codebase. Its current filter design comes primarily from ZLEqualizer and
+new project-owned integration; `default_distortion` supplies the family design
+system and author-owned reusable DSP/UI infrastructure. The combined derivative
+is AGPL-3.0-only.
 
 | Subsystem | Source | Exact revision | License | Reason | Changes in default_eq | Risk |
 |---|---|---|---|---|---|---|
-| JUCE processor, APVTS, filter/parameter topology | FreeEQ8 | `11376c1c496569c975e4d195c3fe5fd44b53d415` | GPL-3.0 | Closest complete vertical slice | Exactly 8 bands, sidechain bus, mono/stereo safety, versioned single audio state, no DRM/updater/presets/A-B | Medium |
+| JUCE processor and APVTS foundation | FreeEQ8 | `11376c1c496569c975e4d195c3fe5fd44b53d415` | GPL-3.0 | Original codebase from which the repository was forked | Processor lifecycle, parameters/state, band engine, spectrum transport and Linear Phase infrastructure remain in modified form; current filters, routing, dynamics, drive and UI are substantially reworked | Medium |
 | Minimum-phase EQ and response model | ZLEqualizer + default_eq v0.1.0 | ZLEqualizer `02c517e35f0ef8460c15815f303051dffdb0895a` | AGPL-3.0 | Matched coefficients, exact discrete high-order cascades and Flat Tilt, plus the preferred original cut behavior | Resonant cut and shaped filters use ZL cascades; Tilt uses ZL's pivot-normalised Flat Tilt bank; classic Low/High Cut use the v0.1.0 resonance-free continuously variable first-order-stage path | High near Nyquist |
 | Transient/sustain routing | ZLSplitter | `2f50824ab925eeff7950986eac640dab43c3ce67` | AGPL-3.0 | Auditable median-mask separation with complementary outputs | One stereo 75%-overlap FFT audio splitter plus warm internal/external detector splitters, 5x5 median mask, two-hop hold delay, host-exposed hidden controls, latency-aligned T/S branches and per-band placement | High |
-| De-cramping | Faust `vaeffects.lib`, Vicanek matched-filter implementation | `ccc6030e60806011ae73c9502d9bca85ff2b79fa` | MIT | Published matched second-order fit with inspectable coefficients | C++ port, finite guards, smooth RBJ-to-matched blend limited to the upper spectrum, independent of oversampling | Medium |
 | Dynamic EQ | FreeEQ8 + ZLEqualizer + new work | FreeEQ8 revision above; ZLEqualizer `02c517e35f0ef8460c15815f303051dffdb0895a` | GPL-3.0 / AGPL-3.0-only | Existing envelope/filter integration plus ZL range interaction | Down/up, placement-aware L/R, M/S and T/S peak detection, calibrated stereo threshold meter, editable fixed threshold, range fill with draggable square, ratio, linked Speed timing, Q-matched detector filters, external SC, individual continuous 0–5 ms lookahead under one maximum host latency, and live GR; classic-cut slope, resonant-cut Q and inverse Band Pass Q modulation | High |
 | Linear phase | FreeEQ8 + JUCE partitioned convolution + new work | FreeEQ8/JUCE revisions above | GPL-3.0 / JUCE upstream terms / AGPL-3.0-only | Preserve the validated magnitude/FIR model without paying for a monolithic FFT per host block | Background symmetric-FIR construction; wait-free IR ownership transfer; zero-additional-latency uniform partitions; 1024/2048/4096 taps and 512/1024/2048 samples latency; routed-band fallback and transition guard | High |
 | Per-band drive | FreeEQ8 plus the author-owned default_distortion project | FreeEQ8 revision above; default_distortion `d145fab57e943869939d6a987cc69f90d676a4ae` | GPL-3.0 / AGPL-3.0-only | Carry the family drive modes and controls while keeping reused code boundaries explicit | Eight displayed algorithms and algorithm-specific Character; Phase Distortion shares default_distortion's input-envelope delay core and linear depth law; Soft Clip uses `std::tanh` and an author-owned bounded cubic morph; Tape is an independently written feedback-memory shaper; compatible stored Secondary semantics, EQ-specific deterministic Auto Gain tables, spectral band extraction, DC blocking, and a true zero-Drive CPU/latency bypass | Medium |

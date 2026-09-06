@@ -553,7 +553,6 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     }
     const float outputGain = cachedOutputGainLinear;
     const bool adaptiveQ = adaptiveQParam->load(std::memory_order_relaxed) > 0.5f;
-    constexpr bool decramp = true;
     const bool linearPhase = linearPhaseParam->load(std::memory_order_relaxed) > 0.5f;
 
     // A1: look up oversampler from the pre-built pool. Zero heap allocation
@@ -563,7 +562,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     //     mirrors JUCE's own behavior and is acceptable.
     // Oversampling is a global quality selection, but only the nonlinear
     // drive section enters the oversampled domain. Clean/dynamic EQ remains
-    // native-rate and de-cramping owns its near-Nyquist correction.
+    // native-rate; the ZL-derived filter cascade owns its response design.
     const int osOrder = (int)oversamplingParam->load(std::memory_order_relaxed);
     if (osOrder != currentOversamplingOrder)
     {
@@ -681,7 +680,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
                              linearStereo ? Biquad::Type::Bell : parameterType,
                              adjustedFrequency, effectiveQ, linearStereo ? 0.0f : bandGain,
                              linearStereo ? 12.0f : p.slope,
-                             placementMode == 1, placement, decramp);
+                             placementMode == 1, placement);
             }
 
             if (effectiveEnabled)
@@ -705,7 +704,7 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
                         branch.dynThreshDb=b.dynThreshDb; branch.dynRatio=b.dynRatio;
                         branch.dynAttackMs=b.dynAttackMs; branch.dynReleaseMs=b.dynReleaseMs;
                         branch.beginBlock(sr,true,b.type,b.targetFreqHz,b.targetQ,b.targetGainDb,
-                                          b.targetSlopeDbPerOct,false,0.0f,decramp);
+                                          b.targetSlopeDbPerOct,false,0.0f);
                         if (branch.driveActive())
                             branch.prepareDriveRate(configuredOS != nullptr ? effectiveSR : sr);
                     };
@@ -923,8 +922,8 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
     }
 
     // Static and dynamic filtering stay at base rate. Oversampling is reserved
-    // for the nonlinear per-band drive section; de-cramping handles the linear
-    // response near Nyquist without multiplying the complete EQ workload.
+    // for the nonlinear per-band drive section; the ZL-derived cascades own the
+    // linear response without multiplying the complete EQ workload.
     auto processEQ = [&](float* left, float* right, int numSamples, double processSR)
     {
         bool allStatic = soloedBand < 0;

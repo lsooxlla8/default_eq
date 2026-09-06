@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1
+
+- Corrected the upstream attribution boundaries after auditing the current DSP:
+  FreeEQ8 remains an original codebase with modified portions still present,
+  while the unused Faust matched-filter implementation was removed.
+- Simplified binary packages to one release README, one consolidated legal file,
+  and a double-click install script for each platform.
+- Replaced the README interface image with a sharp `1504 x 908` Retina render.
+
 ## 0.5.0
 
 - Rebuilt the editor around the approved fixed-ratio `default_` interface with

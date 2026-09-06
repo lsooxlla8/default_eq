@@ -47,8 +47,7 @@
     void beginBlock(double sampleRate, bool isEnabled, Biquad::Type newType,
                     float newFreqHz, float newQ, float newGainDb,
                     float newSlopeDbPerOct = 12.0f, bool useMidSidePlacement = false,
-                    float newPlacement = 0.0f,
-                    bool useDecramping = false)
+                    float newPlacement = 0.0f)
     {
         const float clampedSlope = zl_filter::isClassicCut(newType)
             ? std::clamp(newSlopeDbPerOct, 3.0f, 96.0f)
@@ -57,8 +56,7 @@
         const float clampedPlacement = std::clamp(newPlacement, -1.0f, 1.0f);
         const bool topologyChanged = !coefficientsValid || processSampleRate != sampleRate
             || enabled != isEnabled || type != newType
-            || (!newTypeIsClassicCut && slopeDbPerOct != clampedSlope)
-            || decrampEnabled != useDecramping;
+            || (!newTypeIsClassicCut && slopeDbPerOct != clampedSlope);
         const bool gainScaleChanged = !std::isfinite(appliedGainScale)
             || std::abs(appliedGainScale - gainScale) > 1.0e-6f;
         const bool auxiliaryChanged = topologyChanged || targetFreqHz != newFreqHz || targetQ != newQ;
@@ -80,7 +78,6 @@
         placement = clampedPlacement;
         firstPlacementWeight = std::clamp(1.0f - placement, 0.0f, 1.0f);
         secondPlacementWeight = std::clamp(1.0f + placement, 0.0f, 1.0f);
-        decrampEnabled = useDecramping;
         if (!coefficientsValid)
             amountSm.setCurrentAndTargetValue(globalAmount);
         else
