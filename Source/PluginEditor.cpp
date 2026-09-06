@@ -314,7 +314,11 @@ void SettingsOverlay::paint(juce::Graphics& g)
              area.reduced(8 * line, 4 * line).withTrimmedLeft(29 * line).withTrimmedTop(12 * line),
              9.0f, true, 0.9f, default_family::PrototypeTextAlign::left);
     };
-    const auto command = juce::String(JUCE_MAC ? "CMD" : "CTRL");
+#if JUCE_MAC
+    const auto command = juce::String("CMD");
+#else
+    const auto command = juce::String("CTRL");
+#endif
     struct ShortcutRow { juce::String key, action; };
     struct ShortcutGroup { juce::String title; std::array<ShortcutRow, 5> rows; };
     const std::array<ShortcutGroup, 6> shortcutGroups {{
