@@ -106,8 +106,9 @@ SettingsOverlay::Cell SettingsOverlay::cellAt(juce::Point<int> point) const noex
     }
     if (y < 84.0f)
     {
-        if (x < 248.0f) return Cell::floor;
-        if (x < 496.0f) return Cell::average;
+        if (x < 186.0f) return Cell::ceiling;
+        if (x < 372.0f) return Cell::floor;
+        if (x < 558.0f) return Cell::average;
         return Cell::slope;
     }
     if (y < 126.0f)
@@ -137,7 +138,9 @@ void SettingsOverlay::notifyChanged()
 
 void SettingsOverlay::nudge(Cell cell, float amount)
 {
-    if (cell == Cell::floor)
+    if (cell == Cell::ceiling)
+        state.rtaCeilingDb = juce::jlimit(-24.0f, 24.0f, state.rtaCeilingDb + amount * 2.0f);
+    else if (cell == Cell::floor)
         state.rtaFloorDb = juce::jlimit(-140.0f, -30.0f, state.rtaFloorDb + amount * 2.0f);
     else if (cell == Cell::average)
         state.rtaAverageSeconds = juce::jlimit(0.0f, 1.0f,
@@ -164,7 +167,8 @@ void SettingsOverlay::mouseDown(const juce::MouseEvent& event)
     dragStartState = state;
     if (event.mods.isPopupMenu() || event.mods.isRightButtonDown())
     {
-        if (draggedCell == Cell::floor) state.rtaFloorDb = -80.0f;
+        if (draggedCell == Cell::ceiling) state.rtaCeilingDb = 0.0f;
+        else if (draggedCell == Cell::floor) state.rtaFloorDb = -80.0f;
         else if (draggedCell == Cell::average) state.rtaAverageSeconds = 0.065f;
         else if (draggedCell == Cell::slope) state.rtaSlopeDbPerOct = 4.5f;
         else if (draggedCell == Cell::lightBackground) state.lightBackground = juce::Colour(0xfff6f6f6);
@@ -236,7 +240,10 @@ void SettingsOverlay::changeListenerCallback(juce::ChangeBroadcaster* source)
 void SettingsOverlay::mouseDrag(const juce::MouseEvent& event)
 {
     const float upward = (float)(dragStartY - event.y);
-    if (draggedCell == Cell::floor)
+    if (draggedCell == Cell::ceiling)
+        state.rtaCeilingDb = juce::jlimit(-24.0f, 24.0f,
+            dragStartState.rtaCeilingDb + upward * 0.25f);
+    else if (draggedCell == Cell::floor)
         state.rtaFloorDb = juce::jlimit(-140.0f, -30.0f,
                                         dragStartState.rtaFloorDb + upward * 0.25f);
     else if (draggedCell == Cell::average)
@@ -328,7 +335,7 @@ void SettingsOverlay::paint(juce::Graphics& g)
         { "WHEEL", {{ { "WHEEL", "Q / CUT SLOPE" }, { command + "+WHEEL", "SLOPE" },
                        { "SHIFT+WHEEL", "PLACEMENT" }, { "ALT+WHEEL", "CHARACTER" },
                        { "UPWARD", "INCREASE VALUE" } }} },
-        { "SELECTION", {{ { "SHIFT+CLICK", "TOGGLE BAND" }, { "SHIFT+DRAG", "MARQUEE" },
+        { "SELECTION", {{ { "SHIFT+CLICK", "TOGGLE BAND" }, { "SHIFT+EMPTY", "CREATE + DRAG" },
                            { "RIGHT+DRAG", "MARQUEE" }, { command + "+CLICK", "BYPASS" },
                            { "CLICK NODE", "SELECT" } }} },
         { "RESET", {{ { "SHIFT+" + command + "+CLICK", "CENTER" }, { "SHIFT+RIGHT", "THRESHOLD" },
@@ -379,7 +386,7 @@ void SettingsOverlay::paint(juce::Graphics& g)
         g.fillRect(rect(x, 0, 1, 42));
         g.fillRect(rect(x, 84, 1, 42));
     }
-    for (float x : { 248.0f, 496.0f }) g.fillRect(rect(x, 42, 1, 42));
+    for (float x : { 186.0f, 372.0f, 558.0f }) g.fillRect(rect(x, 42, 1, 42));
     for (int i = 1; i < 5; ++i) g.fillRect(rect(148.8f * i, 182, 1, 72));
 
     static const char* themes[] { "AUTO", "WHITE", "BLACK" };
@@ -388,10 +395,11 @@ void SettingsOverlay::paint(juce::Graphics& g)
     setting("GAIN RANGE", gainRangeText(state.gainRangeMode), rect(186, 0, 186, 42));
     setting("RTA FFT SIZE", fft[juce::jlimit(0, 2, state.fftSizeMode)], rect(372, 0, 186, 42));
     setting("SHOW HOVER TOOLTIP", state.showHoverTooltip ? "ON" : "OFF", rect(558, 0, 186, 42));
-    setting("RTA FLOOR", juce::String(state.rtaFloorDb, 0) + " dB", rect(0, 42, 248, 42));
+    setting("RTA CEILING", juce::String(state.rtaCeilingDb, 0) + " dB", rect(0, 42, 186, 42));
+    setting("RTA FLOOR", juce::String(state.rtaFloorDb, 0) + " dB", rect(186, 42, 186, 42));
     setting("RTA AVERAGE", juce::String(juce::roundToInt(state.rtaAverageSeconds * 1000.0f)) + " ms",
-            rect(248, 42, 248, 42));
-    setting("RTA SLOPE", juce::String(state.rtaSlopeDbPerOct, 1) + " dB/oct", rect(496, 42, 248, 42));
+            rect(372, 42, 186, 42));
+    setting("RTA SLOPE", juce::String(state.rtaSlopeDbPerOct, 1) + " dB/oct", rect(558, 42, 186, 42));
     colourSetting("WHITE BACKGROUND", state.lightBackground, rect(0, 84, 186, 42),
                   editedColour == Cell::lightBackground);
     colourSetting("WHITE INK", state.lightForeground, rect(186, 84, 186, 42),
@@ -1128,7 +1136,8 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     responseCurve.setAnalyzerSettings(
         (float)uiPreferences->getDoubleValue("analyzerFloor", -80.0),
         (float)uiPreferences->getDoubleValue("analyzerAveraging", 0.065),
-        (float)uiPreferences->getDoubleValue("analyzerTilt", 4.5));
+        (float)uiPreferences->getDoubleValue("analyzerTilt", 4.5),
+        (float)uiPreferences->getDoubleValue("analyzerCeiling", 0.0));
     dynThreshold.textFromValueFunction = [](double v) { return cleanDb(v, 1); };
     dynRange.textFromValueFunction = [](double v) { return cleanDb(v, 1); };
     dynSpeed.textFromValueFunction = [](double v) { return juce::String(juce::roundToInt(v)) + "%"; };
@@ -1248,6 +1257,8 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
         uiPreferences->getIntValue("gainRangeMode", 0));
     settings.fftSizeMode = juce::jlimit(0, 2,
         uiPreferences->getIntValue("analyzerFftSizeMode", 1));
+    settings.rtaCeilingDb = juce::jlimit(-24.0f, 24.0f,
+        (float)uiPreferences->getDoubleValue("analyzerCeiling", 0.0));
     settings.rtaFloorDb = (float)uiPreferences->getDoubleValue("analyzerFloor", -80.0);
     settings.rtaAverageSeconds = (float)uiPreferences->getDoubleValue("analyzerAveraging", 0.065);
     settings.rtaSlopeDbPerOct = (float)uiPreferences->getDoubleValue("analyzerTilt", 4.5);
@@ -1418,7 +1429,8 @@ void DefaultEqualizerAudioProcessorEditor::applySettings(const SettingsOverlay::
     responseCurve.setGainRangeMode(state.gainRangeMode);
     responseCurve.setHoverTooltipEnabled(state.showHoverTooltip);
     responseCurve.setAnalyzerSettings(state.rtaFloorDb, state.rtaAverageSeconds,
-                                      state.rtaSlopeDbPerOct);
+                                      state.rtaSlopeDbPerOct, state.rtaCeilingDb);
+    proc.uiStatisticsAveragingSeconds.store(state.rtaAverageSeconds, std::memory_order_relaxed);
     if (appliedFftSizeMode != state.fftSizeMode)
     {
         appliedFftSizeMode = state.fftSizeMode;
@@ -1432,6 +1444,7 @@ void DefaultEqualizerAudioProcessorEditor::applySettings(const SettingsOverlay::
     if (!persist || uiPreferences == nullptr) return;
     uiPreferences->setValue("gainRangeMode", state.gainRangeMode);
     uiPreferences->setValue("analyzerFftSizeMode", state.fftSizeMode);
+    uiPreferences->setValue("analyzerCeiling", state.rtaCeilingDb);
     uiPreferences->setValue("analyzerFloor", state.rtaFloorDb);
     uiPreferences->setValue("analyzerAveraging", state.rtaAverageSeconds);
     uiPreferences->setValue("analyzerTilt", state.rtaSlopeDbPerOct);

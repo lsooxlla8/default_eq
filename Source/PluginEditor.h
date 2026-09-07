@@ -223,6 +223,7 @@ public:
         int themeMode = 0;
         int gainRangeMode = 0;
         int fftSizeMode = 1;
+        float rtaCeilingDb = 0.0f;
         float rtaFloorDb = -80.0f;
         float rtaAverageSeconds = 0.065f;
         float rtaSlopeDbPerOct = 4.5f;
@@ -257,7 +258,7 @@ public:
 
 private:
     friend int runEditorLayoutRegression();
-    enum class Cell { none, theme, gainRange, fft, hover, floor, average, slope, shortcuts,
+    enum class Cell { none, theme, gainRange, fft, hover, ceiling, floor, average, slope, shortcuts,
                       lightBackground, lightForeground, darkBackground, darkForeground };
     Cell cellAt(juce::Point<int>) const noexcept;
     void nudge(Cell, float amount);

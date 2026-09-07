@@ -430,8 +430,6 @@ void LookAndFeel::drawButtonText(juce::Graphics& g, juce::TextButton& button, bo
         return;
     }
     auto textBounds = button.getLocalBounds().toFloat();
-    if ((bool)button.getProperties().getWithDefault("valueStripCell", false))
-        textBounds.translate(0.0f, -uiScale);
     drawPrototypeText(g, button.getButtonText(), textBounds,
                       9.0f, true, 0.0f, colour,
                       PrototypeTextAlign::centre, uiScale);
@@ -470,8 +468,6 @@ void LookAndFeel::drawToggleButton(juce::Graphics& g, juce::ToggleButton& button
         return;
     }
     auto textBounds = button.getLocalBounds().toFloat();
-    if ((bool)button.getProperties().getWithDefault("valueStripCell", false))
-        textBounds.translate(0.0f, -uiScale);
     drawPrototypeText(g, button.getButtonText(), textBounds,
                       9.0f, true, 0.0f, colour,
                       PrototypeTextAlign::centre, uiScale);
@@ -590,7 +586,7 @@ void LookAndFeel::drawComboBox(juce::Graphics& g, int width, int height, bool is
                 iconWidth, 16.0f * uiScale), type, fg);
             area.removeFromLeft(7.0f * uiScale);
         }
-        drawPrototypeText(g, shownValue, area.translated(0.0f, -uiScale),
+        drawPrototypeText(g, shownValue, area,
                           9.0f, true, 0.0f, valueFg,
                           PrototypeTextAlign::left, uiScale);
     }

@@ -230,6 +230,174 @@ int runEditorLayoutRegression()
                   juce::String::fromUTF8("\xc3\x82")),
           "gain range labels preserve the UTF-8 plus-minus sign");
     {
+        SettingsOverlay overlay;
+        overlay.setSize(744, 254);
+        CHECK(overlay.cellAt({ 90, 60 }) == SettingsOverlay::Cell::ceiling
+                  && overlay.cellAt({ 270, 60 }) == SettingsOverlay::Cell::floor
+                  && overlay.cellAt({ 450, 60 }) == SettingsOverlay::Cell::average
+                  && overlay.cellAt({ 650, 60 }) == SettingsOverlay::Cell::slope,
+              "RTA ceiling precedes floor, average and slope in the settings row");
+        overlay.nudge(SettingsOverlay::Cell::ceiling, -6.0f);
+        CHECK(overlay.getState().rtaCeilingDb == -12.0f, "ceiling supports negative values");
+        overlay.nudge(SettingsOverlay::Cell::ceiling, -1000.0f);
+        CHECK(overlay.getState().rtaCeilingDb == -24.0f
+                  && overlay.getState().rtaCeilingDb > -30.0f,
+              "ceiling minimum cannot cross the floor maximum");
+        overlay.nudge(SettingsOverlay::Cell::ceiling, 1000.0f);
+        CHECK(overlay.getState().rtaCeilingDb == 24.0f, "ceiling has a bounded positive range");
+        const auto now = juce::Time::getCurrentTime();
+        juce::MouseEvent reset(juce::Desktop::getInstance().getMainMouseSource(), { 90, 60 },
+            juce::ModifierKeys(juce::ModifierKeys::rightButtonModifier),
+            1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &overlay, &overlay, now, { 90, 60 }, now, 1, false);
+        overlay.mouseDown(reset);
+        CHECK(overlay.getState().rtaCeilingDb == 0.0f, "right-click resets ceiling to zero");
+    }
+    {
+        DefaultEqualizerAudioProcessor processor;
+        ResponseCurveComponent curve(processor);
+        curve.setSize(744, 254);
+        curve.setGainRangeMode(2);
+        const auto mouse = [&curve](juce::Point<float> point, juce::Point<float> start,
+                                    int modifiers, bool dragged)
+        {
+            const auto now = juce::Time::getCurrentTime();
+            return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), point,
+                juce::ModifierKeys(modifiers), 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                &curve, &curve, now, start, now, 1, dragged);
+        };
+        const int shiftLeft = juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier;
+        for (const float frequency : { 1000.0f, 40.0f, 12000.0f })
+        {
+            for (int band = 0; band < kNumBands; ++band)
+                processor.resetBandToDefaults(band, false);
+            curve.setSelectedBand(-1);
+            processor.apvts.copyState();
+            processor.undoManager.clearUndoHistory();
+            const auto start = juce::Point<float>(curve.freqToX(frequency), curve.dbToY(-3.0f));
+            curve.mouseDown(mouse(start, start, shiftLeft, false));
+            const int band = curve.getSelectedBand();
+            CHECK(band >= 0 && curve.dragging && !curve.marqueePending,
+                  "Shift creates and grabs the alternate filter on mouse-down");
+            if (band < 0) continue;
+            const auto prefix = "b" + juce::String(band + 1) + "_";
+            const int type = (int)processor.apvts.getRawParameterValue(prefix + "type")->load();
+            CHECK(type == ResponseCurveComponent::shiftClickTypeForNewBand(frequency, -3.0f),
+                  "Shift creates Tilt and both resonant Cut types in the correct regions");
+            const float startFrequency = processor.apvts.getRawParameterValue(prefix + "freq")->load();
+            const float startGain = processor.apvts.getRawParameterValue(prefix + "gain")->load();
+            const float startQ = processor.apvts.getRawParameterValue(prefix + "q")->load();
+            const float threshold = processor.apvts.getRawParameterValue(prefix + "dyn_thresh")->load();
+            const auto end = start + juce::Point<float>(18.0f, -20.0f);
+            curve.mouseDrag(mouse(end, start, shiftLeft, true));
+            CHECK(processor.apvts.getRawParameterValue(prefix + "freq")->load() > startFrequency,
+                  "new Shift filter moves horizontally without releasing the mouse");
+            CHECK(ResponseCurveComponent::usesQVerticalDrag(type)
+                      ? processor.apvts.getRawParameterValue(prefix + "q")->load() > startQ
+                        && processor.apvts.getRawParameterValue(prefix + "gain")->load() == startGain
+                      : processor.apvts.getRawParameterValue(prefix + "gain")->load() > startGain,
+                  "new Tilt drags gain while resonant Cuts drag Q");
+            CHECK(processor.apvts.getRawParameterValue(prefix + "dyn_thresh")->load() == threshold,
+                  "held Shift during creation does not switch into threshold editing");
+            curve.mouseUp(mouse(end, start, 0, true));
+            CHECK(!curve.dragging && curve.dragFreqParams[(size_t)band] == nullptr
+                      && curve.dragGainParams[(size_t)band] == nullptr
+                      && curve.dragQParams[(size_t)band] == nullptr,
+                  "release ends the new filter parameter gestures");
+            processor.apvts.copyState();
+            processor.undoManager.beginNewTransaction();
+            CHECK(processor.undoManager.undo()
+                      && processor.apvts.getRawParameterValue(prefix + "present")->load() < 0.5f,
+                  "one Undo removes both Shift creation and its immediate drag");
+        }
+        const auto start = juce::Point<float>(200, 30);
+        curve.mouseDown(mouse(start, start, juce::ModifierKeys::rightButtonModifier, false));
+        CHECK(curve.marqueePending, "right-drag still starts marquee selection");
+        curve.mouseDrag(mouse({ 500, 200 }, start, juce::ModifierKeys::rightButtonModifier, true));
+        CHECK(curve.marqueeDragging, "right-drag still expands marquee selection");
+        curve.mouseUp(mouse({ 500, 200 }, start, 0, true));
+    }
+    {
+        DefaultEqualizerAudioProcessor processor;
+        ResponseCurveComponent curve(processor);
+        constexpr int bins = 2048;
+        std::array<float, bins> spectrum;
+        spectrum.fill(-40.0f);
+        curve.setAnalyzerSettings(-80.0f, 0.0f, 0.0f, -12.0f);
+        curve.pushSpectrumData(spectrum.data(), bins, 48000.0, false);
+        curve.refreshForTimer(true);
+        const auto flat = curve.calculateSpectralStatistics();
+        CHECK(flat.valid && flat.tonalPercent[9] > flat.tonalPercent[0],
+              "Tonal Balance retains the original relative power distribution");
+        curve.setAnalyzerSettings(-100.0f, 0.0f, 3.0f, 12.0f);
+        curve.refreshForTimer(true);
+        const auto tilted = curve.calculateSpectralStatistics();
+        CHECK(tilted.tonalPercent == flat.tonalPercent,
+              "RTA slope, floor and ceiling do not change Tonal Balance");
+        CHECK(std::abs(tilted.centroidHz - flat.centroidHz) < 0.01f
+                  && std::abs(tilted.averageTiltDbPerOct - flat.averageTiltDbPerOct) < 0.001f,
+              "display slope does not alter measured centroid or spectral tilt");
+        CHECK(curve.analyzerCeilingDb == 12.0f && curve.analyzerFloorDb == -100.0f
+                  && ResponseCurveComponent::analyzerLevelToY(12.0f, -100.0f, 112.0f, 200.0f) == 0.0f
+                  && ResponseCurveComponent::analyzerLevelToY(-100.0f, -100.0f, 112.0f, 200.0f) == 200.0f,
+              "shared analyzer mapping places ceiling at top and floor at bottom");
+        curve.setAnalyzerSettings(-100.0f, 1.0f, 3.0f);
+        for (int bin = 1; bin < bins; ++bin)
+            spectrum[(size_t)bin] = -60.0f - 3.0f * std::log2(bin * (24000.0f / bins) / 1000.0f);
+        curve.pushSpectrumData(spectrum.data(), bins, 48000.0, false);
+        const auto target = curve.calculateRawSpectralStatistics();
+        curve.refreshForTimer(true);
+        const auto averaged = curve.calculateSpectralStatistics();
+        const auto between = [](float value, float first, float last)
+        { return value > std::min(first, last) && value < std::max(first, last); };
+        CHECK(between(averaged.centroidHz, tilted.centroidHz, target.centroidHz)
+                  && between(averaged.averageTiltDbPerOct, tilted.averageTiltDbPerOct, target.averageTiltDbPerOct)
+                  && between(averaged.tonalPercent[9], tilted.tonalPercent[9], target.tonalPercent[9]),
+              "RTA average smooths centroid, spectral tilt and Tonal Balance");
+        curve.setAnalyzerSettings(-100.0f, 0.0f, 3.0f);
+        curve.refreshForTimer(true);
+        const auto immediate = curve.calculateSpectralStatistics();
+        CHECK(std::abs(immediate.centroidHz - target.centroidHz) < 0.01f
+                  && std::abs(immediate.averageTiltDbPerOct - target.averageTiltDbPerOct) < 0.001f
+                  && std::abs(immediate.tonalPercent[9] - target.tonalPercent[9]) < 0.001f,
+              "zero RTA average removes spectral statistics smoothing");
+        spectrum.fill(-110.0f);
+        curve.pushSpectrumData(spectrum.data(), bins, 48000.0, false);
+        curve.refreshForTimer(true);
+        CHECK(!curve.calculateSpectralStatistics().valid,
+              "spectral statistics preserve their original silence threshold");
+        spectrum.fill(-140.0f);
+        curve.pushSpectrumData(spectrum.data(), bins, 48000.0, false);
+        curve.refreshForTimer(true);
+        CHECK(!curve.calculateSpectralStatistics().valid, "silence clears spectral statistics");
+    }
+    {
+        DefaultEqualizerAudioProcessor processor;
+        processor.prepareToPlay(48000.0, 256);
+        processor.setAnalyzerEnabled(true);
+        processor.uiStatisticsAveragingSeconds.store(1.0f);
+        juce::AudioBuffer<float> buffer(2, 256);
+        juce::MidiBuffer midi;
+        const auto impulse = [&]
+        {
+            buffer.clear();
+            buffer.setSample(0, 0, 0.5f);
+            buffer.setSample(1, 0, 0.5f);
+            processor.processBlock(buffer, midi);
+        };
+        impulse();
+        const float slowCrest = processor.uiOutputCrestDb.load();
+        const float slowCorrelation = processor.uiOutputCorrelation.load();
+        CHECK(slowCrest > 0.0f && slowCrest < 1.0f
+                  && slowCorrelation > 0.0f && slowCorrelation < 0.01f,
+              "RTA average slows both crest factor and correlation measurements");
+        processor.uiStatisticsAveragingSeconds.store(0.0f);
+        impulse();
+        CHECK(processor.uiOutputCrestDb.load() > 20.0f
+                  && std::abs(processor.uiOutputCorrelation.load() - 1.0f) < 0.001f,
+              "zero RTA average makes crest factor and correlation immediate");
+        processor.releaseResources();
+    }
+    {
         DefaultEqualizerAudioProcessor menuProcessor;
         DefaultEqualizerAudioProcessorEditor menuEditor(menuProcessor);
         menuEditor.setSize(editor_layout::designWidth, editor_layout::designHeight);
@@ -368,6 +536,20 @@ int runEditorLayoutRegression()
         setRangeParameter("b1_present", 1.0f);
         setRangeParameter("b1_gain", 13.0f);
         editor.responseCurve.resetAutoRtaRangeForOpen();
+        const auto originalAnalyzerSettings = editor.settingsOverlay.getState();
+        auto analyzerSettings = originalAnalyzerSettings;
+        analyzerSettings.rtaCeilingDb = -12.0f;
+        analyzerSettings.rtaFloorDb = -100.0f;
+        analyzerSettings.rtaAverageSeconds = 0.5f;
+        analyzerSettings.rtaSlopeDbPerOct = 3.0f;
+        editor.applySettings(analyzerSettings, false);
+        CHECK(editor.responseCurve.analyzerCeilingDb == -12.0f
+                  && editor.responseCurve.analyzerFloorDb == -100.0f
+                  && editor.responseCurve.analyzerAveragingSeconds == 0.5f
+                  && editor.responseCurve.analyzerTiltDbPerOct == 3.0f
+                  && processor.uiStatisticsAveragingSeconds.load() == 0.5f,
+              "one settings change reaches both spectrum and audio statistics averaging");
+        editor.applySettings(originalAnalyzerSettings, false);
         auto paletteState = editor.settingsOverlay.getState();
         paletteState.themeMode = default_family::ThemePreferences::white;
         paletteState.lightBackground = juce::Colour(0xffdcf3d2);

@@ -1,4 +1,4 @@
-# Development status — 0.5.0 (`default_eq`)
+# Development status — 0.5.2 (`default_eq`)
 
 ## Implemented and exercised
 
@@ -13,7 +13,7 @@
   Cmd-click bypass, Cmd-drag drive, Cmd-right-click Drive/Character reset,
   Alt-right-click slope reset, Shift-click selection toggle on nodes,
   Shift-Cmd-click placement reset, Shift-click Flat Tilt/resonant edge-cut
-  creation or marquee selection on empty graph space,
+  creation with immediate dragging, right-drag marquee selection on empty graph space,
   Shift-drag threshold, Shift-wheel L/R, M/S or T/S placement, momentary Alt-click solo,
   embedded/context numeric input, relative group drag,
   group bypass/delete, and one Undo step per gesture.
@@ -50,8 +50,10 @@
   filter design is independent of drive oversampling, so selecting oversampling
   without active drive adds neither work nor latency.
 - Always-both RTA with selectable 4096/8192/16384 FFT size, coherent-gain
-  normalisation, resolution-matched fractional-octave smoothing, a fixed 0 dB
-  ceiling, adjustable floor, averaging time, and 4.5 dB/oct default tilt.
+  normalisation, resolution-matched fractional-octave smoothing, an adjustable
+  −24 to +24 dB ceiling (default 0 dB), adjustable floor, averaging time, and
+  4.5 dB/oct default tilt. Averaging also controls all Spectral Statistics;
+  Tonal Balance keeps its independent relative scale.
   Peak Hold is always active and clears on every host transport stop-to-play
   transition and editor reopen. Audio-side capture is dormant while the editor
   is hidden.

@@ -325,7 +325,7 @@ void NumericValueControl::paint(juce::Graphics& g)
         auto area = getLocalBounds().toFloat().reduced(8.0f * scale, 3.0f * scale);
         const float labelWidth = default_family::prototypeTextWidth(
             getName(), 9.0f, true, 0.07f, scale);
-        auto labelArea = area.removeFromLeft(labelWidth).translated(0.0f, -scale);
+        auto labelArea = area.removeFromLeft(labelWidth);
         default_family::drawPrototypeText(g, getName(), labelArea,
             9.0f, true, 0.07f, fg.withAlpha(0.72f),
             default_family::PrototypeTextAlign::left, scale);

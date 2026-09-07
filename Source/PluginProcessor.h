@@ -67,6 +67,7 @@ public:
     std::atomic<bool> smartAutoGainLocked { false };
     std::atomic<float> smartAutoGainProgress { 0.0f };
     std::atomic<std::uint64_t> transportStartGeneration { 0 };
+    std::atomic<float> uiStatisticsAveragingSeconds { 0.065f };
     std::atomic<float> uiOutputCrestDb { 0.0f };
     std::atomic<float> uiOutputCorrelation { 0.0f };
     // Restores every parameter owned by one band. New graph nodes always call

@@ -73,16 +73,13 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    const bool shiftMarquee = hit < 0 && e.mods.isLeftButtonDown()
-        && e.mods.isShiftDown() && !e.mods.isCommandDown() && !e.mods.isAltDown();
     const bool popupMarquee = hit < 0 && e.mods.isPopupMenu();
     if (popupMarquee && onContextMenuDismissRequest)
         onContextMenuDismissRequest();
-    if (shiftMarquee || popupMarquee)
+    if (popupMarquee)
     {
         marqueePending = true;
         marqueeDragging = false;
-        marqueeCreatesShiftFilterOnClick = shiftMarquee;
         marqueeStart = marqueeCurrent = e.position;
         return;
     }
@@ -144,9 +141,11 @@ void ResponseCurveComponent::mouseDown(const juce::MouseEvent& e)
     }
 
     if (hit < 0 && e.mods.isLeftButtonDown() && !e.mods.isCommandDown()
-        && !e.mods.isAltDown() && !e.mods.isShiftDown())
+        && !e.mods.isAltDown())
     {
-        hit = createBandAt((float)e.x, (float)e.y, e.eventTime.toMilliseconds(), -1);
+        const int type = e.mods.isShiftDown()
+            ? shiftClickTypeForNewBand(xToFreq((float)e.x), yToDb((float)e.y)) : -1;
+        hit = createBandAt((float)e.x, (float)e.y, e.eventTime.toMilliseconds(), type);
         if (hit >= 0)
         {
             // Creation and the immediately following move remain one Undo step.
@@ -621,19 +620,12 @@ void ResponseCurveComponent::mouseUp(const juce::MouseEvent& e)
             marqueeCurrent = e.position;
             updateMarqueeSelection();
         }
-        else if (marqueeCreatesShiftFilterOnClick)
-        {
-            const float frequency = std::clamp(xToFreq(marqueeStart.x), minFreq, maxFreq);
-            const float gain = std::clamp(yToDb(marqueeStart.y), minBandGainDb, maxBandGainDb);
-            createBandAt(marqueeStart.x, marqueeStart.y, e.eventTime.toMilliseconds(),
-                         shiftClickTypeForNewBand(frequency, gain));
-        }
         else
         {
             selection.fill(false);
             selectedBand = -1;
         }
-        marqueePending = marqueeDragging = marqueeCreatesShiftFilterOnClick = false;
+        marqueePending = marqueeDragging = false;
         repaint();
         return;
     }

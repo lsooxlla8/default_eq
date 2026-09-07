@@ -123,7 +123,21 @@ void ResponseCurveComponent::resetAutoRtaRangeForOpen()
     repaint();
 }
 
-SpectralStatistics ResponseCurveComponent::calculateSpectralStatistics() const
+void ResponseCurveComponent::setAnalyzerSettings(float floorDb, float averagingSeconds,
+                                                  float tilt, float ceilingDb)
+{
+    analyzerCeilingDb = juce::jlimit(-24.0f, 24.0f, ceilingDb);
+    analyzerFloorDb = juce::jlimit(-140.0f, -30.0f, floorDb);
+    analyzerAveragingSeconds = juce::jlimit(0.0f, 1.0f, averagingSeconds);
+    if (analyzerTiltDbPerOct != tilt)
+    {
+        analyzerTiltDbPerOct = tilt;
+        resetPeakHold();
+    }
+    repaint();
+}
+
+SpectralStatistics ResponseCurveComponent::calculateRawSpectralStatistics() const
 {
     SpectralStatistics result;
     if (currentSpectrumSize < 2 || spectrumSampleRate <= 0.0)
@@ -405,6 +419,19 @@ void ResponseCurveComponent::advanceSpectrumFrame()
     };
     advance(inputSpectrum, smoothedInputSpectrum, peakInputSpectrum);
     advance(outputSpectrum, smoothedOutputSpectrum, peakOutputSpectrum);
+
+    const auto next = calculateRawSpectralStatistics();
+    if (!spectralStatistics.valid || !next.valid)
+        spectralStatistics = next;
+    else
+    {
+        const auto smooth = [averaging](float& current, float target)
+        { current += averaging * (target - current); };
+        smooth(spectralStatistics.centroidHz, next.centroidHz);
+        smooth(spectralStatistics.averageTiltDbPerOct, next.averageTiltDbPerOct);
+        for (size_t band = 0; band < next.tonalPercent.size(); ++band)
+            smooth(spectralStatistics.tonalPercent[band], next.tonalPercent[band]);
+    }
 }
 
 bool ResponseCurveComponent::refreshForTimer(bool spectrumFrameArrived)

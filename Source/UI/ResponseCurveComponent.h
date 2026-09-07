@@ -103,14 +103,7 @@ public:
     {
         return component == &numericEditor || numericEditor.isParentOf(component);
     }
-    void setAnalyzerSettings(float floorDb, float averagingSeconds, float tilt)
-    {
-        analyzerFloorDb = floorDb;
-        analyzerDecayDb = 1.5f;
-        analyzerAveragingSeconds = averagingSeconds;
-        analyzerTiltDbPerOct = tilt;
-        repaint();
-    }
+    void setAnalyzerSettings(float floorDb, float averagingSeconds, float tilt, float ceilingDb = 0.0f);
     void setHoverTooltipEnabled(bool enabled)
     {
         if (showHoverTooltip == enabled) return;
@@ -122,7 +115,7 @@ public:
     int getGainRangeMode() const noexcept { return gainRangeMode; }
     float getDisplayMaxDb() const noexcept { return displayMaxDb; }
     void resetAutoRtaRangeForOpen();
-    SpectralStatistics calculateSpectralStatistics() const;
+    SpectralStatistics calculateSpectralStatistics() const { return spectralStatistics; }
 
     // Band colors
     static juce::Colour getBandColour(int bandIndex);
@@ -226,7 +219,6 @@ private:
     bool momentarySoloActive = false;
     bool marqueePending = false;
     bool marqueeDragging = false;
-    bool marqueeCreatesShiftFilterOnClick = false;
     juce::Point<float> marqueeStart, marqueeCurrent;
     int modifierGestureBand = -1;
     int mostRecentlyCreatedBand = -1;
@@ -254,7 +246,10 @@ private:
     { return darkMode ? darkBackgroundColour : lightBackgroundColour; }
     bool showInputSpectrum = true, showOutputSpectrum = true;
     bool showHoverTooltip = true;
+    float analyzerCeilingDb = 0.0f;
     float analyzerFloorDb = -90.0f, analyzerDecayDb = 1.5f;
+    SpectralStatistics spectralStatistics;
+    SpectralStatistics calculateRawSpectralStatistics() const;
     float analyzerAveragingSeconds = 0.065f, analyzerTiltDbPerOct = 4.5f;
     juce::Image staticLayer;
     bool staticLayerDirty = true;

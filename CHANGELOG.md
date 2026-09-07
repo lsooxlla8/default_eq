@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+- Aligned the band parameter row.
+- Added RTA Ceiling and shared averaging for all Spectral Statistics.
+- Kept Tonal Balance independent of RTA Slope, Floor, and Ceiling.
+- Enabled immediate dragging when creating Tilt and resonant Cut filters with Shift.
+
 ## 0.5.1
 
 - Corrected the upstream attribution boundaries after auditing the current DSP:

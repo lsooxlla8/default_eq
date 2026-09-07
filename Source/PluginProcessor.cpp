@@ -1289,8 +1289,9 @@ void DefaultEqualizerAudioProcessor::processBlock(juce::AudioBuffer<float>& buff
         const float correlation = mainChannels < 2 ? 1.0f
             : correlationDenominator > 1.0e-20
                 ? (float)std::clamp(sumLR / correlationDenominator, -1.0, 1.0) : 0.0f;
-        const float smoothing = 1.0f - std::exp(-(float)n
-            / (float)std::max(1.0, sr * 0.20));
+        const float averagingSeconds = uiStatisticsAveragingSeconds.load(std::memory_order_relaxed);
+        const float smoothing = averagingSeconds <= 0.0f ? 1.0f
+            : 1.0f - std::exp(-(float)n / (float)std::max(1.0, sr * averagingSeconds));
         uiOutputCrestSmoothed += smoothing * (crest - uiOutputCrestSmoothed);
         uiOutputCorrelationSmoothed += smoothing
             * (correlation - uiOutputCorrelationSmoothed);

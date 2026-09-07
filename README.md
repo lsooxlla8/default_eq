@@ -16,13 +16,14 @@ Most editing happens directly on the analyzer:
   or Low Cut in the lower right.
 - **Shift-click empty space** to create Tilt, except in the lower far-left and
   far-right areas, which create resonant High Cut and Low Cut respectively.
+  Keep the mouse button held to immediately drag any newly created filter.
 - **Cmd-drag** a band to adjust Drive; **Shift-drag** it to adjust the dynamic
   Threshold.
 - Use the **mouse wheel** for Q (or Slope on non-resonant Cut filters),
   **Shift-wheel** for placement, **Cmd/Ctrl-wheel** for Slope, and **Alt-wheel**
   for Character. Scrolling up increases Slope; scrolling down decreases it.
 - **Shift-click** individual bands to add or remove them from the selection.
-  **Shift-drag** or **right-drag** a marquee over empty graph space to select
+  **Right-drag** a marquee over empty graph space to select
   multiple bands.
 - **Alt-click** a band to momentarily solo it; **Cmd-click** toggles bypass.
 - **Right-click** a band to choose its filter, L/R–M/S–T/S placement,
@@ -31,6 +32,11 @@ Most editing happens directly on the analyzer:
   its Slope; **Cmd-right-click** resets its Drive and Character.
 - For precise adjustments, **Freq, Gain, Q, and Slope** can also be entered via double-click
   directly in the parameter fields below. 
+
+In the logo settings panel, **RTA AVERAGE** controls averaging for the analyzer
+and all Spectral Statistics. Tonal Balance retains its relative scale, independent
+of **RTA SLOPE**, **RTA FLOOR**, and **RTA CEILING**. Ceiling defaults to 0 dB
+and adjusts from −24 to +24 dB; drag or scroll its value, or right-click to reset it.
 
 There is deliberately no internal preset system. Plugin state is handled
 through the host, with complete project recall, versioned state, and Undo/Redo
@@ -77,11 +83,12 @@ macOS. Builds stay inside the build directory by default. Pass
 `-DDEFAULT_EQ_COPY_PLUGIN_AFTER_BUILD=ON` only when the built plug-ins should
 replace the copies in the user's standard plug-in folders.
 
-The current implementation contract and 0.5.1 verification record are documented
+The current implementation contract and 0.5.2 verification record are documented
 in [`docs/implementation-status.md`](docs/implementation-status.md) and
-[`docs/verification-0.5.1.md`](docs/verification-0.5.1.md). Earlier release
-records remain in [`docs/verification-0.5.0.md`](docs/verification-0.5.0.md)
-and [`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
+[`docs/verification-0.5.2.md`](docs/verification-0.5.2.md). Earlier release
+records remain in [`docs/verification-0.5.1.md`](docs/verification-0.5.1.md),
+[`docs/verification-0.5.0.md`](docs/verification-0.5.0.md), and
+[`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
 
 ## Licence
 

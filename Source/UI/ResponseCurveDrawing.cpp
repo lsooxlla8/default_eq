@@ -236,8 +236,8 @@ void ResponseCurveComponent::paintSpectrum(juce::Graphics& g)
             const float freq = (float)i * binWidth;
             if (freq < minFreq || freq > maxFreq) continue;
             const float tilted = smoothed[i] + analyzerTiltDbPerOct * std::log2(freq / 1000.0f);
-            constexpr float ceiling = 0.0f;
-            const float analyzerRangeDb = -analyzerFloorDb;
+            const float ceiling = analyzerCeilingDb;
+            const float analyzerRangeDb = ceiling - analyzerFloorDb;
             const float db = juce::jlimit(analyzerFloorDb, ceiling, tilted);
             const float x = freqToX(freq);
             const float y = analyzerLevelToY(db, analyzerFloorDb, analyzerRangeDb, h);
