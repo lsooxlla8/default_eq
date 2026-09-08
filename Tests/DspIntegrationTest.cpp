@@ -631,9 +631,9 @@ int main()
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("DSP integration: initialise JUCE\n");
     std::printf("DSP integration: defaults\n");
-    CHECK(juce::String(kVersion) == "0.5.2"
-              && juce::String(JucePlugin_VersionString) == "0.5.2",
-          "source and plug-in bundle metadata identify the 0.5.2 release line");
+    CHECK(juce::String(kVersion) == "0.5.3"
+              && juce::String(JucePlugin_VersionString) == "0.5.3",
+          "source and plug-in bundle metadata identify the 0.5.3 release line");
     CHECK(kNumBands == 8, "product exposes exactly eight bands");
     {
         DefaultEqualizerAudioProcessor fresh;

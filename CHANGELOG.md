@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3
+
+- Restored screen-level contextual menus so they are not clipped by the plug-in window.
+- Positioned the main menu from the click and the saturation menu from its live hover side.
+- Made the saturation menu compact and dismiss it when the pointer leaves its trigger and menu.
+- Refreshed the Retina interface screenshot.
+
 ## 0.5.2
 
 - Aligned the band parameter row.

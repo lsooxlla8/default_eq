@@ -184,34 +184,17 @@ private:
     float uiScale = 1.0f;
 };
 
-class PrototypeContextMenu final : public juce::Component
+class PrototypeContextMenu final
 {
 public:
+    ~PrototypeContextMenu();
     void showAt(juce::Point<int>, juce::Component& shell, float scale,
                 PrototypeContextMenuModel);
     void hide();
-    bool hitTest(int, int) override;
-    void paint(juce::Graphics&) override;
-    void mouseMove(const juce::MouseEvent&) override;
-    void mouseExit(const juce::MouseEvent&) override;
-    void mouseDown(const juce::MouseEvent&) override;
-    juce::Rectangle<int> getMainMenuBounds() const noexcept { return mainBounds; }
-    juce::Rectangle<int> getSubmenuBounds() const noexcept { return submenuBounds; }
-    bool isSubmenuVisible() const noexcept { return submenuVisible; }
 
 private:
-    friend int runEditorLayoutRegression();
-    enum class HitKind { none, toggle, filter, route, saturation, saturationChoice, reset, bypass };
-    struct Hit { HitKind kind = HitKind::none; int index = -1; };
-    Hit itemAt(juce::Point<int>) const noexcept;
-    juce::Rectangle<int> scaledRect(int x, int y, int width, int height,
-                                    juce::Point<int> origin) const noexcept;
-    PrototypeContextMenuModel model;
-    juce::Rectangle<int> mainBounds;
-    juce::Rectangle<int> submenuBounds;
-    Hit hovered;
-    float uiScale = 1.0f;
-    bool submenuVisible = false;
+    class Window;
+    std::unique_ptr<Window> window;
 };
 
 class SettingsOverlay final : public juce::Component,

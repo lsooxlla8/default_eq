@@ -277,7 +277,12 @@ juce::Font LookAndFeel::getPopupMenuFont()
 
 int LookAndFeel::getPopupMenuBorderSize()
 {
-    return juce::roundToInt(7.0f * uiScale);
+    return 0;
+}
+
+int LookAndFeel::getMenuWindowFlags()
+{
+    return 0;
 }
 
 void LookAndFeel::positionComboBoxText(juce::ComboBox& box, juce::Label& label)
@@ -298,9 +303,8 @@ void LookAndFeel::getIdealPopupMenuItemSize(const juce::String& text, bool separ
 
 void LookAndFeel::drawPopupMenuBackground(juce::Graphics& g, int width, int height)
 {
+    juce::ignoreUnused(width, height);
     g.fillAll(findColour(juce::PopupMenu::backgroundColourId));
-    g.setColour(findColour(juce::PopupMenu::textColourId));
-    g.drawRect(0, 0, width, height, juce::jmax(1, juce::roundToInt(uiScale)));
 }
 
 void LookAndFeel::drawPopupMenuItem(juce::Graphics& g, const juce::Rectangle<int>& area,

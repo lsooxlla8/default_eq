@@ -1,4 +1,5 @@
 #include "../Source/PluginEditor.h"
+#include "../Source/UI/ContextMenuLayout.h"
 #include "../Source/UI/EditorLayout.h"
 
 #include <array>
@@ -176,6 +177,40 @@ juce::ComboBox* findDirectCombo(juce::Component& editor, const juce::String& nam
 int runEditorLayoutRegression()
 {
     using namespace deq::ui;
+    const juce::Rectangle<int> display { 0, 0, 1000, 800 };
+    const auto opensLeft = context_menu::saturationSubmenuPlacement(
+        { 300, 100, 280, 23 }, display, { 300, 100 });
+    const auto opensRight = context_menu::saturationSubmenuPlacement(
+        { 300, 100, 280, 23 }, display, { 580, 100 });
+    const auto bottomClamp = context_menu::saturationSubmenuPlacement(
+        { 400, 770, 190, 23 }, display, { 590, 770 });
+    CHECK(opensLeft.opensLeft && opensLeft.anchor.getX() == 182,
+          "saturation popup opens from the edge nearest a left-side hover pointer");
+    CHECK(!opensRight.opensLeft && opensRight.anchor.getX() == 580,
+          "saturation popup opens from the edge nearest a right-side hover pointer");
+    const auto leftBandHover = context_menu::saturationSubmenuPlacement(
+        { 80, 100, 280, 23 }, display, { 90, 100 });
+    CHECK(leftBandHover.opensLeft,
+          "a left-band saturation popup does not override the live hover side");
+    CHECK(bottomClamp.anchor.getBottom() + context_menu::saturationMenuHeight
+              <= display.getBottom() - 4,
+          "saturation popup remains fully visible at the bottom screen edge");
+    const auto mainBounds = context_menu::mainMenuPlacement(
+        { 500, 300 }, display, 1.0f, true);
+    CHECK(mainBounds.getX() == 500
+              && mainBounds.getY() + context_menu::routeCentreY == 300,
+          "main popup anchors the L route cell immediately to the right of the pointer");
+    const juce::Rectangle<int> saturationRow { 300, 100, 288, 30 };
+    const juce::Rectangle<int> saturationMenu { 182, 100, 118, 240 };
+    CHECK(context_menu::keepsSaturationSubmenuOpen(
+              saturationRow, saturationMenu, { 400, 115 })
+              && context_menu::keepsSaturationSubmenuOpen(
+                  saturationRow, saturationMenu, { 200, 115 })
+              && !context_menu::keepsSaturationSubmenuOpen(
+                  saturationRow, saturationMenu, { 700, 115 }),
+          "saturation popup remains only over its trigger row or its own window");
+    CHECK(context_menu::saturationMenuWidth == 118,
+          "saturation popup keeps the compact prototype width");
     const auto minimum = editor_layout::constrainedSize(10, 10);
     const auto maximum = editor_layout::constrainedSize(9999, 9999);
     CHECK(minimum == juce::Point<int>(640, 386), "editor minimum preserves 752:454");
@@ -207,10 +242,10 @@ int runEditorLayoutRegression()
     const auto originalSize = editor_layout::constrainedSize(storedWidth, storedHeight);
     struct Scenario { int width, height; const char* name; std::uint64_t expectedSignature; };
     constexpr std::array<Scenario, 4> scenarios {{
-        { 640, 386, "minimum", 16690678474963349848ull },
-        { 752, 454, "default", 3150174731727176645ull },
-        { 1504, 908, "large_2x", 8405357046311610346ull },
-        { 2256, 1362, "large_3x", 7737175751551880503ull }
+        { 640, 386, "minimum", 14945770963110066184ull },
+        { 752, 454, "default", 16590461077126606349ull },
+        { 1504, 908, "large_2x", 16673281797170569122ull },
+        { 2256, 1362, "large_3x", 7151623727713594423ull }
     }};
     CHECK(default_family::ThemePreferences::isDarkForHour(
               default_family::ThemePreferences::automatic, 7)
@@ -429,41 +464,9 @@ int runEditorLayoutRegression()
                 .getChildFile("header-menu.png")),
                 "optional header-menu snapshot is written");
         menuEditor.hideSelectMenu();
-        PrototypeContextMenuModel contextModel;
-        contextModel.bandNumber = 4;
-        contextModel.selectedType = 5;
-        contextModel.selectedRoute = 5;
-        contextModel.selectedSaturation = 4;
-        contextModel.selectedCount = 2;
-        menuEditor.contextMenu.showAt({ 500, 300 }, menuEditor, 1.0f,
-                                      std::move(contextModel));
-        CHECK(menuEditor.contextMenu.isVisible()
-                  && menuEditor.contextMenu.getBounds() == menuEditor.getLocalBounds()
-                  && menuEditor.contextMenu.mainBounds
-                      == juce::Rectangle<int>(460, 190, 288, 257)
-                  && menuEditor.contextMenu.submenuBounds
-                      == juce::Rectangle<int>(282, 322, 178, 254),
-              "context menu uses the prototype shell-relative geometry and left submenu");
-        CHECK(menuEditor.contextMenu.itemAt({ 470, 200 }).kind
-                  == PrototypeContextMenu::HitKind::toggle
-                  && menuEditor.contextMenu.itemAt({ 610, 250 }).kind
-                      == PrototypeContextMenu::HitKind::filter
-                  && menuEditor.contextMenu.itemAt({ 610, 300 }).kind
-                      == PrototypeContextMenu::HitKind::route,
-              "context menu hit zones follow the prototype flow rows");
-        if (menuSnapshotDirectory.isNotEmpty())
-            CHECK(writeRender(menuEditor, 2, juce::File(menuSnapshotDirectory)
-                .getChildFile("context-menu.png")),
-                "optional context-menu snapshot is written");
-        menuEditor.contextMenu.submenuVisible = true;
-        CHECK(menuEditor.contextMenu.itemAt({ 300, 340 }).kind
-                  == PrototypeContextMenu::HitKind::saturationChoice,
-              "saturation submenu rows remain interactive across the shell overlay");
-        if (menuSnapshotDirectory.isNotEmpty())
-            CHECK(writeRender(menuEditor, 2, juce::File(menuSnapshotDirectory)
-                .getChildFile("context-submenu.png")),
-                "optional context-submenu snapshot is written");
-        menuEditor.hideContextMenu();
+        CHECK(menuEditor.familyLook.getPopupMenuBorderSize() == 0
+                  && menuEditor.familyLook.getMenuWindowFlags() == 0,
+              "context popup has neither an inset frame nor a native window shadow");
         menuEditor.setSize(originalSize.x, originalSize.y);
     }
     {

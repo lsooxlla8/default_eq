@@ -1,6 +1,6 @@
 # default_eq
 
-![default_eq plug-in interface](docs/screenshots/default-eq-0.5.0.png)
+![default_eq plug-in interface](docs/screenshots/default-eq-0.5.3.png)
 
 **default_eq** is designed to be your go-to EQ for tonal shaping, dynamic control, and adding harmonic character exactly where you need it.
 
@@ -83,10 +83,11 @@ macOS. Builds stay inside the build directory by default. Pass
 `-DDEFAULT_EQ_COPY_PLUGIN_AFTER_BUILD=ON` only when the built plug-ins should
 replace the copies in the user's standard plug-in folders.
 
-The current implementation contract and 0.5.2 verification record are documented
+The current implementation contract and 0.5.3 verification record are documented
 in [`docs/implementation-status.md`](docs/implementation-status.md) and
-[`docs/verification-0.5.2.md`](docs/verification-0.5.2.md). Earlier release
-records remain in [`docs/verification-0.5.1.md`](docs/verification-0.5.1.md),
+[`docs/verification-0.5.3.md`](docs/verification-0.5.3.md). Earlier release
+records remain in [`docs/verification-0.5.2.md`](docs/verification-0.5.2.md),
+[`docs/verification-0.5.1.md`](docs/verification-0.5.1.md),
 [`docs/verification-0.5.0.md`](docs/verification-0.5.0.md), and
 [`docs/verification-0.4.0.md`](docs/verification-0.4.0.md).
 

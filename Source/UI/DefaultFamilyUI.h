@@ -70,6 +70,7 @@ public:
     juce::Font getLabelFont(juce::Label&) override;
     juce::Font getPopupMenuFont() override;
     int getPopupMenuBorderSize() override;
+    int getMenuWindowFlags() override;
     void positionComboBoxText(juce::ComboBox&, juce::Label&) override;
     void getIdealPopupMenuItemSize(const juce::String&, bool, int, int&, int&) override;
     void drawPopupMenuBackground(juce::Graphics&, int, int) override;

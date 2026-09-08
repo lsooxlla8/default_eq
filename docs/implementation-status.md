@@ -1,4 +1,4 @@
-# Development status — 0.5.2 (`default_eq`)
+# Development status — 0.5.3 (`default_eq`)
 
 ## Implemented and exercised
 

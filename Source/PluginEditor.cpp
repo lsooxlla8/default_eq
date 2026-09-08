@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "UI/DriveCharacterFormatting.h"
+#include "UI/ContextMenuLayout.h"
 #include "UI/EditorLayout.h"
 #include "UI/FilterIcon.h"
 #include "DSP/FilterTypes.h"
@@ -623,258 +624,433 @@ void PrototypeSelectMenu::mouseDown(const juce::MouseEvent& event)
     hide();
 }
 
-juce::Rectangle<int> PrototypeContextMenu::scaledRect(
-    int x, int y, int width, int height, juce::Point<int> origin) const noexcept
+namespace
 {
-    return { origin.x + juce::roundToInt((float)x * uiScale),
-             origin.y + juce::roundToInt((float)y * uiScale),
-             juce::roundToInt((float)width * uiScale),
-             juce::roundToInt((float)height * uiScale) };
+class SaturationSubmenuWindow final : public juce::Component
+{
+public:
+    SaturationSubmenuWindow(int selected, float scale,
+                            std::function<void()> onEnter,
+                            std::function<void()> onExit,
+                            std::function<void(int)> onChoose)
+        : selected(selected), scale(scale), onEnter(std::move(onEnter)),
+          onExit(std::move(onExit)), onChoose(std::move(onChoose))
+    {
+        setOpaque(true);
+        setAlwaysOnTop(true);
+        setMouseClickGrabsKeyboardFocus(false);
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto normalBackground = findColour(juce::PopupMenu::backgroundColourId);
+        const auto normalText = findColour(juce::PopupMenu::textColourId);
+        g.fillAll(normalBackground);
+        static constexpr const char* names[] {
+            "SOFT CLIP", "DIODE", "TRIODE", "TRANSISTOR",
+            "TAPE", "ODD / EVEN", "PHASE DISTORTION", "SINE EROSION"
+        };
+        const int rowHeight = getHeight() / deq::ui::context_menu::saturationItemCount;
+        for (int mode = 0; mode < deq::ui::context_menu::saturationItemCount; ++mode)
+        {
+            const auto row = juce::Rectangle<int>(0, mode * rowHeight,
+                                                  getWidth(), rowHeight);
+            const bool inverse = mode == selected || mode == hovered;
+            g.setColour(inverse ? normalText : normalBackground);
+            g.fillRect(row);
+            default_family::drawPrototypeText(g, names[mode],
+                row.toFloat().reduced(juce::roundToInt(9.0f * scale),
+                                      juce::roundToInt(5.0f * scale)),
+                9.0f, true, 0.0f, inverse ? normalBackground : normalText,
+                default_family::PrototypeTextAlign::left, scale);
+        }
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override
+    {
+        if (onEnter) onEnter();
+    }
+
+    void mouseMove(const juce::MouseEvent& event) override
+    {
+        const int next = rowAt(event.y);
+        if (next != hovered) { hovered = next; repaint(); }
+    }
+
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        hovered = -1;
+        repaint();
+        if (onExit) onExit();
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (!event.mods.isLeftButtonDown()) return;
+        const int choice = rowAt(event.y);
+        if (choice < 0 || !onChoose) return;
+        auto action = onChoose;
+        juce::MessageManager::callAsync([action, choice]
+        {
+            action(choice);
+        });
+    }
+
+private:
+    int rowAt(int y) const noexcept
+    {
+        if (y < 0 || y >= getHeight()) return -1;
+        return juce::jlimit(0, deq::ui::context_menu::saturationItemCount - 1,
+            y * deq::ui::context_menu::saturationItemCount / juce::jmax(1, getHeight()));
+    }
+
+    int selected = 0;
+    int hovered = -1;
+    float scale = 1.0f;
+    std::function<void()> onEnter;
+    std::function<void()> onExit;
+    std::function<void(int)> onChoose;
+};
 }
+
+class PrototypeContextMenu::Window final : public juce::Component,
+                                           private juce::Timer
+{
+public:
+    Window(PrototypeContextMenuModel newModel, float newScale,
+           juce::LookAndFeel& lookAndFeel)
+        : model(std::move(newModel)), uiScale(newScale), outsideListener(*this)
+    {
+        setLookAndFeel(&lookAndFeel);
+        setOpaque(true);
+        setAlwaysOnTop(true);
+        setWantsKeyboardFocus(true);
+    }
+
+    ~Window() override
+    {
+        close();
+        setLookAndFeel(nullptr);
+    }
+
+    void showAt(juce::Point<int> pointerOnScreen)
+    {
+        const auto* display = juce::Desktop::getInstance().getDisplays()
+            .getDisplayForPoint(pointerOnScreen.toFloat());
+        const auto displayBounds = display != nullptr
+            ? display->userBounds.toNearestInt()
+            : juce::Rectangle<int>(pointerOnScreen.x - 2048,
+                                   pointerOnScreen.y - 2048, 4096, 4096);
+        setBounds(deq::ui::context_menu::mainMenuPlacement(
+            pointerOnScreen, displayBounds, uiScale, model.selectedCount > 1));
+        addToDesktop(juce::ComponentPeer::windowIsTemporary);
+        setVisible(true);
+        toFront(true);
+        grabKeyboardFocus();
+        // The menu is created from ResponseCurveComponent::mouseDown. Registering
+        // the outside-click listener synchronously lets that same right-click
+        // reach the freshly-created listener and immediately close the menu.
+        auto safeThis = juce::Component::SafePointer<Window>(this);
+        juce::MessageManager::callAsync([safeThis]
+        {
+            if (safeThis == nullptr || !safeThis->isVisible()
+                || safeThis->listeningGlobally)
+                return;
+            juce::Desktop::getInstance().addGlobalMouseListener(
+                &safeThis->outsideListener);
+            safeThis->listeningGlobally = true;
+        });
+    }
+
+    void close()
+    {
+        stopTimer();
+        submenu.reset();
+        hovered = {};
+        setVisible(false);
+        if (listeningGlobally)
+        {
+            juce::Desktop::getInstance().removeGlobalMouseListener(&outsideListener);
+            listeningGlobally = false;
+        }
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto paper = findColour(default_family::LookAndFeel::backgroundColourId, true);
+        const auto ink = findColour(default_family::LookAndFeel::foregroundColourId, true);
+        const auto border = juce::jmax(1, juce::roundToInt(uiScale));
+        const auto isHovered = [this](HitKind kind, int index = -1)
+        {
+            return hovered.kind == kind && (index < 0 || hovered.index == index);
+        };
+        const auto paintButton = [&](juce::Rectangle<int> area, const juce::String& text,
+                                     HitKind kind)
+        {
+            const bool reverse = isHovered(kind);
+            g.setColour(reverse ? paper : ink);
+            g.fillRect(area);
+            default_family::drawPrototypeText(g, text.toUpperCase(),
+                area.toFloat().reduced(9.0f * uiScale, 5.0f * uiScale),
+                9.0f, true, 0.0f, reverse ? ink : paper,
+                default_family::PrototypeTextAlign::left, uiScale);
+        };
+
+        g.fillAll(ink);
+        g.setColour(paper);
+        g.drawRect(getLocalBounds(), border);
+        paintButton(scaledRect(7, 7, 274, 30),
+                    "ENABLE/DISABLE BAND " + juce::String(model.bandNumber),
+                    HitKind::toggle);
+
+        const auto filter = scaledRect(7, 48, 274, 34);
+        const float filterWidth = (float)filter.getWidth() / 10.0f;
+        for (int index = 0; index < 10; ++index)
+        {
+            const auto cell = juce::Rectangle<float>(
+                filter.getX() + filterWidth * (float)index, (float)filter.getY(),
+                filterWidth, (float)filter.getHeight());
+            const bool reverse = index == model.selectedType
+                || (hovered.kind == HitKind::filter && hovered.index == index);
+            g.setColour(reverse ? paper : ink);
+            g.fillRect(cell);
+            if (!reverse)
+            {
+                g.setColour(paper.withAlpha(0.08f));
+                g.drawRect(cell, uiScale);
+            }
+            deq::ui::paintFilterIcon(g, cell.reduced(uiScale).withSizeKeepingCentre(
+                26.0f * uiScale, 16.0f * uiScale), index, reverse ? ink : paper);
+        }
+
+        static constexpr const char* routeLabels[] { "L", "C", "R", "M", "S", "T", "S" };
+        const auto route = scaledRect(7, 93, 274, 34);
+        const float routeWidth = (float)route.getWidth() / 7.0f;
+        for (int index = 0; index < 7; ++index)
+        {
+            const auto cell = juce::Rectangle<float>(
+                route.getX() + routeWidth * (float)index, (float)route.getY(),
+                routeWidth, (float)route.getHeight());
+            const bool reverse = index == model.selectedRoute
+                || (hovered.kind == HitKind::route && hovered.index == index);
+            g.setColour(reverse ? paper : ink);
+            g.fillRect(cell);
+            if (!reverse)
+            {
+                g.setColour(paper.withAlpha(0.08f));
+                g.drawRect(cell, uiScale);
+            }
+            default_family::drawPrototypeText(g, routeLabels[index], cell,
+                11.0f, true, 0.0f, reverse ? ink : paper,
+                default_family::PrototypeTextAlign::centre, uiScale);
+        }
+
+        auto saturation = scaledRect(7, 138, 274, 30);
+        const bool saturationHover = isHovered(HitKind::saturation) || submenu != nullptr;
+        g.setColour(saturationHover ? paper : ink);
+        g.fillRect(saturation);
+        default_family::drawPrototypeText(g, "SATURATION",
+            saturation.toFloat().reduced(9.0f * uiScale, 5.0f * uiScale),
+            9.0f, true, 0.0f, saturationHover ? ink : paper,
+            default_family::PrototypeTextAlign::left, uiScale);
+        g.setColour(saturationHover ? ink : paper);
+        g.fillRect(saturation.removeFromRight(juce::roundToInt(14.0f * uiScale))
+            .withSizeKeepingCentre(juce::roundToInt(5.0f * uiScale),
+                                   juce::roundToInt(5.0f * uiScale)));
+
+        paintButton(scaledRect(7, 179, 274, 30), "RESET EQUALIZER", HitKind::reset);
+        if (model.selectedCount > 1)
+            paintButton(scaledRect(7, 220, 274, 30),
+                "BYPASS SELECTED (" + juce::String(model.selectedCount) + ")",
+                HitKind::bypass);
+
+        for (const int y : { 42, 87, 132, 173, 214 })
+        {
+            if (y == 214 && model.selectedCount <= 1) continue;
+            g.setColour(paper.withAlpha(0.38f));
+            g.fillRect(scaledRect(7, y, 274, 1));
+        }
+    }
+
+    void mouseMove(const juce::MouseEvent& event) override
+    {
+        const auto next = itemAt(event.getPosition());
+        if (next.kind == HitKind::saturation)
+        {
+            stopTimer();
+            showSubmenu(event.getScreenPosition());
+        }
+        else if (submenu != nullptr && !isTimerRunning())
+        {
+            startTimer(80);
+        }
+        if (next.kind == hovered.kind && next.index == hovered.index) return;
+        hovered = next;
+        repaint();
+    }
+
+    void mouseExit(const juce::MouseEvent&) override
+    {
+        hovered = {};
+        if (submenu != nullptr) startTimer(80);
+        repaint();
+    }
+
+    void mouseDown(const juce::MouseEvent& event) override
+    {
+        if (!event.mods.isLeftButtonDown()) return;
+        const auto hit = itemAt(event.getPosition());
+        switch (hit.kind)
+        {
+            case HitKind::toggle: if (model.toggleBand) model.toggleBand(); break;
+            case HitKind::filter: if (model.chooseFilter) model.chooseFilter(hit.index); break;
+            case HitKind::route: if (model.chooseRoute) model.chooseRoute(hit.index); break;
+            case HitKind::saturation: showSubmenu(event.getScreenPosition()); return;
+            case HitKind::reset: if (model.resetEqualizer) model.resetEqualizer(); break;
+            case HitKind::bypass: if (model.bypassSelected) model.bypassSelected(); break;
+            case HitKind::none: return;
+        }
+        close();
+    }
+
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key.getKeyCode() != juce::KeyPress::escapeKey) return false;
+        close();
+        return true;
+    }
+
+private:
+    enum class HitKind { none, toggle, filter, route, saturation, reset, bypass };
+    struct Hit { HitKind kind = HitKind::none; int index = -1; };
+
+    class OutsideListener final : public juce::MouseListener
+    {
+    public:
+        explicit OutsideListener(Window& owner) : owner(owner) {}
+        void mouseDown(const juce::MouseEvent& event) override
+        {
+            owner.handleOutsideMouseDown(event);
+        }
+    private:
+        Window& owner;
+    };
+
+    juce::Rectangle<int> scaledRect(int x, int y, int width, int height) const noexcept
+    {
+        return { juce::roundToInt((float)x * uiScale),
+                 juce::roundToInt((float)y * uiScale),
+                 juce::roundToInt((float)width * uiScale),
+                 juce::roundToInt((float)height * uiScale) };
+    }
+
+    Hit itemAt(juce::Point<int> point) const noexcept
+    {
+        if (scaledRect(7, 7, 274, 30).contains(point)) return { HitKind::toggle, 0 };
+        const auto filter = scaledRect(7, 48, 274, 34);
+        if (filter.contains(point))
+            return { HitKind::filter, juce::jlimit(0, 9,
+                (point.x - filter.getX()) * 10 / juce::jmax(1, filter.getWidth())) };
+        const auto route = scaledRect(7, 93, 274, 34);
+        if (route.contains(point))
+            return { HitKind::route, juce::jlimit(0, 6,
+                (point.x - route.getX()) * 7 / juce::jmax(1, route.getWidth())) };
+        if (scaledRect(7, 138, 274, 30).contains(point)) return { HitKind::saturation, 0 };
+        if (scaledRect(7, 179, 274, 30).contains(point)) return { HitKind::reset, 0 };
+        if (model.selectedCount > 1 && scaledRect(7, 220, 274, 30).contains(point))
+            return { HitKind::bypass, 0 };
+        return {};
+    }
+
+    juce::Rectangle<int> saturationRowOnScreen() const
+    {
+        return localAreaToGlobal(scaledRect(7, 138, 274, 30));
+    }
+
+    void showSubmenu(juce::Point<int> hoverPointerOnScreen)
+    {
+        if (submenu != nullptr || !model.chooseSaturation) return;
+        const auto row = saturationRowOnScreen();
+        const auto* display = juce::Desktop::getInstance().getDisplays()
+            .getDisplayForPoint(row.getCentre().toFloat());
+        const auto displayBounds = display != nullptr
+            ? display->userBounds.toNearestInt() : row.expanded(2048);
+        const int menuWidth = juce::roundToInt(
+            (float)deq::ui::context_menu::saturationMenuWidth * uiScale);
+        const int menuHeight = juce::roundToInt(
+            (float)deq::ui::context_menu::saturationMenuHeight * uiScale);
+        const auto placement = deq::ui::context_menu::saturationSubmenuPlacement(
+            row, displayBounds, hoverPointerOnScreen, menuWidth, menuHeight);
+        auto safeThis = juce::Component::SafePointer<Window>(this);
+        submenu = std::make_unique<SaturationSubmenuWindow>(
+            model.selectedSaturation, uiScale,
+            [safeThis] { if (safeThis != nullptr) safeThis->stopTimer(); },
+            [safeThis] { if (safeThis != nullptr) safeThis->startTimer(80); },
+            [safeThis](int choice)
+            {
+                if (safeThis == nullptr) return;
+                auto action = safeThis->model.chooseSaturation;
+                if (action) action(choice);
+                safeThis->close();
+            });
+        submenu->setLookAndFeel(&getLookAndFeel());
+        submenu->addToDesktop(juce::ComponentPeer::windowIsTemporary
+                              | juce::ComponentPeer::windowIgnoresKeyPresses);
+        submenu->setBounds(placement.anchor.getX(), placement.anchor.getY() + 1,
+                           menuWidth, menuHeight);
+        submenu->setVisible(true);
+        submenu->toFront(false);
+        repaint();
+    }
+
+    void timerCallback() override
+    {
+        if (submenu == nullptr) { stopTimer(); return; }
+        const auto pointer = juce::Desktop::getMousePosition();
+        if (deq::ui::context_menu::keepsSaturationSubmenuOpen(
+                saturationRowOnScreen(), submenu->getScreenBounds(), pointer))
+        {
+            stopTimer();
+            return;
+        }
+        submenu.reset();
+        stopTimer();
+        repaint();
+    }
+
+    void handleOutsideMouseDown(const juce::MouseEvent& event)
+    {
+        if (!isVisible()) return;
+        const auto* original = event.originalComponent;
+        if (original == this || (original != nullptr && isParentOf(original))) return;
+        if (submenu != nullptr
+            && (original == submenu.get()
+                || (original != nullptr && submenu->isParentOf(original))))
+            return;
+        close();
+    }
+
+    PrototypeContextMenuModel model;
+    float uiScale = 1.0f;
+    Hit hovered;
+    OutsideListener outsideListener;
+    bool listeningGlobally = false;
+    std::unique_ptr<SaturationSubmenuWindow> submenu;
+};
+
+PrototypeContextMenu::~PrototypeContextMenu() = default;
 
 void PrototypeContextMenu::showAt(juce::Point<int> pointer, juce::Component& shell,
                                   float scale, PrototypeContextMenuModel newModel)
 {
-    model = std::move(newModel);
-    uiScale = scale;
-    hovered = {};
-    submenuVisible = false;
-    setBounds(shell.getLocalBounds());
-
-    const int inset = juce::roundToInt(4.0f * scale);
-    const int width = juce::roundToInt(288.0f * scale);
-    const int height = juce::roundToInt((model.selectedCount > 1 ? 257.0f : 216.0f) * scale);
-    const int routeCentre = juce::roundToInt(110.0f * scale);
-    const int left = juce::jlimit(inset, shell.getWidth() - width - inset, pointer.x);
-    const int top = juce::jlimit(inset, shell.getHeight() - height - inset,
-                                 pointer.y - routeCentre);
-    mainBounds = { left, top, width, height };
-
-    bool opensLeft = std::abs(pointer.x - left)
-        <= std::abs(pointer.x - mainBounds.getRight());
-    const int submenuReach = juce::roundToInt(185.0f * scale);
-    if (opensLeft && left < submenuReach) opensLeft = false;
-    if (!opensLeft && mainBounds.getRight() + submenuReach > shell.getWidth()) opensLeft = true;
-    const int submenuWidth = juce::roundToInt(178.0f * scale);
-    const int submenuHeight = juce::roundToInt(254.0f * scale);
-    // The submenu is positioned from the 274 px content row: its CSS 7 px
-    // offset exactly consumes the main menu's border + padding.
-    const int submenuX = opensLeft ? left - submenuWidth : mainBounds.getRight();
-    submenuBounds = { submenuX,
-                      top + juce::roundToInt(132.0f * scale),
-                      submenuWidth, submenuHeight };
-    setVisible(true);
-    toFront(false);
-    repaint();
+    window.reset();
+    window = std::make_unique<Window>(std::move(newModel), scale, shell.getLookAndFeel());
+    window->showAt(shell.localPointToGlobal(pointer));
 }
 
 void PrototypeContextMenu::hide()
 {
-    model = {};
-    mainBounds = {};
-    submenuBounds = {};
-    hovered = {};
-    submenuVisible = false;
-    setVisible(false);
-}
-
-bool PrototypeContextMenu::hitTest(int x, int y)
-{
-    const auto point = juce::Point<int>(x, y);
-    return mainBounds.contains(point) || (submenuVisible && submenuBounds.contains(point));
-}
-
-PrototypeContextMenu::Hit PrototypeContextMenu::itemAt(juce::Point<int> point) const noexcept
-{
-    const auto mainOrigin = mainBounds.getPosition();
-    if (scaledRect(7, 7, 274, 30, mainOrigin).contains(point))
-        return { HitKind::toggle, 0 };
-    const auto filter = scaledRect(7, 48, 274, 34, mainOrigin);
-    if (filter.contains(point))
-        return { HitKind::filter, juce::jlimit(0, 9,
-            (point.x - filter.getX()) * 10 / juce::jmax(1, filter.getWidth())) };
-    const auto route = scaledRect(7, 93, 274, 34, mainOrigin);
-    if (route.contains(point))
-        return { HitKind::route, juce::jlimit(0, 6,
-            (point.x - route.getX()) * 7 / juce::jmax(1, route.getWidth())) };
-    if (scaledRect(7, 138, 274, 30, mainOrigin).contains(point))
-        return { HitKind::saturation, 0 };
-    if (scaledRect(7, 179, 274, 30, mainOrigin).contains(point))
-        return { HitKind::reset, 0 };
-    if (model.selectedCount > 1
-        && scaledRect(7, 220, 274, 30, mainOrigin).contains(point))
-        return { HitKind::bypass, 0 };
-    if (submenuVisible && submenuBounds.contains(point))
-    {
-        const auto content = submenuBounds.reduced(juce::roundToInt(7.0f * uiScale));
-        const int rowHeight = juce::roundToInt(30.0f * uiScale);
-        const int row = (point.y - content.getY()) / juce::jmax(1, rowHeight);
-        if (point.x >= content.getX() && point.x < content.getRight()
-            && row >= 0 && row < 8)
-            return { HitKind::saturationChoice, row };
-    }
-    return {};
-}
-
-void PrototypeContextMenu::paint(juce::Graphics& g)
-{
-    if (mainBounds.isEmpty()) return;
-    const auto paper = findColour(default_family::LookAndFeel::backgroundColourId, true);
-    const auto ink = findColour(default_family::LookAndFeel::foregroundColourId, true);
-    const auto border = juce::jmax(1, juce::roundToInt(uiScale));
-    const auto mainOrigin = mainBounds.getPosition();
-    const auto isHovered = [this](HitKind kind, int index = -1)
-    {
-        return hovered.kind == kind && (index < 0 || hovered.index == index);
-    };
-    const auto paintButton = [&](juce::Rectangle<int> area, const juce::String& text,
-                                 HitKind kind, bool active = false)
-    {
-        const bool reverse = active || isHovered(kind);
-        g.setColour(reverse ? paper : ink);
-        g.fillRect(area);
-        default_family::drawPrototypeText(g, text.toUpperCase(),
-            area.toFloat().reduced(9.0f * uiScale, 5.0f * uiScale),
-            9.0f, true, 0.0f, reverse ? ink : paper,
-            default_family::PrototypeTextAlign::left, uiScale);
-    };
-
-    g.setColour(juce::Colour(0x33050505));
-    g.fillRect(mainBounds.translated(juce::roundToInt(7.0f * uiScale),
-                                    juce::roundToInt(7.0f * uiScale)));
-    g.setColour(ink);
-    g.fillRect(mainBounds);
-    g.setColour(paper);
-    g.drawRect(mainBounds, border);
-
-    paintButton(scaledRect(7, 7, 274, 30, mainOrigin),
-                "ENABLE/DISABLE BAND " + juce::String(model.bandNumber), HitKind::toggle);
-
-    const auto filter = scaledRect(7, 48, 274, 34, mainOrigin);
-    const float filterWidth = (float)filter.getWidth() / 10.0f;
-    for (int index = 0; index < 10; ++index)
-    {
-        auto cell = juce::Rectangle<float>(filter.getX() + filterWidth * (float)index,
-            (float)filter.getY(), filterWidth, (float)filter.getHeight());
-        const bool reverse = index == model.selectedType
-            || (hovered.kind == HitKind::filter && hovered.index == index);
-        g.setColour(reverse ? paper : ink);
-        g.fillRect(cell);
-        if (!reverse)
-        {
-            g.setColour(paper.withAlpha(0.08f));
-            g.drawRect(cell, uiScale);
-        }
-        deq::ui::paintFilterIcon(g,
-            cell.reduced(1.0f * uiScale).withSizeKeepingCentre(
-                26.0f * uiScale, 16.0f * uiScale),
-            index, reverse ? ink : paper);
-    }
-
-    static constexpr const char* routeLabels[] { "L", "C", "R", "M", "S", "T", "S" };
-    const auto route = scaledRect(7, 93, 274, 34, mainOrigin);
-    const float routeWidth = (float)route.getWidth() / 7.0f;
-    for (int index = 0; index < 7; ++index)
-    {
-        auto cell = juce::Rectangle<float>(route.getX() + routeWidth * (float)index,
-            (float)route.getY(), routeWidth, (float)route.getHeight());
-        const bool reverse = index == model.selectedRoute
-            || (hovered.kind == HitKind::route && hovered.index == index);
-        g.setColour(reverse ? paper : ink);
-        g.fillRect(cell);
-        if (!reverse)
-        {
-            g.setColour(paper.withAlpha(0.08f));
-            g.drawRect(cell, uiScale);
-        }
-        default_family::drawPrototypeText(g, routeLabels[index], cell,
-            11.0f, true, 0.0f, reverse ? ink : paper,
-            default_family::PrototypeTextAlign::centre, uiScale);
-    }
-
-    auto saturation = scaledRect(7, 138, 274, 30, mainOrigin);
-    const bool saturationHover = isHovered(HitKind::saturation) || submenuVisible;
-    g.setColour(saturationHover ? paper : ink);
-    g.fillRect(saturation);
-    default_family::drawPrototypeText(g, "SATURATION",
-        saturation.toFloat().reduced(9.0f * uiScale, 5.0f * uiScale),
-        9.0f, true, 0.0f, saturationHover ? ink : paper,
-        default_family::PrototypeTextAlign::left, uiScale);
-    g.setColour(saturationHover ? ink : paper);
-    g.fillRect(saturation.removeFromRight(juce::roundToInt(14.0f * uiScale))
-        .withSizeKeepingCentre(juce::roundToInt(5.0f * uiScale),
-                               juce::roundToInt(5.0f * uiScale)));
-
-    paintButton(scaledRect(7, 179, 274, 30, mainOrigin),
-                "RESET EQUALIZER", HitKind::reset);
-    if (model.selectedCount > 1)
-        paintButton(scaledRect(7, 220, 274, 30, mainOrigin),
-            "BYPASS SELECTED (" + juce::String(model.selectedCount) + ")", HitKind::bypass);
-
-    for (const int y : { 42, 87, 132, 173, 214 })
-    {
-        if (y == 214 && model.selectedCount <= 1) continue;
-        g.setColour(paper.withAlpha(0.38f));
-        g.fillRect(scaledRect(7, y, 274, 1, mainOrigin));
-    }
-
-    if (!submenuVisible) return;
-    g.setColour(ink);
-    g.fillRect(submenuBounds);
-    g.setColour(paper);
-    g.drawRect(submenuBounds, border);
-    const auto submenuOrigin = submenuBounds.getPosition();
-    static constexpr const char* saturationNames[] {
-        "SOFT CLIP", "DIODE", "TRIODE", "TRANSISTOR",
-        "TAPE", "ODD / EVEN", "PHASE DISTORTION", "SINE EROSION"
-    };
-    for (int mode = 0; mode < 8; ++mode)
-    {
-        auto row = scaledRect(7, 7 + mode * 30, 164, 30, submenuOrigin);
-        const bool reverse = mode == model.selectedSaturation
-            || (hovered.kind == HitKind::saturationChoice && hovered.index == mode);
-        g.setColour(reverse ? paper : ink);
-        g.fillRect(row);
-        default_family::drawPrototypeText(g, saturationNames[mode],
-            row.toFloat().reduced(9.0f * uiScale, 5.0f * uiScale),
-            9.0f, true, 0.0f, reverse ? ink : paper,
-            default_family::PrototypeTextAlign::left, uiScale);
-    }
-}
-
-void PrototypeContextMenu::mouseMove(const juce::MouseEvent& event)
-{
-    const auto next = itemAt(event.getPosition());
-    if (next.kind == HitKind::saturation) submenuVisible = true;
-    if (next.kind == hovered.kind && next.index == hovered.index) return;
-    hovered = next;
-    repaint();
-}
-
-void PrototypeContextMenu::mouseExit(const juce::MouseEvent&)
-{
-    hovered = {};
-    repaint();
-}
-
-void PrototypeContextMenu::mouseDown(const juce::MouseEvent& event)
-{
-    if (!event.mods.isLeftButtonDown()) return;
-    const auto hit = itemAt(event.getPosition());
-    switch (hit.kind)
-    {
-        case HitKind::toggle: if (model.toggleBand) model.toggleBand(); break;
-        case HitKind::filter: if (model.chooseFilter) model.chooseFilter(hit.index); break;
-        case HitKind::route: if (model.chooseRoute) model.chooseRoute(hit.index); break;
-        case HitKind::saturation:
-            submenuVisible = true; repaint(); return;
-        case HitKind::saturationChoice:
-            if (model.chooseSaturation) model.chooseSaturation(hit.index); break;
-        case HitKind::reset: if (model.resetEqualizer) model.resetEqualizer(); break;
-        case HitKind::bypass: if (model.bypassSelected) model.bypassSelected(); break;
-        case HitKind::none: return;
-    }
-    hide();
+    if (window != nullptr) window->close();
 }
 
 
@@ -955,7 +1131,6 @@ DefaultEqualizerAudioProcessorEditor::DefaultEqualizerAudioProcessorEditor(Defau
     autoGainBtn.setMouseClickGrabsKeyboardFocus(false);
     addAndMakeVisible(autoGainBtn);
     addChildComponent(selectMenu);
-    addChildComponent(contextMenu);
     responseCurve.onContextMenuRequest = [this](juce::Point<int> pointer,
                                                  PrototypeContextMenuModel model)
     {
@@ -1459,7 +1634,7 @@ void DefaultEqualizerAudioProcessorEditor::applySettings(const SettingsOverlay::
 bool DefaultEqualizerAudioProcessorEditor::keyPressed(const juce::KeyPress& key)
 {
     if (key.getKeyCode() == juce::KeyPress::escapeKey
-        && (selectMenu.isVisible() || contextMenu.isVisible() || settingsOverlay.isVisible()))
+        && (selectMenu.isVisible() || settingsOverlay.isVisible()))
     {
         hideSelectMenu();
         hideContextMenu();

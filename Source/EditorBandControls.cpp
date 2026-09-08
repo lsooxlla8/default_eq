@@ -32,9 +32,6 @@ void DefaultEqualizerAudioProcessorEditor::mouseDown(const juce::MouseEvent& eve
         && !belongsTo(saturationBox) && !belongsTo(oversamplingBox)
         && !belongsTo(phaseModeBox))
         hideSelectMenu();
-    const bool graphPopup = event.mods.isPopupMenu() && belongsTo(responseCurve);
-    if (contextMenu.isVisible() && !belongsTo(contextMenu) && !graphPopup)
-        hideContextMenu();
     if (event.mods.isPopupMenu())
     {
         auto* component = event.originalComponent;
