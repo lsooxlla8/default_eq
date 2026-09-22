@@ -33,11 +33,6 @@ Most editing happens directly on the analyzer:
 - For precise adjustments, **Freq, Gain, Q, and Slope** can also be entered via double-click
   directly in the parameter fields below. 
 
-In the logo settings panel, **RTA AVERAGE** controls averaging for the analyzer
-and all Spectral Statistics. Tonal Balance retains its relative scale, independent
-of **RTA SLOPE**, **RTA FLOOR**, and **RTA CEILING**. Ceiling defaults to 0 dB
-and adjusts from −24 to +24 dB; drag or scroll its value, or right-click to reset it.
-
 There is deliberately no internal preset system. Plugin state is handled
 through the host, with complete project recall, versioned state, and Undo/Redo
 support.
